@@ -1,0 +1,64 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  schema-sync:
+    name: Schema sync (Zod ↔ Pydantic)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - name: Install Python schema
+        run: pip install -e packages/schema/python
+      - name: Install JS deps
+        run: pnpm -w install --frozen-lockfile
+      - name: Install zod-to-json-schema
+        run: pnpm --filter @labforge/schema add -D zod-to-json-schema tsx
+      - name: Compare schemas
+        run: bash packages/schema/scripts/check-schema-sync.sh
+
+  backend:
+    name: API (ruff + pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend
+        run: |
+          pip install -e packages/schema/python
+          pip install -e "apps/api[dev,migrate]"
+      - name: Lint
+        run: cd apps/api && ruff check .
+      - name: Tests
+        run: cd apps/api && pytest -q
+
+  web:
+    name: Web (lint + typecheck + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - run: pnpm -w install --frozen-lockfile
+      - run: pnpm -F @labforge/schema build
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm build:web

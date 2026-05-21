@@ -1,0 +1,202 @@
+{
+  "id": "red-team-range",
+  "name": "Red Team Range",
+  "description": "A multi-zone network with a DMZ web tier, internal LAN with an AD domain and database, and a firewall separating the zones. Exercise full kill-chain scenarios: external recon, web exploitation, pivot, AD compromise, data exfiltration.",
+  "network_cidr": "10.10.0.0/16",
+  "provider": "virtualbox",
+  "version": "1.0",
+  "nodes": [
+    {
+      "id": "kali01",
+      "type": "attacker",
+      "label": "External Kali",
+      "position": { "x": -800, "y": 0 },
+      "config": {
+        "os": "kali_rolling",
+        "ip": "10.10.0.100",
+        "hostname": "kali",
+        "cves": [],
+        "roles": ["metasploit", "impacket", "bloodhound", "nmap"],
+        "memory_mb": 2048,
+        "cpus": 2,
+        "credentials": { "username": "vagrant", "password": "kali" },
+        "vlan": null,
+        "gateway": "10.10.0.1"
+      }
+    },
+    {
+      "id": "fw01",
+      "type": "firewall",
+      "label": "Perimeter FW",
+      "position": { "x": -450, "y": 0 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "10.10.1.1",
+        "hostname": "fw01",
+        "cves": [],
+        "roles": ["pfsense", "snort"],
+        "memory_mb": 768,
+        "cpus": 1,
+        "credentials": { "username": "vagrant", "password": "Forge!Range1" },
+        "vlan": null,
+        "gateway": null
+      }
+    },
+    {
+      "id": "web01",
+      "type": "server",
+      "label": "DMZ Web",
+      "position": { "x": -100, "y": -240 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "10.10.10.10",
+        "hostname": "web01",
+        "cves": ["CVE-2017-5638"],
+        "roles": ["apache"],
+        "memory_mb": 1536,
+        "cpus": 2,
+        "credentials": { "username": "vagrant", "password": "vagrant" },
+        "vlan": 10,
+        "gateway": "10.10.10.1"
+      }
+    },
+    {
+      "id": "rtr01",
+      "type": "router",
+      "label": "Core Router",
+      "position": { "x": -100, "y": 240 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "10.10.0.2",
+        "hostname": "rtr01",
+        "cves": [],
+        "roles": ["frr"],
+        "memory_mb": 768,
+        "cpus": 1,
+        "credentials": { "username": "vagrant", "password": "Router!Forge" },
+        "vlan": null,
+        "gateway": null
+      }
+    },
+    {
+      "id": "dc01",
+      "type": "domain_controller",
+      "label": "DC01",
+      "position": { "x": 280, "y": -240 },
+      "config": {
+        "os": "windows_server_2019",
+        "ip": "10.10.20.10",
+        "hostname": "DC01",
+        "cves": [],
+        "roles": ["AD-Domain-Services", "DNS"],
+        "memory_mb": 4096,
+        "cpus": 2,
+        "credentials": { "username": "Administrator", "password": "Range!Pass2025" },
+        "vlan": 20,
+        "gateway": "10.10.20.1"
+      }
+    },
+    {
+      "id": "db01",
+      "type": "database",
+      "label": "Internal DB",
+      "position": { "x": 280, "y": 240 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "10.10.30.10",
+        "hostname": "db01",
+        "cves": [],
+        "roles": ["mysql"],
+        "memory_mb": 1536,
+        "cpus": 2,
+        "credentials": { "username": "vagrant", "password": "DbForge!2025" },
+        "vlan": 30,
+        "gateway": "10.10.30.1"
+      }
+    },
+    {
+      "id": "wks01",
+      "type": "workstation",
+      "label": "WKS01",
+      "position": { "x": 660, "y": -240 },
+      "config": {
+        "os": "windows_10",
+        "ip": "10.10.20.20",
+        "hostname": "WKS01",
+        "cves": [],
+        "roles": ["domain-joined"],
+        "memory_mb": 2048,
+        "cpus": 2,
+        "credentials": { "username": "carol", "password": "Spring2025!" },
+        "vlan": 20,
+        "gateway": "10.10.20.1"
+      }
+    },
+    {
+      "id": "wks02",
+      "type": "workstation",
+      "label": "WKS02",
+      "position": { "x": 660, "y": 240 },
+      "config": {
+        "os": "windows_10",
+        "ip": "10.10.20.21",
+        "hostname": "WKS02",
+        "cves": [],
+        "roles": ["domain-joined"],
+        "memory_mb": 2048,
+        "cpus": 2,
+        "credentials": { "username": "dave", "password": "QwertyUiop1" },
+        "vlan": 20,
+        "gateway": "10.10.20.1"
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e1", "source": "kali01", "target": "fw01", "protocol": "tcp", "port": null, "label": "External" },
+    { "id": "e2", "source": "fw01", "target": "web01", "protocol": "https", "port": 443, "label": "DMZ HTTPS" },
+    { "id": "e3", "source": "fw01", "target": "rtr01", "protocol": "tcp", "port": null, "label": "Inside" },
+    { "id": "e4", "source": "rtr01", "target": "dc01", "protocol": "ldap", "port": 389, "label": "LDAP" },
+    { "id": "e5", "source": "rtr01", "target": "db01", "protocol": "tcp", "port": 3306, "label": "MySQL" },
+    { "id": "e6", "source": "dc01", "target": "wks01", "protocol": "smb", "port": 445, "label": "SMB" },
+    { "id": "e7", "source": "dc01", "target": "wks02", "protocol": "smb", "port": 445, "label": "SMB" },
+    { "id": "e8", "source": "wks01", "target": "dc01", "protocol": "kerberos", "port": 88, "label": "Kerberos" }
+  ],
+  "zones": [
+    {
+      "id": "z-ext",
+      "label": "Untrusted",
+      "shape": "triangle",
+      "position": { "x": -980, "y": -420 },
+      "size": { "width": 360, "height": 840 },
+      "color": "#ef4444",
+      "opacity": 0.10
+    },
+    {
+      "id": "z-dmz",
+      "label": "DMZ (VLAN 10)",
+      "shape": "rectangle",
+      "position": { "x": -260, "y": -420 },
+      "size": { "width": 320, "height": 360 },
+      "color": "#f59e0b",
+      "opacity": 0.10
+    },
+    {
+      "id": "z-corp",
+      "label": "Corp LAN (VLAN 20)",
+      "shape": "rectangle",
+      "position": { "x": 120, "y": -420 },
+      "size": { "width": 700, "height": 360 },
+      "color": "#3b82f6",
+      "opacity": 0.10
+    },
+    {
+      "id": "z-db",
+      "label": "Data Tier (VLAN 30)",
+      "shape": "rectangle",
+      "position": { "x": 120, "y": 60 },
+      "size": { "width": 320, "height": 360 },
+      "color": "#10b981",
+      "opacity": 0.10
+    }
+  ]
+}

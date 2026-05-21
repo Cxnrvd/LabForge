@@ -1,0 +1,68 @@
+{
+  "id": "dfir-lab",
+  "name": "DFIR Lab",
+  "description": "A Windows endpoint instrumented with Sysmon and Winlogbeat shipping logs to a Splunk indexer, plus a Kali attacker for generating realistic artifacts. Practice timeline analysis, EVTX review, and detection engineering.",
+  "network_cidr": "192.168.58.0/24",
+  "provider": "virtualbox",
+  "version": "1.0",
+  "nodes": [
+    {
+      "id": "kali01",
+      "type": "attacker",
+      "label": "Kali (Artifact Generator)",
+      "position": { "x": -450, "y": 0 },
+      "config": {
+        "os": "kali_rolling",
+        "ip": "192.168.58.100",
+        "hostname": "kali",
+        "cves": [],
+        "roles": ["metasploit", "impacket"],
+        "memory_mb": 2048,
+        "cpus": 2,
+        "credentials": { "username": "vagrant", "password": "kali" },
+        "vlan": null,
+        "gateway": "192.168.58.1"
+      }
+    },
+    {
+      "id": "endpoint01",
+      "type": "workstation",
+      "label": "Victim Endpoint",
+      "position": { "x": 0, "y": 0 },
+      "config": {
+        "os": "windows_10",
+        "ip": "192.168.58.20",
+        "hostname": "ENDPOINT01",
+        "cves": [],
+        "roles": ["sysmon", "winlogbeat", "powershell-transcripts"],
+        "memory_mb": 4096,
+        "cpus": 2,
+        "credentials": { "username": "user", "password": "Forensics!2025" },
+        "vlan": null,
+        "gateway": "192.168.58.1"
+      }
+    },
+    {
+      "id": "splunk01",
+      "type": "server",
+      "label": "Splunk",
+      "position": { "x": 450, "y": 0 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "192.168.58.50",
+        "hostname": "splunk01",
+        "cves": [],
+        "roles": ["splunk-enterprise@9.3.0"],
+        "memory_mb": 4096,
+        "cpus": 2,
+        "credentials": { "username": "admin", "password": "ChangeMe!Splunk" },
+        "vlan": null,
+        "gateway": "192.168.58.1"
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e1", "source": "endpoint01", "target": "splunk01", "protocol": "tcp", "port": 9997, "label": "Splunk forwarder" },
+    { "id": "e2", "source": "kali01", "target": "endpoint01", "protocol": "smb", "port": 445, "label": "Adversary emulation" }
+  ]
+}

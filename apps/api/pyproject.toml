@@ -1,0 +1,78 @@
+[project]
+name = "labforge-api"
+version = "0.1.0"
+description = "LabForge FastAPI backend"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "sqlmodel>=0.0.22",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.4.0",
+    "jinja2>=3.1.4",
+    "httpx>=0.27.0",
+    "python-multipart>=0.0.9",
+    "pyyaml>=6.0",
+    "websockets>=12.0",
+    "labforge-schema",
+]
+
+[project.optional-dependencies]
+postgres = ["psycopg[binary]>=3.2.0"]
+migrate = ["alembic>=1.13.0"]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "respx>=0.21.0",
+    "httpx>=0.27.0",
+    "ruff>=0.6.0",
+    "mypy>=1.11.0",
+    "alembic>=1.13.0",
+]
+
+[tool.uv.sources]
+labforge-schema = { path = "../../packages/schema/python", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["labforge_core"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade
+    "SIM",  # flake8-simplify
+    "C4",   # comprehensions
+    "RUF",  # ruff-specific
+]
+ignore = [
+    "E501",  # long lines — handled by formatter
+    "B008",  # FastAPI Depends in defaults is idiomatic
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B011", "B017"]
+"alembic/versions/**" = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["error"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+warn_unused_ignores = true
+warn_redundant_casts = true
+ignore_missing_imports = true
+

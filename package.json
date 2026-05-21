@@ -1,0 +1,18 @@
+{
+  "name": "labforge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Diagram-driven virtual lab builder for cybersecurity professionals",
+  "scripts": {
+    "dev:web": "pnpm --filter @labforge/web dev",
+    "dev:api": "cd apps/api && uvicorn labforge_core.api.main:app --reload --port 8000",
+    "build:web": "pnpm --filter @labforge/web build",
+    "lint": "pnpm --filter @labforge/web lint",
+    "typecheck": "pnpm --filter @labforge/web typecheck"
+  },
+  "packageManager": "pnpm@9.0.0",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  }
+}

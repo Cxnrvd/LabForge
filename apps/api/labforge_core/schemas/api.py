@@ -1,0 +1,126 @@
+"""API-only request/response models (not part of the canonical topology schema)."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Optional
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from labforge_schema import LabConfig
+
+
+class GenerateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    topology: LabConfig
+    include_readme: bool = True
+    include_hosts_file: bool = True
+
+
+class BuildRequest(BaseModel):
+    """In-app `Build Lab` — same payload as Generate, plus optional name override."""
+
+    model_config = ConfigDict(extra="forbid")
+    topology: LabConfig
+    workspace_name: Optional[str] = None
+
+
+class BuildResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    lab_id: int
+    workspace_path: str
+    pid: Optional[int] = None
+
+
+class BuildLogChunk(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    lines: list[str] = Field(default_factory=list)
+    next_offset: int = 0
+    bytes_total: int = 0
+
+
+class BuildStatus(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    phase: str  # "running" | "succeeded" | "failed" | "unknown"
+    exit_code: Optional[int] = None
+    finished_at: Optional[str] = None
+    pid: Optional[int] = None
+
+
+class TemplateSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    name: str
+    description: str
+    node_count: int
+    edge_count: int
+
+
+class LabSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: int
+    topology_slug: str
+    name: str
+    provider: str
+    status: str
+    workspace_path: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class LabCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    topology_slug: str = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=128)
+    provider: str = "virtualbox"
+    workspace_path: Optional[str] = None
+
+
+class ErrorResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    detail: str
+    code: str
+
+
+class VmState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    hostname: str
+    state: str  # "running" | "poweroff" | "saved" | "not_created" | "aborted" | ...
+    provider: Optional[str] = None
+    ip: Optional[str] = None
+
+
+class FlowSample(BaseModel):
+    """One source→destination flow observed during a heartbeat window.
+
+    The window is the gap between the previous and current heartbeat
+    (typically ~10 s). ``packets`` is a count; ``bytes_estimate`` is the
+    sum of caplen values from tcpdump (or 0 if the tool didn't expose it).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    src_ip: str
+    dst_ip: str
+    packets: int = 0
+    bytes_estimate: int = 0
+    protocol: Optional[str] = None
+
+
+class HeartbeatPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    lab_status: str = "unknown"
+    vms: list[VmState] = Field(default_factory=list)
+    log_tail: list[str] = Field(default_factory=list)
+    flows: list[FlowSample] = Field(default_factory=list)
+    captured_at: Optional[datetime] = None
+
+
+class ActivityEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    lab_id: int
+    lab_name: str
+    captured_at: datetime
+    lab_status: str
+    running_vms: int
+    total_vms: int
+    log_snippet: Optional[str] = None

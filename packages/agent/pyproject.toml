@@ -1,0 +1,25 @@
+[project]
+name = "labforge-agent"
+version = "0.1.0"
+description = "LabForge CLI agent — provisions labs locally via Vagrant"
+requires-python = ">=3.12"
+dependencies = [
+    "typer>=0.12.0",
+    "rich>=13.7.0",
+    "httpx>=0.27.0",
+    "pyyaml>=6.0.1",
+    "labforge-schema",
+]
+
+[project.scripts]
+labforge = "labforge_agent.cli:app"
+
+[tool.uv.sources]
+labforge-schema = { path = "../schema/python", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["labforge_agent"]

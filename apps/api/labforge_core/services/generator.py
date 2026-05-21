@@ -1,0 +1,403 @@
+"""Render Vagrantfiles, provisioner scripts, hosts file, and README from a topology."""
+
+from __future__ import annotations
+
+import io
+import re
+import zipfile
+from dataclasses import dataclass
+
+from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
+
+from labforge_schema import LabConfig, NodeType, OsType, TopologyNode
+
+from labforge_core.provisioners.cve_lookup import resolve_cve_payload
+from labforge_core.provisioners.role_installers import (
+    RoleSnippet,
+    linux_snippet,
+    windows_snippet,
+)
+from labforge_core.services.compose_generator import render as render_compose
+from labforge_core.services.provenance import build_manifest
+from labforge_core.services.validator import is_windows
+from labforge_core.settings import get_settings
+
+
+# Vagrant boxes per OS — every entry is a publicly-downloadable box on
+# Vagrant Cloud (https://app.vagrantup.com/). Anything that doesn't have a
+# real public box (macOS, RHEL/subscriptions, appliance OS like pfSense /
+# OpenWrt, ICS RTOS like VxWorks / Siemens SIMATIC, IP-camera firmware)
+# falls back to ubuntu/jammy64 and the provisioner sets up the appropriate
+# emulator (OpenPLC, MediaMTX, dnsmasq+iptables for routers, etc.).
+SAFE_FALLBACK_BOX = "ubuntu/jammy64"
+
+BOX_MAP: dict[OsType, str] = {
+    # ---- Windows: gusztavvargadr maintains evaluation boxes for all of these
+    OsType.WINDOWS_10: "gusztavvargadr/windows-10",
+    OsType.WINDOWS_11: "gusztavvargadr/windows-10",
+    OsType.WINDOWS_SERVER_2019: "gusztavvargadr/windows-server-2019",
+    OsType.WINDOWS_SERVER_2022: "gusztavvargadr/windows-server-2022",
+    # ---- Mainstream Linux servers
+    OsType.UBUNTU_2204: "ubuntu/jammy64",
+    OsType.UBUNTU_2404: "bento/ubuntu-24.04",
+    OsType.DEBIAN_12: "debian/bookworm64",
+    OsType.CENTOS_STREAM_9: "generic/centos9s",
+    OsType.RHEL_9: "generic/centos9s",  # RHEL needs a subscription; CentOS Stream 9 is the upstream
+    OsType.FEDORA_40: SAFE_FALLBACK_BOX,  # fedora cloud images aren't proper Vagrant boxes
+    OsType.OPENSUSE_TUMBLEWEED: SAFE_FALLBACK_BOX,
+    OsType.ARCH_ROLLING: "archlinux/archlinux",
+    OsType.ALPINE_LATEST: "generic/alpine318",
+    OsType.FREEBSD_14: "generic/freebsd14",
+    # ---- macOS: no public Vagrant box exists (Apple licensing); use the fallback
+    OsType.MACOS_SONOMA: SAFE_FALLBACK_BOX,
+    OsType.MACOS_SEQUOIA: SAFE_FALLBACK_BOX,
+    # ---- Offensive / privacy
+    OsType.KALI_ROLLING: "kalilinux/rolling",
+    OsType.PARROT_SECURITY: "kalilinux/rolling",  # closest stand-in
+    OsType.BLACKARCH_ROLLING: "archlinux/archlinux",
+    OsType.TAILS_6: "debian/bookworm64",
+    OsType.WHONIX_17: "debian/bookworm64",
+    # ---- Router / firewall appliance OS — emulated on Ubuntu
+    OsType.OPENWRT_23: SAFE_FALLBACK_BOX,
+    OsType.VYOS_1_4: SAFE_FALLBACK_BOX,
+    OsType.ROUTEROS_7: SAFE_FALLBACK_BOX,
+    OsType.CISCO_IOS_XE: SAFE_FALLBACK_BOX,
+    OsType.JUNIPER_JUNOS_22: SAFE_FALLBACK_BOX,
+    OsType.PFSENSE_2_7: SAFE_FALLBACK_BOX,
+    OsType.OPNSENSE_24: SAFE_FALLBACK_BOX,
+    OsType.FORTIOS_7: SAFE_FALLBACK_BOX,
+    OsType.PANOS_11: SAFE_FALLBACK_BOX,
+    OsType.SOPHOS_XG_19: SAFE_FALLBACK_BOX,
+    # ---- ICS / embedded — emulated on Ubuntu via OpenPLC etc.
+    OsType.VXWORKS_7: SAFE_FALLBACK_BOX,
+    OsType.SIEMENS_SIMATIC: SAFE_FALLBACK_BOX,
+    OsType.SCHNEIDER_MODICON: SAFE_FALLBACK_BOX,
+    OsType.RASPBIAN_12: "debian/bookworm64",
+    OsType.QNX_NEUTRINO: SAFE_FALLBACK_BOX,
+    # ---- Camera firmware — emulated on Ubuntu via MediaMTX
+    OsType.IP_CAMERA_FIRMWARE: SAFE_FALLBACK_BOX,
+}
+
+# Whether a given OsType has a "real" Vagrant box (used to flag emulated
+# nodes in the generated README).
+_REAL_BOX_OSES = {
+    OsType.WINDOWS_10, OsType.WINDOWS_11,
+    OsType.WINDOWS_SERVER_2019, OsType.WINDOWS_SERVER_2022,
+    OsType.UBUNTU_2204, OsType.UBUNTU_2404,
+    OsType.DEBIAN_12, OsType.CENTOS_STREAM_9,
+    OsType.ALPINE_LATEST, OsType.FREEBSD_14,
+    OsType.KALI_ROLLING, OsType.ARCH_ROLLING,
+    OsType.RASPBIAN_12,
+}
+
+
+def is_emulated_os(os: OsType) -> bool:
+    return os not in _REAL_BOX_OSES
+
+
+@dataclass(frozen=True)
+class GeneratedArtifacts:
+    vagrantfile: str
+    provisioner_scripts: dict[str, str]
+    hosts_file: str
+    readme: str
+
+
+def _safe_slug(value: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", value.strip()).strip("-")
+    return slug.lower() or "node"
+
+
+def _jinja_env() -> Environment:
+    settings = get_settings()
+    return Environment(
+        loader=FileSystemLoader(str(settings.jinja_dir)),
+        autoescape=select_autoescape(default=False),
+        undefined=StrictUndefined,
+        keep_trailing_newline=True,
+        trim_blocks=True,
+        lstrip_blocks=True,
+    )
+
+
+def _parse_role(role: str) -> tuple[str, str | None]:
+    """Split a role string like ``wazuh@4.9.0`` into ``("wazuh", "4.9.0")``."""
+    if "@" in role:
+        bare, version = role.split("@", 1)
+        return bare, version
+    return role, None
+
+
+def _compute_endpoints(topology: LabConfig) -> dict[str, str]:
+    """Discover well-known service IPs from the topology so role installers
+    can wire agents up automatically (Wazuh agent → Wazuh manager, etc.)."""
+    endpoints: dict[str, str] = {}
+    role_to_endpoint = {
+        "wazuh-manager": "wazuh_manager_ip",
+        "wazuh": "wazuh_manager_ip",  # the first node carrying wazuh wins
+        "splunk-enterprise": "splunk_indexer_ip",
+        "splunk-uf-receiver": "splunk_indexer_ip",
+        "elasticstack": "elastic_ip",
+        "elastic": "elastic_ip",
+        "kibana": "kibana_ip",
+        "grafana": "grafana_ip",
+        "ollama": "ollama_ip",
+        "mongodb": "mongodb_ip",
+        "openplc": "openplc_ip",
+        "mediamtx": "mediamtx_ip",
+    }
+    for node in topology.nodes:
+        if node.type == NodeType.INTERNET:
+            continue
+        for role in node.config.roles:
+            bare, _ = _parse_role(role)
+            key = role_to_endpoint.get(bare)
+            if key and key not in endpoints:
+                endpoints[key] = node.config.ip
+    return endpoints
+
+
+def _render_role_block(
+    env: Environment,
+    role: str,
+    *,
+    node: TopologyNode,
+    topology: LabConfig,
+    endpoints: dict[str, str],
+    is_windows_node: bool,
+) -> dict[str, str]:
+    """Render the install snippet for a single role into a label + body."""
+    bare, version = _parse_role(role)
+    snippet: RoleSnippet | None = (
+        windows_snippet(bare) if is_windows_node else linux_snippet(bare)
+    )
+    label_version = f" ({version})" if version else ""
+    if snippet is None:
+        body = (
+            f"# Role '{bare}'{label_version}: no curated installer.\n"
+            f"# Edit this block to provision it. See "
+            f"apps/api/labforge_core/provisioners/role_installers.py to add one.\n"
+        )
+        return {
+            "label": bare,
+            "version": version or "",
+            "description": "no curated installer",
+            "body": body,
+        }
+    rendered = env.from_string(snippet.script).render(
+        node=node,
+        topology=topology,
+        endpoints=endpoints,
+        version=version,
+    )
+    return {
+        "label": snippet.role_id + label_version,
+        "version": version or "",
+        "description": snippet.description,
+        "body": rendered,
+    }
+
+
+def _render_node(
+    env: Environment,
+    node: TopologyNode,
+    *,
+    topology: LabConfig,
+    endpoints: dict[str, str],
+) -> tuple[str, str]:
+    """Return (script_filename, script_contents) for a node."""
+    cve_blocks = [resolve_cve_payload(cve) for cve in node.config.cves]
+    extension = "ps1" if is_windows(node) else "sh"
+    filename = f"provision_{_safe_slug(node.config.hostname)}.{extension}"
+    template_name = (
+        "provision_windows.ps1.j2" if is_windows(node) else "provision_linux.sh.j2"
+    )
+    install_blocks = [
+        _render_role_block(
+            env,
+            role,
+            node=node,
+            topology=topology,
+            endpoints=endpoints,
+            is_windows_node=is_windows(node),
+        )
+        for role in node.config.roles
+    ]
+    contents = env.get_template(template_name).render(
+        node=node,
+        is_dc=node.type == NodeType.DOMAIN_CONTROLLER,
+        cve_blocks=cve_blocks,
+        install_blocks=install_blocks,
+        endpoints=endpoints,
+    )
+    return filename, contents
+
+
+def _is_provisionable(node: TopologyNode) -> bool:
+    """Skip nodes that represent abstract external endpoints (e.g. internet)."""
+    return node.type != NodeType.INTERNET
+
+
+def generate_artifacts(
+    topology: LabConfig,
+    *,
+    include_readme: bool = True,
+    include_hosts_file: bool = True,
+) -> GeneratedArtifacts:
+    env = _jinja_env()
+
+    provisionable_nodes = [n for n in topology.nodes if _is_provisionable(n)]
+    external_nodes = [n for n in topology.nodes if not _is_provisionable(n)]
+    endpoints = _compute_endpoints(topology)
+
+    provisioners: dict[str, tuple[str, TopologyNode]] = {}
+    for node in provisionable_nodes:
+        filename, contents = _render_node(env, node, topology=topology, endpoints=endpoints)
+        provisioners[node.id] = (filename, node)
+        provisioners[f"__contents__:{filename}"] = (contents, node)  # type: ignore[assignment]
+
+    vagrant_nodes = []
+    for node in provisionable_nodes:
+        filename = provisioners[node.id][0]
+        vagrant_nodes.append(
+            {
+                "id": node.id,
+                "hostname": node.config.hostname,
+                "box": BOX_MAP.get(node.config.os, SAFE_FALLBACK_BOX),
+                "is_windows": is_windows(node),
+                "is_emulated": is_emulated_os(node.config.os),
+                "os_label": node.config.os.value,
+                "ip": node.config.ip,
+                "memory_mb": node.config.memory_mb,
+                "cpus": node.config.cpus,
+                "provision_script": f"provision/{filename}",
+                "node_type": node.type.value,
+            }
+        )
+
+    vagrantfile = env.get_template("Vagrantfile.j2").render(
+        topology=topology,
+        vagrant_nodes=vagrant_nodes,
+        external_nodes=external_nodes,
+    )
+
+    hosts_file = ""
+    if include_hosts_file:
+        hosts_file = "\n".join(
+            f"{n.config.ip}\t{n.config.hostname}"
+            for n in provisionable_nodes
+        ) + "\n"
+
+    readme = ""
+    if include_readme:
+        readme = env.get_template("README.md.j2").render(
+            topology=topology,
+            vagrant_nodes=vagrant_nodes,
+            box_map=BOX_MAP,
+            external_nodes=external_nodes,
+        )
+
+    flat_scripts: dict[str, str] = {}
+    for key, value in provisioners.items():
+        if key.startswith("__contents__:"):
+            filename = key.split(":", 1)[1]
+            flat_scripts[filename] = value[0]  # type: ignore[index]
+
+    return GeneratedArtifacts(
+        vagrantfile=vagrantfile,
+        provisioner_scripts=flat_scripts,
+        hosts_file=hosts_file,
+        readme=readme,
+    )
+
+
+def generate_zip(
+    topology: LabConfig,
+    *,
+    include_readme: bool = True,
+    include_hosts_file: bool = True,
+    target: str = "vagrant",
+) -> bytes:
+    """Build the downloadable zip for either target.
+
+    ``target='vagrant'`` (default) — Vagrantfile + per-node provisioner
+    scripts. ``target='docker-compose'`` — docker-compose.yml + env/ +
+    fallback notes for nodes that need a real VM.
+
+    Both targets ship the same ``topology.json`` source-of-truth and a
+    ``manifest.json`` with sha256 digests + tool/schema versions so the
+    bundle is reproducibly identifiable.
+    """
+    file_contents: dict[str, str] = {}
+
+    if target == "vagrant":
+        artifacts = generate_artifacts(
+            topology,
+            include_readme=include_readme,
+            include_hosts_file=include_hosts_file,
+        )
+        file_contents["Vagrantfile"] = artifacts.vagrantfile
+        for filename, body in artifacts.provisioner_scripts.items():
+            file_contents[f"provision/{filename}"] = body
+        if artifacts.hosts_file:
+            file_contents["hosts"] = artifacts.hosts_file
+        if artifacts.readme:
+            file_contents["README.md"] = artifacts.readme
+    elif target == "docker-compose":
+        compose = render_compose(topology)
+        file_contents["docker-compose.yml"] = compose.compose_yaml
+        for filename, body in compose.env_files.items():
+            file_contents[filename] = body
+        for hostname, note in compose.fallback_notes.items():
+            file_contents[f"notes/{hostname}.txt"] = note
+        if include_hosts_file:
+            file_contents["hosts"] = "\n".join(
+                f"{n.config.ip}\t{n.config.hostname}"
+                for n in topology.nodes
+                if n.type.value != "internet"
+            ) + "\n"
+        if include_readme:
+            file_contents["README.md"] = _compose_readme(topology, compose.fallback_notes)
+    else:
+        raise ValueError(f"Unknown target: {target!r}")
+
+    file_contents["topology.json"] = topology.model_dump_json(indent=2)
+    manifest = build_manifest(topology, file_contents=file_contents, target=target)
+    file_contents["manifest.json"] = manifest
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for filename, body in file_contents.items():
+            zf.writestr(filename, body)
+    return buf.getvalue()
+
+
+def _compose_readme(topology: LabConfig, fallback_notes: dict[str, str]) -> str:
+    lines = [
+        f"# {topology.name} — docker-compose target",
+        "",
+        topology.description or "_(no description)_",
+        "",
+        "## Quick start",
+        "",
+        "```bash",
+        "docker compose up -d",
+        "docker compose ps",
+        "```",
+        "",
+        f"All services share the bridge network `labforge` ({topology.network_cidr}).",
+        "Per-service env files live in `env/`.",
+        "",
+    ]
+    if fallback_notes:
+        lines.extend([
+            "## Nodes that fall back to Vagrant",
+            "",
+            "The following nodes can't usefully run as containers — use the",
+            "Vagrant target for them:",
+            "",
+        ])
+        for hostname, note in fallback_notes.items():
+            lines.append(f"- **{hostname}** — {note.strip()}")
+        lines.append("")
+    return "\n".join(lines)

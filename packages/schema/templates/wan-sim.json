@@ -1,0 +1,106 @@
+{
+  "id": "wan-sim",
+  "name": "WAN Simulation",
+  "description": "A multi-subnet WAN simulation with three branch routers and an inter-branch backbone. Useful for practicing routing-table inspection, traceroute analysis, and pivot mapping across realistic enterprise topologies.",
+  "network_cidr": "172.20.0.0/16",
+  "provider": "virtualbox",
+  "version": "1.0",
+  "nodes": [
+    {
+      "id": "rtr-hq",
+      "type": "router",
+      "label": "HQ Router",
+      "position": { "x": -400, "y": 0 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "172.20.1.1",
+        "hostname": "rtr-hq",
+        "cves": [],
+        "roles": ["frr", "openwrt"],
+        "memory_mb": 768,
+        "cpus": 1,
+        "credentials": { "username": "vagrant", "password": "Wan!2025HQ" },
+        "vlan": null,
+        "gateway": null
+      }
+    },
+    {
+      "id": "rtr-east",
+      "type": "router",
+      "label": "East Branch",
+      "position": { "x": 0, "y": -250 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "172.20.2.1",
+        "hostname": "rtr-east",
+        "cves": [],
+        "roles": ["frr", "openwrt"],
+        "memory_mb": 768,
+        "cpus": 1,
+        "credentials": { "username": "vagrant", "password": "Wan!2025East" },
+        "vlan": null,
+        "gateway": null
+      }
+    },
+    {
+      "id": "rtr-west",
+      "type": "router",
+      "label": "West Branch",
+      "position": { "x": 0, "y": 250 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "172.20.3.1",
+        "hostname": "rtr-west",
+        "cves": [],
+        "roles": ["frr", "openwrt"],
+        "memory_mb": 768,
+        "cpus": 1,
+        "credentials": { "username": "vagrant", "password": "Wan!2025West" },
+        "vlan": null,
+        "gateway": null
+      }
+    },
+    {
+      "id": "srv-east",
+      "type": "server",
+      "label": "East File Server",
+      "position": { "x": 400, "y": -250 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "172.20.2.10",
+        "hostname": "srv-east",
+        "cves": [],
+        "roles": ["samba"],
+        "memory_mb": 1536,
+        "cpus": 2,
+        "credentials": { "username": "vagrant", "password": "vagrant" },
+        "vlan": null,
+        "gateway": "172.20.2.1"
+      }
+    },
+    {
+      "id": "wks-west",
+      "type": "workstation",
+      "label": "West Workstation",
+      "position": { "x": 400, "y": 250 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "172.20.3.10",
+        "hostname": "wks-west",
+        "cves": [],
+        "roles": [],
+        "memory_mb": 1536,
+        "cpus": 2,
+        "credentials": { "username": "vagrant", "password": "vagrant" },
+        "vlan": null,
+        "gateway": "172.20.3.1"
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e1", "source": "rtr-hq", "target": "rtr-east", "protocol": "tcp", "port": null, "label": "OSPF backbone" },
+    { "id": "e2", "source": "rtr-hq", "target": "rtr-west", "protocol": "tcp", "port": null, "label": "OSPF backbone" },
+    { "id": "e3", "source": "rtr-east", "target": "srv-east", "protocol": "smb", "port": 445, "label": "Branch LAN" },
+    { "id": "e4", "source": "rtr-west", "target": "wks-west", "protocol": "tcp", "port": null, "label": "Branch LAN" }
+  ]
+}
