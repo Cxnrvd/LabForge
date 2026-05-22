@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -26,20 +27,71 @@ _LOGGER = logging.getLogger("labforge.api")
 _load_role_plugins()
 
 
-@asynccontextmanager
-async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
-    create_db_and_tables()
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}  # 0.0.0.0 is handled separately
+
+
+def _detected_bind_host() -> str:
+    """Inspect argv for the uvicorn ``--host`` flag.
+
+    Uvicorn binds before our lifespan runs, so this is the only signal
+    we have. Returns the default (``127.0.0.1``) when no flag is set.
+    """
+    args = sys.argv
+    for i, arg in enumerate(args):
+        if arg == "--host" and i + 1 < len(args):
+            return args[i + 1].strip()
+        if arg.startswith("--host="):
+            return arg.split("=", 1)[1].strip()
+    return "127.0.0.1"
+
+
+def _is_safe_dev_bind(host: str) -> bool:
+    """Loopback addresses are safe to expose with auth disabled.
+
+    ``0.0.0.0`` listens on every interface — that is explicitly unsafe
+    when LABFORGE_AGENT_TOKEN is unset, so we treat it as non-loopback.
+    """
+    return host in {"127.0.0.1", "localhost", "::1"}
+
+
+def _enforce_auth_or_loopback() -> None:
+    """Refuse to bind on non-loopback interfaces without an agent token.
+
+    Without LABFORGE_AGENT_TOKEN every write endpoint is open. Reachable
+    from the network that is an unauthenticated remote-code-execution
+    surface (POST /labs/build runs arbitrary topologies through
+    `vagrant up`), so we fail closed rather than just warning.
+    """
     settings = get_settings()
-    if not settings.agent_token:
-        _LOGGER.warning(
+    if settings.agent_token:
+        return
+    host = _detected_bind_host()
+    if _is_safe_dev_bind(host):
+        _LOGGER.critical(
             "auth_disabled",
             extra={
                 "msg_detail": (
-                    "LABFORGE_AGENT_TOKEN is unset — write endpoints are open. "
-                    "Set this env var in any non-development deployment."
+                    f"LABFORGE_AGENT_TOKEN is unset and the API is bound to {host} — "
+                    "write endpoints are open. Set this env var before exposing the "
+                    "API to anything beyond loopback."
                 )
             },
         )
+        return
+    msg = (
+        f"Refusing to start: bound to {host!r} but LABFORGE_AGENT_TOKEN is "
+        "unset. Either set the token or bind to 127.0.0.1."
+    )
+    _LOGGER.critical("auth_required_for_non_loopback", extra={"msg_detail": msg})
+    raise SystemExit(msg)
+
+
+_enforce_auth_or_loopback()
+
+
+@asynccontextmanager
+async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
+    create_db_and_tables()
     # Reconcile any builds whose host process died between API restarts.
     # Without this, a lab can sit in `building` forever after a crash.
     try:
@@ -69,8 +121,12 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    # Explicit allowlist instead of "*" — every browser-driven verb the
+    # web app actually issues. Add new verbs here when new endpoints
+    # require them; "*" interacts badly with allow_credentials=True
+    # under spec, and surfaces accidentally-exposed methods.
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Origin"],
 )
 
 

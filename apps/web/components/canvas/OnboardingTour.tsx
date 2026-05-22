@@ -107,6 +107,7 @@ export function OnboardingTour() {
 
   if (!open) return null;
   const current = STEPS[step];
+  if (!current) return null;
   const anchor = positionFor(current);
   return (
     <>

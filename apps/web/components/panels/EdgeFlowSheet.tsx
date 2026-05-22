@@ -34,8 +34,8 @@ export function EdgeFlowSheet({
 }: EdgeFlowSheetProps) {
   const total = flows.reduce(
     (acc, f) => {
-      acc.packets += f.packets;
-      acc.bytes += f.bytes_estimate;
+      acc.packets += f.packets ?? 0;
+      acc.bytes += f.bytes_estimate ?? 0;
       return acc;
     },
     { packets: 0, bytes: 0 },
@@ -83,7 +83,7 @@ export function EdgeFlowSheet({
                       {f.protocol ?? "tcp"}
                     </Badge>
                     <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
-                      {f.packets}p · {(f.bytes_estimate / 1024).toFixed(1)} KB
+                      {f.packets ?? 0}p · {((f.bytes_estimate ?? 0) / 1024).toFixed(1)} KB
                     </span>
                   </span>
                 </li>

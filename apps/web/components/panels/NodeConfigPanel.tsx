@@ -43,6 +43,7 @@ import {
 import {
   findIssuesForNode,
   useTopologyStore,
+  type FlowNode,
 } from "@/lib/store/topology-store";
 
 const OS_BY_TYPE: Record<NodeType, OsType[]> = {
@@ -153,9 +154,11 @@ const OS_BY_TYPE: Record<NodeType, OsType[]> = {
 
 export function NodeConfigPanel() {
   const selectedId = useTopologyStore((s) => s.selectedNodeId);
-  const node = useTopologyStore((s) =>
-    s.nodes.find((n) => n.id === s.selectedNodeId)?.data.topologyNode,
-  );
+  const node = useTopologyStore((s) => {
+    const n = s.nodes.find((x) => x.id === s.selectedNodeId);
+    if (!n || n.type === "zone") return undefined;
+    return (n as FlowNode).data.topologyNode;
+  });
   const updateNodeConfig = useTopologyStore((s) => s.updateNodeConfig);
   const removeNode = useTopologyStore((s) => s.removeNode);
   const setSelectedNode = useTopologyStore((s) => s.setSelectedNode);
@@ -178,8 +181,9 @@ export function NodeConfigPanel() {
     );
   }
 
+  type NodeConfig = NonNullable<typeof node>["config"];
   const update = (
-    updater: (config: typeof node.config) => typeof node.config,
+    updater: (config: NodeConfig) => NodeConfig,
   ): void => {
     updateNodeConfig(selectedId, (n) => ({ ...n, config: updater(n.config) }));
   };
@@ -624,7 +628,7 @@ export function NodeConfigPanel() {
       <IconPicker
         open={pickerOpen}
         onOpenChange={setPickerOpen}
-        selected={node.config.roles.map((r) => parseRole(r).id)}
+        selected={node.config.roles.map((r: string) => parseRole(r).id)}
         onToggle={togglePicker}
       />
     </Sheet>

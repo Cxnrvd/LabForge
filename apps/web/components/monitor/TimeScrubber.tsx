@@ -122,7 +122,7 @@ export function TimeScrubber<T>({
           {atTail ? "LIVE" : "REPLAY"}
         </span>
         <span className="ml-1 font-mono text-[10px] text-muted-foreground">
-          {new Date(current.capturedAt).toLocaleTimeString()}
+          {current ? new Date(current.capturedAt).toLocaleTimeString() : "—"}
         </span>
       </div>
     </div>

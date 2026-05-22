@@ -15,13 +15,13 @@ Write-Host "=== LabForge provisioner start for {{ node.config.hostname }} ==="
 
 # Honour the topology hostname (Vagrant also sets this from m.vm.hostname).
 $current = (Get-CimInstance Win32_ComputerSystem).Name
-if ($current -ne "{{ node.config.hostname }}") {
-    Rename-Computer -NewName "{{ node.config.hostname }}" -Force -ErrorAction SilentlyContinue
+if ($current -ne {{ node.config.hostname | ps_q }}) {
+    Rename-Computer -NewName {{ node.config.hostname | ps_q }} -Force -ErrorAction SilentlyContinue
 }
 
 # Set the topology-defined password on the existing vagrant user instead of
 # creating a fresh account — Vagrant already has WinRM creds for vagrant.
-$securePw = ConvertTo-SecureString "{{ node.config.credentials.password }}" -AsPlainText -Force
+$securePw = ConvertTo-SecureString {{ node.config.credentials.password | ps_q }} -AsPlainText -Force
 try {
     Set-LocalUser -Name "vagrant" -Password $securePw -ErrorAction SilentlyContinue
 } catch {

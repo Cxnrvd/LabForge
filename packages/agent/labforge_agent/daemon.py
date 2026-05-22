@@ -231,14 +231,25 @@ def run(
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
 
+    # While the in-app build is still in flight (no .build.exit yet),
+    # ``vagrant status --machine-readable`` competes for Vagrant's
+    # per-machine lock with the ongoing ``vagrant up`` and crashes the
+    # build with "machine is locked". Defer the status query until the
+    # sentinel lands; until then, surface a placeholder so the dashboard
+    # still gets heartbeats with log_tail + flows for telemetry.
+    build_exit = workspace / ".build.exit"
+
     try:
         while True:
             if not workspace.exists() or stop_file.exists():
                 break
 
-            lab_status, vms = _vagrant_status(workspace)
-            for vm in vms:
-                vm["ip"] = ip_map.get(vm["hostname"])
+            if build_exit.exists():
+                lab_status, vms = _vagrant_status(workspace)
+                for vm in vms:
+                    vm["ip"] = ip_map.get(vm["hostname"])
+            else:
+                lab_status, vms = "building", []
             flows = _capture_flows(capture_ifaces, capture_window)
             payload = {
                 "lab_status": lab_status,

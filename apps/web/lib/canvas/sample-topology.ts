@@ -44,6 +44,7 @@ export const SAMPLE_TOPOLOGY: LabConfig = {
         vlan: null,
         gateway: null,
       },
+      attack_tags: [],
     },
     {
       id: "n-fw",
@@ -62,6 +63,7 @@ export const SAMPLE_TOPOLOGY: LabConfig = {
         vlan: null,
         gateway: null,
       },
+      attack_tags: [],
     },
     {
       id: "n-target",
@@ -80,6 +82,7 @@ export const SAMPLE_TOPOLOGY: LabConfig = {
         vlan: null,
         gateway: null,
       },
+      attack_tags: [],
     },
   ],
   edges: [
@@ -90,6 +93,7 @@ export const SAMPLE_TOPOLOGY: LabConfig = {
       protocol: "tcp",
       port: null,
       label: "TCP",
+      attack_tags: [],
     },
     {
       id: "e-fw-target",
@@ -98,6 +102,7 @@ export const SAMPLE_TOPOLOGY: LabConfig = {
       protocol: "http",
       port: 80,
       label: "HTTP",
+      attack_tags: [],
     },
   ],
 };

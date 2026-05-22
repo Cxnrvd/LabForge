@@ -65,4 +65,32 @@ export const NODE_STYLES: Record<NodeType, NodeStyle> = {
     iconColor: "text-emerald-600 dark:text-emerald-400",
     miniMapColor: "#10b981",
   },
+  ics_plc: {
+    accent: "bg-yellow-500/10",
+    border: "border-yellow-500/40",
+    iconBg: "bg-yellow-500/15",
+    iconColor: "text-yellow-700 dark:text-yellow-300",
+    miniMapColor: "#eab308",
+  },
+  ics_hmi: {
+    accent: "bg-teal-500/10",
+    border: "border-teal-500/40",
+    iconBg: "bg-teal-500/15",
+    iconColor: "text-teal-700 dark:text-teal-300",
+    miniMapColor: "#14b8a6",
+  },
+  camera: {
+    accent: "bg-violet-500/10",
+    border: "border-violet-500/40",
+    iconBg: "bg-violet-500/15",
+    iconColor: "text-violet-600 dark:text-violet-400",
+    miniMapColor: "#8b5cf6",
+  },
+  internet: {
+    accent: "bg-sky-500/10",
+    border: "border-sky-500/40",
+    iconBg: "bg-sky-500/15",
+    iconColor: "text-sky-600 dark:text-sky-400",
+    miniMapColor: "#0ea5e9",
+  },
 };

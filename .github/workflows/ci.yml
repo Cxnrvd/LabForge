@@ -30,7 +30,7 @@ jobs:
         run: bash packages/schema/scripts/check-schema-sync.sh
 
   backend:
-    name: API (ruff + pytest)
+    name: API (ruff + mypy + pytest)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,6 +43,10 @@ jobs:
           pip install -e "apps/api[dev,migrate]"
       - name: Lint
         run: cd apps/api && ruff check .
+      - name: Typecheck
+        # Already configured in pyproject.toml; gate on it so silent drift
+        # in the generator/templates doesn't reach main.
+        run: cd apps/api && mypy labforge_core
       - name: Tests
         run: cd apps/api && pytest -q
 

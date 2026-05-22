@@ -1,0 +1,65 @@
+# One-command dev stack: API + web, source mounted live for hot reload.
+# Vagrant + VirtualBox/VMware are intentionally NOT in here — they require
+# host-level kernel access and your real hypervisor; this compose file is
+# for editing/validating topologies and the canvas, not for `vagrant up`.
+#
+# Usage:
+#   docker compose up           # build + run
+#   docker compose up -d        # detached
+#   docker compose logs -f api  # tail
+#
+# To exercise `vagrant up` end-to-end, run the agent (`labforge run …`) on
+# the host outside this stack.
+
+services:
+  api:
+    image: python:3.12-slim
+    working_dir: /repo/apps/api
+    command: >
+      bash -c "
+        set -e &&
+        pip install --quiet -e /repo/packages/schema/python &&
+        pip install --quiet -e /repo/packages/agent &&
+        pip install --quiet -e /repo/apps/api &&
+        exec uvicorn labforge_core.api.main:app --host 0.0.0.0 --port 8000 --reload
+      "
+    environment:
+      LABFORGE_WORKSPACE_ROOT: /repo/.labforge/workspaces
+      LABFORGE_AGENT_TOKEN: ${LABFORGE_AGENT_TOKEN:-devtoken-change-me}
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./:/repo:cached
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+  web:
+    image: node:20-bookworm
+    working_dir: /repo
+    command: >
+      bash -c "
+        set -e &&
+        corepack enable &&
+        corepack prepare pnpm@9.0.0 --activate &&
+        pnpm install --frozen-lockfile --ignore-scripts &&
+        cd apps/web &&
+        exec pnpm dev --hostname 0.0.0.0
+      "
+    environment:
+      LABFORGE_API_URL: http://api:8000
+      NEXT_TELEMETRY_DISABLED: "1"
+    volumes:
+      - ./:/repo:cached
+      - web-node-modules:/repo/node_modules
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+
+volumes:
+  web-node-modules:

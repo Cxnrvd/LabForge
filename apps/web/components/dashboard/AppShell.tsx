@@ -3,47 +3,75 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import {
-  Activity,
-  AlertTriangle,
-  GraduationCap,
-  Hammer,
-  LayoutDashboard,
-  LayoutTemplate,
-  Search,
-  Server,
-  Settings,
-  Zap,
-} from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
+import { useTheme } from "next-themes";
 
-import { cn } from "@/lib/utils/cn";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CommandPalette } from "@/components/canvas/CommandPalette";
 import { KeybindingsHelp } from "@/components/dashboard/KeybindingsHelp";
-import { ThemeToggle } from "@/components/dashboard/ThemeToggle";
+import { cn } from "@/lib/utils/cn";
 
-interface NavItem {
+/**
+ * LabForge Dashboard 10 application shell.
+ *
+ * Renders the 220 px sidebar + the topmost ``.tb1`` breadcrumb. Per-page
+ * ``tb2`` (tabs) and ``tb3`` (actions) toolbars are rendered by each page
+ * via the `<PageToolbars>` helper exported from this module — kept here so
+ * every page imports a single, consistent component family.
+ *
+ * Every visual rule in this shell comes from labforge-designs.html / the
+ * ``.lf .…`` classes in apps/web/styles/labforge-d10.css. The shadcn HSL
+ * palette stays available for the existing leaf components (drawers,
+ * tooltips, sonner toasts), but the page chrome is purely D10-classed.
+ */
+
+interface NavEntry {
   href: string;
   label: string;
-  Icon: React.ComponentType<{ className?: string }>;
+  icon: string; // single-char glyph from the mockup (◧, ◆, ▤, ◰, ⚙, ⚠, ✓, ⬇, ⌥)
+  badge?: { label: string; hot?: boolean };
 }
 
-const NAV: NavItem[] = [
-  { href: "/", label: "Dashboard", Icon: LayoutDashboard },
-  { href: "/build", label: "Build", Icon: Hammer },
-  { href: "/monitor", label: "Monitor", Icon: Activity },
-  { href: "/templates", label: "Templates", Icon: LayoutTemplate },
-  { href: "/labs", label: "Labs", Icon: Server },
-  { href: "/learn", label: "Learn", Icon: GraduationCap },
-  { href: "/settings", label: "Settings", Icon: Settings },
+const WORKSPACE_NAV: NavEntry[] = [
+  { href: "/", label: "Dashboard", icon: "◧" },
+  { href: "/build", label: "Canvas", icon: "◆", badge: { label: "live", hot: true } },
+  { href: "/labs", label: "Labs", icon: "▤" },
+  { href: "/monitor", label: "Monitor", icon: "◉" },
+  { href: "/templates", label: "Templates", icon: "◰" },
 ];
 
-export function AppShell({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname() ?? "/";
+const CATALOG_NAV: NavEntry[] = [
+  { href: "/vendors", label: "Vendors", icon: "⚙", badge: { label: "50+" } },
+  { href: "/cves", label: "CVEs", icon: "⚠", badge: { label: "2", hot: true } },
+];
 
+const BUILD_NAV: NavEntry[] = [
+  { href: "/build/validate", label: "Validation", icon: "✓" },
+  { href: "/build/generate", label: "Generate", icon: "⬇" },
+];
+
+const SYSTEM_NAV: NavEntry[] = [
+  { href: "/settings", label: "Settings", icon: "⌥" },
+  { href: "/onboard", label: "CLI Agent", icon: "⎘" },
+  { href: "/doctor", label: "API Docs", icon: "⌕" },
+];
+
+/* ============================================================
+   Shell
+   ============================================================ */
+
+export function AppShell({ children }: { children: React.ReactNode }): React.ReactElement {
+  const pathname = usePathname() ?? "/";
   const [paletteOpen, setPaletteOpen] = React.useState(false);
   const [helpOpen, setHelpOpen] = React.useState(false);
+  const { theme, resolvedTheme, setTheme } = useTheme();
+  const [mounted, setMounted] = React.useState(false);
+  React.useEffect(() => setMounted(true), []);
+  // SSR-safe: render dark tokens until hydration so the data-theme attribute
+  // matches the server output, then flip to the user's actual preference.
+  const activeTheme = mounted ? (resolvedTheme ?? theme ?? "dark") : "dark";
+  const isDark = activeTheme !== "light";
+  const toggleTheme = (): void => setTheme(isDark ? "light" : "dark");
+
   React.useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
       const meta = e.metaKey || e.ctrlKey;
@@ -52,8 +80,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         setPaletteOpen((v) => !v);
         return;
       }
-      // `?` opens the help dialog. Skip when the user is in an input so
-      // the literal `?` character can still be typed.
       if (e.key === "?" && !meta) {
         const t = e.target as HTMLElement | null;
         const tag = t?.tagName?.toLowerCase();
@@ -68,126 +94,322 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const isActive = (href: string): boolean => {
     if (href === "/") return pathname === "/";
-    return pathname.startsWith(href);
+    return pathname === href || pathname.startsWith(`${href}/`);
   };
 
-  // Light cross-app counts so the rail can hint at activity without making
-  // the user click around. Polled gently — these are just signals.
-  const labsQ = useQuery<Array<{ status: string }>>({
+  // Live counts feeding badges in the sidebar + tb1. Cheap polls; failures
+  // are silent so the shell renders even if the API is down.
+  const labsQ = useQuery<Array<{ id: number; status: string }>>({
     queryKey: ["labs"],
     queryFn: () => fetch("/api/v1/labs").then((r) => r.json()),
     refetchInterval: 8000,
     staleTime: 4000,
   });
-
-  // Soft warning if the API is running with auth disabled. Stays out of
-  // the way (small pill near the right side of the header) so it doesn't
-  // nag developers but is impossible to miss in prod.
-  const healthQ = useQuery<{ auth_required?: boolean }>({
-    queryKey: ["api-health-banner"],
+  const healthQ = useQuery<{ status?: string }>({
+    queryKey: ["api-health"],
     queryFn: () => fetch("/api/v1/health").then((r) => r.json()),
-    refetchInterval: 30_000,
-    staleTime: 15_000,
+    refetchInterval: 15_000,
+    staleTime: 8_000,
   });
-  const authDisabled = healthQ.data?.auth_required === false;
-  const counts: Record<string, number> = {};
-  for (const l of labsQ.data ?? []) {
-    if (l.status === "building" || l.status === "pending") {
-      counts["/monitor"] = (counts["/monitor"] ?? 0) + 1;
+  const apiOk = healthQ.data?.status === "ok";
+  const labsCount = labsQ.data?.length ?? 0;
+  const runningCount = (labsQ.data ?? []).filter(
+    (l) => l.status === "running" || l.status === "partial",
+  ).length;
+
+  const workspaceNavWithCounts: NavEntry[] = WORKSPACE_NAV.map((e) => {
+    if (e.href === "/labs" && labsCount > 0) {
+      return { ...e, badge: { label: String(labsCount) } };
     }
-    if (l.status === "running" || l.status === "partial") {
-      counts["/labs"] = (counts["/labs"] ?? 0) + 1;
+    if (e.href === "/build" && runningCount === 0) {
+      // Drop the "live" hot badge when nothing is actually building.
+      return { ...e, badge: undefined };
     }
-  }
+    return e;
+  });
+
+  const breadcrumb = breadcrumbFor(pathname);
+
+  // Pages that own multi-pane internal scrolling — disable the outer
+  // `.content` scroll so only the individual panes scroll their own
+  // content. Each of these pages already wires per-pane `overflow-y: auto`.
+  const noOuterScroll =
+    pathname === "/cves" ||
+    pathname === "/vendors" ||
+    pathname === "/labs" ||
+    pathname.startsWith("/labs/") ||
+    pathname === "/build/validate";
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden">
-      {/* Left rail */}
-      <aside className="flex w-14 shrink-0 flex-col items-center gap-2 border-r bg-card py-3">
-        <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary text-primary-foreground">
-          <Zap className="h-4 w-4" />
+    <div className="lf" data-theme={isDark ? "dark" : "light"} suppressHydrationWarning>
+      <aside className="sidebar">
+        <div className="brand">
+          <div className="logo">LF</div>
+          <div className="ws">
+            LabForge
+            <small>v1.4 · main</small>
+          </div>
         </div>
-        <nav className="mt-3 flex flex-col items-center gap-1">
-          {NAV.map(({ href, label, Icon }) => {
-            const badge = counts[href];
-            return (
-              <Tooltip key={href}>
-                <TooltipTrigger asChild>
-                  <Link
-                    href={href}
-                    className={cn(
-                      "relative flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-                      isActive(href) && "bg-accent text-foreground",
-                    )}
-                    aria-label={label}
-                  >
-                    <Icon className="h-4 w-4" />
-                    {badge ? (
-                      <span
-                        className={cn(
-                          "absolute -right-1 -top-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none ring-2 ring-card",
-                          href === "/monitor"
-                            ? "bg-blue-500 text-white"
-                            : "bg-emerald-500 text-white",
-                        )}
-                      >
-                        {badge}
-                      </span>
-                    ) : null}
-                  </Link>
-                </TooltipTrigger>
-                <TooltipContent side="right">
-                  {label}
-                  {badge ? ` · ${badge}` : ""}
-                </TooltipContent>
-              </Tooltip>
-            );
-          })}
-        </nav>
-        <div className="mt-auto" />
+        <div className="section-label">Workspace</div>
+        {workspaceNavWithCounts.map((e) => (
+          <SideLink key={e.href} entry={e} active={isActive(e.href)} />
+        ))}
+        <div className="section-label">Catalog</div>
+        {CATALOG_NAV.map((e) => (
+          <SideLink key={e.href} entry={e} active={isActive(e.href)} />
+        ))}
+        <div className="section-label">Build</div>
+        {BUILD_NAV.map((e) => (
+          <SideLink key={e.href} entry={e} active={isActive(e.href)} />
+        ))}
+        <div className="section-label">System</div>
+        {SYSTEM_NAV.map((e) => (
+          <SideLink key={e.href} entry={e} active={isActive(e.href)} />
+        ))}
+        <div className="footer">
+          <span className="dot" />
+          <span>
+            API ·{" "}
+            <span className="mono">
+              {apiOk ? "127.0.0.1:8000" : "offline"}
+            </span>
+          </span>
+        </div>
       </aside>
 
-      {/* Main area */}
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 shrink-0 items-center gap-3 border-b bg-card/60 px-4">
-          <h1 className="text-sm font-semibold tracking-tight">
-            LabForge Mission Control
-          </h1>
-          <button
-            type="button"
-            onClick={() => setPaletteOpen(true)}
-            className="ml-auto flex h-8 items-center gap-2 rounded-md border bg-background px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            aria-label="Open command palette"
-          >
-            <Search className="h-3 w-3" />
-            <span className="hidden sm:inline">Quick search…</span>
-            <kbd className="ml-1 rounded border bg-muted px-1.5 py-0.5 font-mono text-[10px]">
-              ⌘K
-            </kbd>
-          </button>
-          {authDisabled && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span
-                  role="status"
-                  className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-700 dark:text-amber-300"
-                >
-                  <AlertTriangle className="h-3 w-3" /> Dev mode
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          flex: 1,
+          minWidth: 0,
+          minHeight: 0,
+          height: "100vh",
+          overflow: "hidden",
+        }}
+      >
+        <header className="tb1">
+          <div className="crumb">
+            <span style={{ marginLeft: 0 }}>LabForge</span>
+            {breadcrumb.map((seg, i) => (
+              <React.Fragment key={i}>
+                <span style={{ color: "var(--d10-fg-faint)", marginLeft: 8 }}>/</span>
+                <span className={i === breadcrumb.length - 1 ? "head" : undefined}>
+                  {seg}
                 </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                API is running with <code>LABFORGE_AGENT_TOKEN</code> unset — write
-                endpoints accept all callers. Required only on a non-dev deployment.
-              </TooltipContent>
-            </Tooltip>
+              </React.Fragment>
+            ))}
+          </div>
+          {pathname.startsWith("/build") && (
+            <span className="autosave">
+              <span className="dot" />
+              autosaved 2s ago
+            </span>
           )}
-          <ThemeToggle />
-          <span className="text-xs text-muted-foreground">v0.1</span>
+          <div className="right">
+            <button
+              type="button"
+              onClick={() => setPaletteOpen(true)}
+              className="kbd"
+              style={{ cursor: "pointer" }}
+              aria-label="Open command palette (⌘K)"
+            >
+              ⌘K
+            </button>
+            <button
+              type="button"
+              onClick={toggleTheme}
+              style={{
+                background: "transparent",
+                border: 0,
+                color: "var(--d10-fg-mute)",
+                fontSize: 14,
+                cursor: "pointer",
+                padding: "2px 4px",
+                lineHeight: 1,
+              }}
+              aria-label={`Switch to ${isDark ? "light" : "dark"} theme`}
+              title={`Theme: ${activeTheme} — click to switch`}
+              suppressHydrationWarning
+            >
+              {isDark ? "☀" : "☾"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setHelpOpen(true)}
+              style={{
+                background: "transparent",
+                border: 0,
+                color: "var(--d10-fg-faint)",
+                fontSize: 12,
+                cursor: "pointer",
+              }}
+              aria-label="Help (?)"
+            >
+              ?
+            </button>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              🔔 <span style={{ color: "var(--d10-accent)" }}>{Math.min(3, runningCount)}</span>
+            </span>
+            <div className="avtar">CM</div>
+          </div>
         </header>
-        <main className="min-h-0 flex-1 overflow-auto">{children}</main>
+
+        <main
+          className={cn("content", noOuterScroll && "content--noscroll")}
+          style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+        >
+          {children}
+        </main>
       </div>
+
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
       <KeybindingsHelp open={helpOpen} onOpenChange={setHelpOpen} />
     </div>
   );
+}
+
+/* ============================================================
+   Sidebar link
+   ============================================================ */
+
+function SideLink({ entry, active }: { entry: NavEntry; active: boolean }): React.ReactElement {
+  return (
+    <Link
+      href={entry.href}
+      className={cn("nav", active && "active")}
+      aria-current={active ? "page" : undefined}
+    >
+      <span className="icn">{entry.icon}</span>
+      <span>{entry.label}</span>
+      {entry.badge && (
+        <span className={cn("badge", entry.badge.hot && "hot")}>{entry.badge.label}</span>
+      )}
+    </Link>
+  );
+}
+
+/* ============================================================
+   Per-page toolbars
+   ============================================================ */
+
+export interface TabSpec {
+  id: string;
+  label: string;
+  count?: number | string;
+  countTone?: "ok" | "warn" | "err" | "accent";
+  onSelect?: () => void;
+  active?: boolean;
+  href?: string;
+}
+
+export interface PageToolbarsProps {
+  tabs?: TabSpec[];
+  /** Optional right-aligned hint inside tb2 (e.g. "⌥+1…9 to switch"). */
+  tabHint?: React.ReactNode;
+  /** Whole tb3 content. Pages compose buttons + dividers themselves so
+   *  the shell stays generic across canvas/templates/labs/etc. */
+  actions?: React.ReactNode;
+  /** Drop tb2 entirely (e.g. dashboard page). */
+  noTabs?: boolean;
+  /** Drop tb3 entirely (rare; dashboard does this). */
+  noActions?: boolean;
+}
+
+/**
+ * Render the second + third toolbar rows. Pages opt-in:
+ *
+ *   <PageToolbars
+ *     tabs={[{ id: "all", label: "All labs", count: 7, active: true }]}
+ *     actions={<><input className="search" placeholder="Search…" />…</>}
+ *   />
+ */
+export function PageToolbars({
+  tabs,
+  tabHint,
+  actions,
+  noTabs,
+  noActions,
+}: PageToolbarsProps): React.ReactElement {
+  return (
+    <>
+      {!noTabs && (
+        <div className="tb2">
+          {tabs?.map((t) =>
+            t.href ? (
+              <Link
+                key={t.id}
+                href={t.href}
+                className={cn("tab", t.active && "act")}
+                style={{ textDecoration: "none" }}
+              >
+                {t.label}
+                {t.count !== undefined && (
+                  <span className={cn("ct", t.countTone)}>· {t.count}</span>
+                )}
+              </Link>
+            ) : (
+              <button
+                key={t.id}
+                type="button"
+                className={cn("tab", t.active && "act")}
+                onClick={t.onSelect}
+              >
+                {t.label}
+                {t.count !== undefined && (
+                  <span className={cn("ct", t.countTone)}>· {t.count}</span>
+                )}
+              </button>
+            ),
+          )}
+          {tabHint && <span className="right">{tabHint}</span>}
+        </div>
+      )}
+      {!noActions && actions !== undefined && <div className="tb3">{actions}</div>}
+    </>
+  );
+}
+
+/* ============================================================
+   Internal helpers
+   ============================================================ */
+
+function breadcrumbFor(pathname: string): string[] {
+  if (pathname === "/") return ["Workspace", "Dashboard"];
+  const segments = pathname.split("/").filter(Boolean);
+  const head = segments[0] ?? "";
+  switch (head) {
+    case "build":
+      if (segments[1] === "validate") return ["Build", "Validation"];
+      if (segments[1] === "generate") return ["Build", "Generate"];
+      return ["Canvas", segments[1] ?? "Untitled"];
+    case "labs":
+      return segments.length > 1
+        ? ["Workspace", "Labs", segments[1] ?? ""]
+        : ["Workspace", "Labs"];
+    case "monitor":
+      return segments.length > 1
+        ? ["Workspace", "Monitor", segments[1] ?? ""]
+        : ["Workspace", "Monitor"];
+    case "templates":
+      return ["Catalog", "Templates"];
+    case "vendors":
+      return ["Catalog", "Vendors"];
+    case "cves":
+      return ["Catalog", "CVEs"];
+    case "settings":
+      return ["System", "Settings"];
+    case "doctor":
+      return ["System", "Doctor"];
+    case "onboard":
+      return ["System", "Onboarding"];
+    case "design-system":
+      return ["System", "Design system"];
+    case "states":
+      return ["System", "Empty & error states"];
+    case "learn":
+      return ["Workspace", "Learn"];
+    default:
+      return [head.charAt(0).toUpperCase() + head.slice(1)];
+  }
 }

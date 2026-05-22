@@ -96,8 +96,11 @@ export function AttackPathOverlay() {
   const top = result.paths.slice(0, 3);
   return (
     // Tucked under the toolbar on the right so it doesn't collide with
-    // React Flow's Controls cluster in the bottom-right corner.
-    <div className="absolute right-4 top-20 z-10 w-72 rounded-md border bg-background/95 p-3 text-xs shadow-md backdrop-blur">
+    // React Flow's Controls cluster in the bottom-right corner. z-20 puts
+    // it on the same plane as the left NodePalette and BELOW the Toolbar
+    // (z-40) + BuildPreflightBanner (z-30) — see LabCanvas for the full
+    // z-index ladder.
+    <div className="absolute right-4 top-20 z-20 w-72 rounded-md border bg-background/95 p-3 text-xs shadow-md backdrop-blur">
 
       <div className="mb-2 flex items-center gap-2">
         <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />

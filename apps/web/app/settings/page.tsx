@@ -1,330 +1,740 @@
 "use client";
 
+/**
+ * /settings — Dashboard 10 redesign.
+ *
+ * Maps to #p10 in labforge-designs.html. Seven anchor sections wired up to
+ * PageToolbars tabs:
+ *
+ *   General · API & CLI · Vagrant Provider · NVD feed · Catalog overrides ·
+ *   Theme · Keybinds
+ *
+ * UI-only. The only backed endpoint used here is /api/v1/health (read-only)
+ * — every editable field persists to a `labforge.*` localStorage key. No new
+ * endpoints are introduced; sections without backend support are flagged
+ * with a TODO comment inline.
+ */
+
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
-import {
-  CheckCircle2,
-  Copy,
-  KeyRound,
-  Moon,
-  Settings as SettingsIcon,
-  Sun,
-  XCircle,
-  Zap,
-} from "lucide-react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
+import { PageToolbars, type TabSpec } from "@/components/dashboard/AppShell";
+import { getStoredToken } from "@/lib/api/client";
 
-interface HealthResponse {
-  status: string;
-  version?: string;
-  auth_required?: boolean;
-  nvd_key_set?: boolean;
-}
+/* ============================================================
+   localStorage keys (all under `labforge.*`)
+   ============================================================ */
 
 const TOKEN_KEY = "labforge.token";
+const WS_NAME_KEY = "labforge.workspace-name";
+const WS_THEME_KEY = "labforge.workspace-default-theme";
+// TODO: needs backend support — NVD config is local-only until /api/v1/config lands
+const NVD_KEY = "labforge.nvd-key";
+const NVD_SCHEDULE_KEY = "labforge.nvd-schedule";
+// TODO: needs backend support — catalog overrides are local-only
+const CATALOG_OVERRIDES_KEY = "labforge.catalog-overrides";
+const THEME_VARIANT_KEY = "labforge.theme-variant";
 
-function CopyButton({ value }: { value: string }) {
-  const [copied, setCopied] = React.useState(false);
-  const handle = async (): Promise<void> => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
-    } catch {
-      toast.error("Copy failed");
-    }
-  };
-  return (
-    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={handle}>
-      {copied ? (
-        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
-      ) : (
-        <Copy className="h-3.5 w-3.5" />
-      )}
-    </Button>
-  );
+const DEFAULT_WS_NAME = "LabForge · main";
+const DEFAULT_NVD_SCHEDULE = "daily";
+const DEFAULT_THEME = "dark";
+const API_BASE = "/api/v1";
+
+interface CatalogOverride {
+  vendor: string;
+  url: string;
 }
 
-function Snippet({ text }: { text: string }) {
-  return (
-    <div className="flex items-start gap-2 rounded-md border bg-muted/40 px-3 py-2 font-mono text-xs">
-      <pre className="flex-1 overflow-x-auto whitespace-pre-wrap break-all">{text}</pre>
-      <CopyButton value={text} />
-    </div>
-  );
+function readLS(key: string, fallback: string): string {
+  if (typeof window === "undefined") return fallback;
+  try {
+    return window.localStorage.getItem(key) ?? fallback;
+  } catch {
+    return fallback;
+  }
 }
 
-export default function SettingsPage() {
+function writeLS(key: string, value: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (value === "") window.localStorage.removeItem(key);
+    else window.localStorage.setItem(key, value);
+  } catch {
+    /* ignore */
+  }
+}
+
+/* ============================================================
+   Section anchors
+   ============================================================ */
+
+type SectionId =
+  | "general"
+  | "api"
+  | "nvd"
+  | "catalog"
+  | "theme"
+  | "keybinds";
+
+const SECTIONS: { id: SectionId; label: string }[] = [
+  { id: "general", label: "General" },
+  { id: "api", label: "API & CLI" },
+  { id: "nvd", label: "NVD feed" },
+  { id: "catalog", label: "Catalog overrides" },
+  { id: "theme", label: "Theme" },
+  { id: "keybinds", label: "Keybinds" },
+];
+
+const KEYBINDS: { action: string; combo: string }[] = [
+  { action: "Command palette", combo: "⌘K" },
+  { action: "Help / keybinds", combo: "?" },
+  { action: "Switch tab 1…9", combo: "⌥+1 … ⌥+9" },
+  { action: "Undo", combo: "⌘Z" },
+  { action: "Redo", combo: "⇧⌘Z" },
+  { action: "Save canvas", combo: "⌘S" },
+  { action: "Build / generate", combo: "⌘↵" },
+];
+
+const THEME_SWATCHES: {
+  slug: string;
+  variant: string;
+  name: string;
+  sub: string;
+  gradient: string;
+}[] = [
+  {
+    slug: "dark",
+    variant: "dark-pro",
+    name: "Dark Pro (default)",
+    sub: "d10 reference",
+    gradient: "linear-gradient(135deg, #131418, #21232a)",
+  },
+  {
+    slug: "light",
+    variant: "light",
+    name: "Light",
+    sub: "edges use foreground/65",
+    gradient: "linear-gradient(135deg, #f7f5f0, #e3e0d8)",
+  },
+  // OLED Black / Phosphor are dark-base variants persisted in localStorage;
+  // next-themes still resolves to "dark" so the existing tokens hold.
+  {
+    slug: "dark",
+    variant: "oled",
+    name: "OLED Black",
+    sub: "true black bg",
+    gradient: "linear-gradient(135deg, #0a0b0d, #000)",
+  },
+  {
+    slug: "dark",
+    variant: "phosphor",
+    name: "Phosphor",
+    sub: "terminal green",
+    gradient: "linear-gradient(135deg, #001100, #003300)",
+  },
+];
+
+/* ============================================================
+   Page
+   ============================================================ */
+
+export default function SettingsPage(): React.ReactElement {
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = React.useState(false);
+  const [activeSection, setActiveSection] =
+    React.useState<SectionId>("general");
+
   React.useEffect(() => setMounted(true), []);
 
-  const [tokenInput, setTokenInput] = React.useState("");
-  const [storedToken, setStoredToken] = React.useState<string | null>(null);
+  /* ------ General ------ */
+  const [wsName, setWsName] = React.useState(DEFAULT_WS_NAME);
+  const [wsTheme, setWsTheme] = React.useState(DEFAULT_THEME);
 
+  /* ------ API & CLI ------ */
+  const [token, setToken] = React.useState("");
+  const [showToken, setShowToken] = React.useState(false);
+
+  /* ------ NVD ------ */
+  const [nvdKey, setNvdKey] = React.useState("");
+  const [showNvdKey, setShowNvdKey] = React.useState(false);
+  const [nvdSchedule, setNvdSchedule] = React.useState(DEFAULT_NVD_SCHEDULE);
+
+  /* ------ Catalog overrides ------ */
+  const [overrides, setOverrides] = React.useState<CatalogOverride[]>([]);
+  const [draftVendor, setDraftVendor] = React.useState("");
+  const [draftUrl, setDraftUrl] = React.useState("");
+
+  /* ------ Theme variant ------ */
+  const [themeVariant, setThemeVariant] = React.useState("dark-pro");
+
+  /* Hydrate from localStorage on mount. */
   React.useEffect(() => {
+    setWsName(readLS(WS_NAME_KEY, DEFAULT_WS_NAME));
+    setWsTheme(readLS(WS_THEME_KEY, DEFAULT_THEME));
+    setToken(getStoredToken() ?? "");
+    setNvdKey(readLS(NVD_KEY, ""));
+    setNvdSchedule(readLS(NVD_SCHEDULE_KEY, DEFAULT_NVD_SCHEDULE));
+    setThemeVariant(readLS(THEME_VARIANT_KEY, "dark-pro"));
     try {
-      const t = window.localStorage.getItem(TOKEN_KEY);
-      setStoredToken(t);
-      setTokenInput(t ?? "");
+      const raw = window.localStorage.getItem(CATALOG_OVERRIDES_KEY);
+      if (raw) setOverrides(JSON.parse(raw) as CatalogOverride[]);
     } catch {
-      // localStorage may be blocked; ignore
+      /* ignore */
     }
   }, []);
 
-  const startedAt = React.useRef<number>(Date.now());
-  const healthQ = useQuery<HealthResponse & { _latencyMs: number }>({
-    queryKey: ["api-health"],
+  const persist =
+    (key: string, setter: (v: string) => void) =>
+    (v: string): void => {
+      setter(v);
+      writeLS(key, v);
+    };
+
+  const persistOverrides = (next: CatalogOverride[]): void => {
+    setOverrides(next);
+    try {
+      window.localStorage.setItem(CATALOG_OVERRIDES_KEY, JSON.stringify(next));
+    } catch {
+      /* ignore */
+    }
+  };
+
+  /* ------ Health (status pill for API section) ------ */
+  const healthQ = useQuery<{ status?: string; _latencyMs: number }>({
+    queryKey: ["api-health-settings"],
     queryFn: async () => {
       const start = performance.now();
       const res = await fetch("/api/v1/health", { cache: "no-store" });
       const latency = Math.round(performance.now() - start);
       if (!res.ok) throw new Error(`${res.status}`);
-      const body = (await res.json()) as HealthResponse;
+      const body = (await res.json()) as { status?: string };
       return { ...body, _latencyMs: latency };
     },
     refetchInterval: 10_000,
     retry: 1,
   });
-  void startedAt;
+  const apiHealthy = healthQ.data?.status === "ok";
 
-  const saveToken = (): void => {
+  /* ============================================================
+     Section scroll + active-tab tracking
+     ============================================================ */
+
+  // IntersectionObserver lights up the active tab as sections scroll into view.
+  const containerRef = React.useRef<HTMLDivElement | null>(null);
+  React.useEffect(() => {
+    if (typeof IntersectionObserver === "undefined") return;
+    const root = containerRef.current;
+    if (!root) return;
+    const targets = SECTIONS.map((s) =>
+      document.getElementById(s.id),
+    ).filter((el): el is HTMLElement => el !== null);
+    const obs = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        if (visible) setActiveSection(visible.target.id as SectionId);
+      },
+      { root, threshold: [0.25, 0.55] },
+    );
+    targets.forEach((t) => obs.observe(t));
+    return () => obs.disconnect();
+  }, []);
+
+  const scrollTo = (id: SectionId): void => {
+    setActiveSection(id);
+    document.getElementById(id)?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  };
+
+  const tabs: TabSpec[] = SECTIONS.map((s) => ({
+    id: s.id,
+    label: s.label,
+    href: `#${s.id}`,
+    active: activeSection === s.id,
+    onSelect: () => scrollTo(s.id),
+  }));
+
+  /* ============================================================
+     tb3 actions: Reset + Export
+     ============================================================ */
+
+  const allKeys = [
+    TOKEN_KEY,
+    WS_NAME_KEY,
+    WS_THEME_KEY,
+    NVD_KEY,
+    NVD_SCHEDULE_KEY,
+    CATALOG_OVERRIDES_KEY,
+    THEME_VARIANT_KEY,
+  ];
+
+  const onReset = (): void => {
+    if (
+      typeof window !== "undefined" &&
+      !window.confirm("Reset all LabForge settings to defaults?")
+    ) {
+      return;
+    }
+    allKeys.forEach((k) => writeLS(k, ""));
+    setWsName(DEFAULT_WS_NAME);
+    setWsTheme(DEFAULT_THEME);
+    setToken("");
+    setNvdKey("");
+    setNvdSchedule(DEFAULT_NVD_SCHEDULE);
+    setOverrides([]);
+    setThemeVariant("dark-pro");
+    setTheme("dark");
+    toast.success("Settings reset to defaults");
+  };
+
+  const onExport = (): void => {
+    const snapshot: Record<string, string | null> = {};
+    if (typeof window !== "undefined") {
+      allKeys.forEach((k) => {
+        snapshot[k] = window.localStorage.getItem(k);
+      });
+    }
+    const blob = new Blob([JSON.stringify(snapshot, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "labforge-config.json";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast.success("Exported labforge-config.json");
+  };
+
+  const onCopyBase = async (): Promise<void> => {
     try {
-      const trimmed = tokenInput.trim();
-      if (trimmed) {
-        window.localStorage.setItem(TOKEN_KEY, trimmed);
-        setStoredToken(trimmed);
-        toast.success("Token saved", {
-          description: "Sent on writes to /api/v1/labs and /api/v1/topologies.",
-        });
-      } else {
-        window.localStorage.removeItem(TOKEN_KEY);
-        setStoredToken(null);
-        toast.success("Token cleared");
-      }
+      await navigator.clipboard.writeText(API_BASE);
+      toast.success(`Copied “${API_BASE}”`);
     } catch {
-      toast.error("Could not access localStorage");
+      toast.error("Copy failed");
     }
   };
 
-  const apiOnline = healthQ.data?.status === "ok";
-  const authRequired = healthQ.data?.auth_required ?? false;
-  const nvdSet = healthQ.data?.nvd_key_set ?? false;
+  const onCopyToken = async (): Promise<void> => {
+    if (!token) {
+      toast.info("No token to copy");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(token);
+      toast.success("Token copied to clipboard");
+    } catch {
+      toast.error("Copy failed");
+    }
+  };
+
+  const onAddOverride = (): void => {
+    const vendor = draftVendor.trim();
+    const url = draftUrl.trim();
+    if (!vendor || !url) {
+      toast.info("Vendor + URL required");
+      return;
+    }
+    if (overrides.some((o) => o.vendor === vendor)) {
+      toast.info(`Override for “${vendor}” already exists`);
+      return;
+    }
+    persistOverrides([...overrides, { vendor, url }]);
+    setDraftVendor("");
+    setDraftUrl("");
+  };
+
+  const onRemoveOverride = (vendor: string): void => {
+    persistOverrides(overrides.filter((o) => o.vendor !== vendor));
+  };
+
+  const onPickTheme = (slug: string, variant: string): void => {
+    setTheme(slug);
+    setThemeVariant(variant);
+    writeLS(THEME_VARIANT_KEY, variant);
+    writeLS(WS_THEME_KEY, slug);
+    setWsTheme(slug);
+  };
+
+  const actions = (
+    <>
+      <button type="button" className="btn" onClick={onReset}>
+        ↺ Reset to defaults
+      </button>
+      <button type="button" className="btn primary" onClick={onExport}>
+        ⤓ Export config (JSON)
+      </button>
+    </>
+  );
+
+  /* ============================================================
+     Render
+     ============================================================ */
 
   return (
-    <main className="mx-auto max-w-3xl space-y-4 p-6">
-      <header>
-        <h2 className="flex items-center gap-2 text-xl font-semibold">
-          <SettingsIcon className="h-5 w-5" /> Settings
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          Configure how the web app talks to the LabForge API and the agent.
-        </p>
-      </header>
+    <>
+      <PageToolbars tabs={tabs} actions={actions} />
 
-      {/* API connection */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">API connection</CardTitle>
-          <CardDescription>
-            Routed via the Next.js proxy at <code className="rounded bg-muted px-1">/api/v1</code>
-            {" "}→ <code className="rounded bg-muted px-1">LABFORGE_API_URL</code>.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex items-center gap-2">
-            {healthQ.isLoading ? (
-              <Badge variant="outline">Checking…</Badge>
-            ) : apiOnline ? (
-              <Badge className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
-                <CheckCircle2 className="mr-1 h-3 w-3" /> Online
-              </Badge>
-            ) : (
-              <Badge variant="destructive">
-                <XCircle className="mr-1 h-3 w-3" /> Offline
-              </Badge>
-            )}
-            {healthQ.data && (
-              <span className="text-xs text-muted-foreground">
-                v{healthQ.data.version ?? "?"} · {healthQ.data._latencyMs}ms
-              </span>
-            )}
-          </div>
-          {!apiOnline && !healthQ.isLoading && (
-            <p className="text-xs text-muted-foreground">
-              Start the API with{" "}
-              <code className="rounded bg-muted px-1">
-                uvicorn labforge_core.api.main:app --app-dir apps/api --host 127.0.0.1 --port 8000
-              </code>
-              .
-            </p>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Theme */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Appearance</CardTitle>
-          <CardDescription>Theme used by the canvas and dashboard.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex gap-2">
-            {(["light", "dark", "system"] as const).map((t) => {
-              const active = mounted && theme === t;
-              const Icon = t === "light" ? Sun : t === "dark" ? Moon : Zap;
-              return (
-                <Button
-                  key={t}
-                  variant={active ? "default" : "outline"}
-                  size="sm"
-                  className="capitalize"
-                  onClick={() => setTheme(t)}
-                  suppressHydrationWarning
-                >
-                  <Icon className="h-3.5 w-3.5" />
-                  {t}
-                </Button>
-              );
-            })}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Bearer token */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <KeyRound className="h-4 w-4" /> Agent bearer token
-          </CardTitle>
-          <CardDescription>
-            Sent as <code className="rounded bg-muted px-1">Authorization: Bearer …</code> on lab
-            writes. Required only if the API was started with{" "}
-            <code className="rounded bg-muted px-1">LABFORGE_AGENT_TOKEN</code> set.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">API requires token:</span>
-            {healthQ.isLoading ? (
-              <Badge variant="outline">…</Badge>
-            ) : authRequired ? (
-              <Badge className="bg-amber-500/15 text-amber-700 dark:text-amber-300">Yes</Badge>
-            ) : (
-              <Badge variant="secondary">No (open)</Badge>
-            )}
-            <Separator orientation="vertical" className="mx-1 h-4" />
-            <span className="text-xs text-muted-foreground">Stored locally:</span>
-            <Badge variant={storedToken ? "default" : "outline"}>
-              {storedToken ? "Yes" : "No"}
-            </Badge>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="token-input" className="text-xs">
-              Token (stored in <code className="rounded bg-muted px-1">localStorage</code> on this
-              browser only)
-            </Label>
-            <div className="flex gap-2">
-              <Input
-                id="token-input"
-                type="password"
-                placeholder="paste token…"
-                value={tokenInput}
-                onChange={(e) => setTokenInput(e.target.value)}
-                autoComplete="off"
-              />
-              <Button onClick={saveToken} size="sm">
-                Save
-              </Button>
+      <div
+        ref={containerRef}
+        className="frame-pad scroll"
+        style={{ flex: 1, minHeight: 0, overflowY: "auto" }}
+      >
+        {/* ============================================================
+            1. General
+            ============================================================ */}
+        <section id="general" style={{ scrollMarginTop: 12 }}>
+          <div className="card" style={{ marginBottom: 14 }}>
+            <div className="card-h">
+              <span className="title">General</span>
+              <div className="actions">
+                <span className="muted">localStorage</span>
+              </div>
+            </div>
+            <div className="card-b">
+              <div className="g-2">
+                <div className="field">
+                  <div className="l">Workspace name</div>
+                  <input
+                    value={wsName}
+                    onChange={(e) =>
+                      persist(WS_NAME_KEY, setWsName)(e.target.value)
+                    }
+                  />
+                </div>
+                <div className="field">
+                  <div className="l">Default theme</div>
+                  <select
+                    value={wsTheme}
+                    onChange={(e) => {
+                      persist(WS_THEME_KEY, setWsTheme)(e.target.value);
+                      setTheme(e.target.value);
+                    }}
+                  >
+                    <option value="dark">Dark</option>
+                    <option value="light">Light</option>
+                    <option value="system">System</option>
+                  </select>
+                </div>
+              </div>
             </div>
           </div>
-          <div className="space-y-1.5">
-            <p className="text-xs text-muted-foreground">Agent CLI quick-start:</p>
-            <Snippet
-              text={`labforge init --provider virtualbox --api-base http://127.0.0.1:8000 --token <paste-same-token>`}
-            />
-          </div>
-        </CardContent>
-      </Card>
+        </section>
 
-      {/* Local state */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Local state</CardTitle>
-          <CardDescription>
-            The canvas auto-saves to your browser. Clearing it does not delete anything
-            on the API.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              try {
-                window.localStorage.removeItem("labforge.canvas.v1");
-                toast.success("Canvas cleared — reload /build to start fresh.");
-              } catch {
-                toast.error("Could not clear localStorage");
-              }
-            }}
-          >
-            Clear cached canvas
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              try {
-                window.localStorage.removeItem("labforge.onboarding.v1");
-                toast.success("Onboarding tour will replay on next /build visit.");
-              } catch {
-                toast.error("Could not clear localStorage");
-              }
-            }}
-          >
-            Replay onboarding tour
-          </Button>
-        </CardContent>
-      </Card>
-
-      {/* NVD */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">NVD CVE lookups</CardTitle>
-          <CardDescription>
-            Optional NIST API key for faster, higher-rate CVE searches.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">API key on backend:</span>
-            <Badge variant={nvdSet ? "default" : "outline"}>
-              {healthQ.isLoading ? "…" : nvdSet ? "Set" : "Unset (rate-limited)"}
-            </Badge>
+        {/* ============================================================
+            2. API & CLI
+            ============================================================ */}
+        <section id="api" style={{ scrollMarginTop: 12 }}>
+          <div className="card" style={{ marginBottom: 14 }}>
+            <div className="card-h">
+              <span className="title">API &amp; CLI</span>
+              <div className="actions">
+                {apiHealthy ? (
+                  <span className="pill act">
+                    ● healthy {healthQ.data?._latencyMs ?? 0}ms
+                  </span>
+                ) : (
+                  <span className="pill danger">● offline</span>
+                )}
+              </div>
+            </div>
+            <div className="card-b">
+              <div className="field">
+                <div className="l">API base URL</div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input
+                    className="mono"
+                    value={API_BASE}
+                    readOnly
+                    style={{ flex: 1, color: "var(--d10-fg-faint)" }}
+                  />
+                  <button type="button" className="btn" onClick={onCopyBase}>
+                    ⎘ Copy
+                  </button>
+                </div>
+              </div>
+              <div className="field">
+                <div className="l">CLI agent token</div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input
+                    type={showToken ? "text" : "password"}
+                    value={token}
+                    onChange={(e) =>
+                      persist(TOKEN_KEY, setToken)(e.target.value)
+                    }
+                    placeholder="paste bearer token…"
+                    autoComplete="off"
+                    style={{ flex: 1 }}
+                  />
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => setShowToken((v) => !v)}
+                  >
+                    {showToken ? "Hide" : "Show"}
+                  </button>
+                  <button type="button" className="btn" onClick={onCopyToken}>
+                    ⎘ Copy
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
-          <p className="text-xs text-muted-foreground">
-            Set it on the API host, then restart uvicorn:
-          </p>
-          <Snippet
-            text={`# Windows PowerShell\n$env:LABFORGE_NVD_API_KEY = "<your-key>"\n# macOS / Linux\nexport LABFORGE_NVD_API_KEY=<your-key>`}
-          />
-        </CardContent>
-      </Card>
-    </main>
+        </section>
+
+        {/* ============================================================
+            3. NVD feed
+            (Vagrant Provider moved to /build/generate — it directly
+            drives Vagrantfile generation, so it belongs in that flow.)
+            ============================================================ */}
+        {/* TODO: needs backend support */}
+        <section id="nvd" style={{ scrollMarginTop: 12 }}>
+          <div className="card" style={{ marginBottom: 14 }}>
+            <div className="card-h">
+              <span className="title">NVD feed</span>
+              <div className="actions">
+                <span className="muted">local-only · TODO backend</span>
+              </div>
+            </div>
+            <div className="card-b">
+              <div className="g-2">
+                <div className="field">
+                  <div className="l">NVD API key</div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <input
+                      className="mono"
+                      type={showNvdKey ? "text" : "password"}
+                      value={nvdKey}
+                      onChange={(e) =>
+                        persist(NVD_KEY, setNvdKey)(e.target.value)
+                      }
+                      placeholder="leave empty for unauthenticated"
+                      autoComplete="off"
+                      style={{ flex: 1 }}
+                    />
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => setShowNvdKey((v) => !v)}
+                    >
+                      {showNvdKey ? "Hide" : "Show"}
+                    </button>
+                  </div>
+                </div>
+                <div className="field">
+                  <div className="l">Sync schedule</div>
+                  <select
+                    value={nvdSchedule}
+                    onChange={(e) =>
+                      persist(NVD_SCHEDULE_KEY, setNvdSchedule)(e.target.value)
+                    }
+                  >
+                    <option value="manual">Manual</option>
+                    <option value="daily">Daily</option>
+                    <option value="hourly">Hourly</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* ============================================================
+            5. Catalog overrides
+            ============================================================ */}
+        {/* TODO: needs backend support */}
+        <section id="catalog" style={{ scrollMarginTop: 12 }}>
+          <div className="card" style={{ marginBottom: 14 }}>
+            <div className="card-h">
+              <span className="title">Catalog overrides</span>
+              <div className="actions">
+                <span className="muted">
+                  {overrides.length} override{overrides.length === 1 ? "" : "s"} ·
+                  TODO backend
+                </span>
+              </div>
+            </div>
+            <div className="card-b">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Vendor</th>
+                    <th>Custom installer URL</th>
+                    <th style={{ width: 80 }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {overrides.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={3}
+                        className="muted"
+                        style={{ textAlign: "center", padding: "16px 12px" }}
+                      >
+                        No overrides defined.
+                      </td>
+                    </tr>
+                  ) : (
+                    overrides.map((o) => (
+                      <tr key={o.vendor}>
+                        <td>
+                          <strong>{o.vendor}</strong>
+                        </td>
+                        <td className="mono" style={{ fontSize: 11 }}>
+                          {o.url}
+                        </td>
+                        <td>
+                          <button
+                            type="button"
+                            className="btn danger"
+                            onClick={() => onRemoveOverride(o.vendor)}
+                          >
+                            Remove
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                  <tr>
+                    <td>
+                      <input
+                        value={draftVendor}
+                        onChange={(e) => setDraftVendor(e.target.value)}
+                        placeholder="vendor slug"
+                      />
+                    </td>
+                    <td>
+                      <input
+                        className="mono"
+                        value={draftUrl}
+                        onChange={(e) => setDraftUrl(e.target.value)}
+                        placeholder="https://…"
+                      />
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="btn primary"
+                        onClick={onAddOverride}
+                      >
+                        + Add
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        {/* ============================================================
+            6. Theme
+            ============================================================ */}
+        <section id="theme" style={{ scrollMarginTop: 12 }}>
+          <div className="card" style={{ marginBottom: 14 }}>
+            <div className="card-h">
+              <span className="title">Theme</span>
+              <div className="actions">
+                <span className="muted">
+                  {mounted ? `${theme ?? "system"} · ${themeVariant}` : "…"}
+                </span>
+              </div>
+            </div>
+            <div className="card-b">
+              <div className="g-2" style={{ rowGap: 12 }}>
+                {THEME_SWATCHES.map((s) => {
+                  const selected =
+                    mounted && theme === s.slug && themeVariant === s.variant;
+                  return (
+                    <button
+                      key={s.variant}
+                      type="button"
+                      onClick={() => onPickTheme(s.slug, s.variant)}
+                      style={{
+                        background: "var(--d10-bg-elev-2)",
+                        border: selected
+                          ? "2px solid var(--d10-accent)"
+                          : "1px solid var(--d10-border)",
+                        borderRadius: 6,
+                        padding: 14,
+                        textAlign: "left",
+                        cursor: "pointer",
+                        color: "var(--d10-fg)",
+                        boxShadow: selected
+                          ? "0 0 0 2px rgba(255,138,61,0.18)"
+                          : undefined,
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: "100%",
+                          height: 56,
+                          background: s.gradient,
+                          borderRadius: 4,
+                          marginBottom: 8,
+                        }}
+                      />
+                      <div
+                        style={{
+                          fontWeight: 600,
+                          color: "var(--d10-fg-strong)",
+                          fontSize: 12,
+                        }}
+                      >
+                        {s.name}
+                      </div>
+                      <div className="muted" style={{ fontSize: 10 }}>
+                        {s.sub}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* ============================================================
+            7. Keybinds
+            ============================================================ */}
+        <section id="keybinds" style={{ scrollMarginTop: 12 }}>
+          <div className="card" style={{ marginBottom: 14 }}>
+            <div className="card-h">
+              <span className="title">Keybinds</span>
+              <div className="actions">
+                <span className="muted">read-only</span>
+              </div>
+            </div>
+            <div className="card-b">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Action</th>
+                    <th>Combo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {KEYBINDS.map((k) => (
+                    <tr key={k.action}>
+                      <td>{k.action}</td>
+                      <td>
+                        <span className="kbd">{k.combo}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </div>
+    </>
   );
 }

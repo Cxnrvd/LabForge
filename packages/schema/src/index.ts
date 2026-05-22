@@ -169,9 +169,25 @@ const cidrRegex =
   /^(?:(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\/(3[0-2]|[12]?\d)$/;
 const hostnameRegex = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/;
 
+// Defence-in-depth alongside the shlex.quote/ps_q escaping in the generator:
+// reject the shell metacharacters that would otherwise let a password
+// break out of a bash double-quoted string, a PowerShell SecureString
+// argument, or a SQL string literal nested inside one of those.
+const passwordRegex = /^[^"'`$;\\\r\n]+$/;
+
+// topology.name lands in Vagrantfile string literals, generated
+// filenames, slugs, and lab labels. Restrict to printable ASCII minus
+// quoting and Ruby-interpolation metas so the value is safe across
+// every downstream consumer.
+const topologyNameRegex = /^[A-Za-z0-9 \-_.,!?():]+$/;
+
 export const Credentials = z.object({
   username: z.string().min(1).max(64),
-  password: z.string().min(1).max(128),
+  password: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(passwordRegex, "Password must not contain shell metacharacters: \" ' ` $ ; \\ or newlines"),
 });
 export type Credentials = z.infer<typeof Credentials>;
 
@@ -246,11 +262,20 @@ export type Zone = z.infer<typeof Zone>;
 
 export const LabConfig = z.object({
   id: z.string().min(1).default(() => crypto.randomUUID()),
-  name: z.string().min(1).max(128),
+  name: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(
+      topologyNameRegex,
+      "Name must be ASCII-safe (letters, digits, spaces, and -_.,!?():)",
+    ),
   description: z.string().max(2048).default(""),
   network_cidr: z.string().regex(cidrRegex, "Invalid CIDR notation"),
   provider: Provider.default("virtualbox"),
-  nodes: z.array(TopologyNode),
+  // Upper bound is a safety net for the generator (memory, build time);
+  // 500 nodes is well past anything a single host can actually `vagrant up`.
+  nodes: z.array(TopologyNode).min(1).max(500),
   edges: z.array(TopologyEdge).default([]),
   zones: z.array(Zone).default([]),
   version: z.literal("1.0").default("1.0"),

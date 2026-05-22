@@ -158,7 +158,12 @@ systemctl enable --now prometheus
         _APT_PREAMBLE + r"""
 apt-get install -y mysql-server
 systemctl enable --now mysql
-mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '{{ node.config.credentials.password }}';" 2>/dev/null || true
+# Password is shell-quoted via bash_q so the bash double-quoted string can
+# never be broken out of. SQL quotes remain inside the -e arg; the schema
+# regex separately rejects raw single quotes from the password field.
+LF_PW={{ node.config.credentials.password | bash_q }}
+mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '$LF_PW';" 2>/dev/null || true
+unset LF_PW
 """,
     ),
     "postgresql": _bash(
@@ -167,7 +172,11 @@ mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY
         _APT_PREAMBLE + r"""
 apt-get install -y postgresql
 systemctl enable --now postgresql
-sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD '{{ node.config.credentials.password }}';" 2>/dev/null || true
+# bash_q neutralises any shell metacharacter; SQL quotes stay so the
+# password lands inside a Postgres string literal as intended.
+LF_PW={{ node.config.credentials.password | bash_q }}
+sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD '$LF_PW';" 2>/dev/null || true
+unset LF_PW
 """,
     ),
     "mongodb": _bash(
@@ -248,18 +257,10 @@ if [ ! -d /opt/openplc ]; then
   git clone --depth 1 https://github.com/thiagoralves/OpenPLC_v3.git /opt/openplc
   cd /opt/openplc && yes | ./install.sh linux >/var/log/openplc-install.log 2>&1 || true
 fi
-cat > /etc/systemd/system/openplc.service <<'UNIT'
-[Unit]
-Description=OpenPLC v3 runtime
-After=network.target
-[Service]
-Type=simple
-WorkingDirectory=/opt/openplc/webserver
-ExecStart=/usr/bin/python3 /opt/openplc/webserver/webserver.py
-Restart=on-failure
-[Install]
-WantedBy=multi-user.target
-UNIT
+# OpenPLC's install.sh ships its own systemd unit at /lib/systemd/system/openplc.service
+# with the right WorkingDirectory / pip-installed Python env. Earlier versions of this
+# snippet hand-rolled a unit that pointed at the wrong CWD and restart-looped on
+# missing imports; trust upstream's unit and just ensure it's enabled.
 systemctl daemon-reload
 systemctl enable --now openplc || true
 """,
@@ -622,7 +623,8 @@ if (-not (Test-Path "C:\Program Files\SplunkUniversalForwarder")) {
 $msi = "$env:TEMP\wazuh-agent.msi"
 if (-not (Get-Service -Name WazuhSvc -ErrorAction SilentlyContinue)) {
     Invoke-WebRequest -Uri "https://packages.wazuh.com/4.x/windows/wazuh-agent-4.9.0-1.msi" -OutFile $msi
-    Start-Process msiexec.exe -Wait -ArgumentList "/i $msi /q WAZUH_MANAGER=`"{{ endpoints.wazuh_manager_ip | default('127.0.0.1') }}`""
+    $managerIp = {{ endpoints.wazuh_manager_ip | default('127.0.0.1') | ps_q }}
+    Start-Process msiexec.exe -Wait -ArgumentList "/i $msi /q WAZUH_MANAGER=`"$managerIp`""
     Start-Service WazuhSvc
 }
 """,
@@ -680,7 +682,7 @@ if (-not ($features | Where-Object Installed)) {
 }
 $existing = (Get-CimInstance Win32_ComputerSystem).Domain
 if ($existing -ne "labforge.local") {
-    $dsrm = ConvertTo-SecureString "{{ node.config.credentials.password }}" -AsPlainText -Force
+    $dsrm = ConvertTo-SecureString {{ node.config.credentials.password | ps_q }} -AsPlainText -Force
     Import-Module ADDSDeployment
     Install-ADDSForest `
         -DomainName "labforge.local" `

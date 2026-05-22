@@ -50,6 +50,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
+import { TopologyMetaPopover } from "@/components/canvas/TopologyMetaPopover";
 import { useGenerateZip, useValidateTopology } from "@/lib/api/hooks";
 import { isZone, useTopologyStore } from "@/lib/store/topology-store";
 import { downloadBlob, downloadJson } from "@/lib/utils/download";
@@ -250,15 +251,18 @@ export function Toolbar() {
   };
 
   return (
-    <div className="absolute left-1/2 top-4 z-10 -translate-x-1/2">
+    // z-40: above NodePalette (z-20), BuildPreflightBanner (z-30), and
+    // every other canvas overlay — the Toolbar must always be reachable.
+    <div className="absolute left-1/2 top-4 z-40 -translate-x-1/2">
       <div className="flex items-center gap-1 rounded-lg border bg-background/95 p-1.5 shadow-lg backdrop-blur">
-        {/* Segment 1 — lab name */}
+        {/* Segment 1 — lab name + meta (CIDR + provider) */}
         <Input
           value={meta.name}
           onChange={(e) => setMeta({ name: e.target.value })}
           className="h-8 w-44 border-transparent bg-transparent text-sm font-medium focus-visible:border-input"
           aria-label="Lab name"
         />
+        <TopologyMetaPopover />
         <Separator orientation="vertical" className="mx-1 h-6" />
 
         {/* Segment 2 — Add (nodes + zones) + Templates */}

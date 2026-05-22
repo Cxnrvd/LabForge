@@ -152,6 +152,10 @@ export const api = {
     request<BuildStatusPayload>(`/labs/${labId}/build/status`),
   buildStop: (labId: number) =>
     request<BuildStatusPayload>(`/labs/${labId}/build/stop`, { method: "POST" }),
+  buildPhases: (labId: number) =>
+    request<BuildPhasesPayload>(`/labs/${labId}/build/phases`),
+  getLabTopology: (labId: number) =>
+    request<LabConfig>(`/labs/${labId}/topology`),
   listStoredTopologies: () =>
     request<
       Array<{ slug: string; name: string; description?: string | null; updated_at: string }>
@@ -165,4 +169,19 @@ export interface BuildStatusPayload {
   exit_code: number | null;
   finished_at: string | null;
   pid: number | null;
+}
+
+export type BuildPhase =
+  | "defined"
+  | "downloading"
+  | "importing"
+  | "booting"
+  | "network"
+  | "provisioning"
+  | "ready"
+  | "failed";
+
+export interface BuildPhasesPayload {
+  per_vm: Record<string, BuildPhase>;
+  overall: "running" | "succeeded" | "failed" | "aborted" | "unknown";
 }

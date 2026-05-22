@@ -44,3 +44,16 @@ desktop.ini
 
 coverage/
 *.log
+
+# Design source files — these are reference mockups and proposals used during
+# UI iteration; the implemented UI is the source of truth.
+design.md
+designs/
+dashboard-proposals.html
+labforge-designs.html
+
+# Claude Code session data (per-machine).
+.claude/
+
+# Tool caches that occasionally end up tracked.
+*.tsbuildinfo

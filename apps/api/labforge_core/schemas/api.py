@@ -41,10 +41,32 @@ class BuildLogChunk(BaseModel):
 
 class BuildStatus(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    phase: str  # "running" | "succeeded" | "failed" | "unknown"
+    # Vocabulary returned by services.build_runner.read_build_status:
+    #   "running"   — .build.pid exists, no .build.exit yet
+    #   "succeeded" — .build.exit 0
+    #   "partial"   — .build.exit != 0 BUT at least one VM is still alive
+    #                 in the hypervisor (e.g. SSH timeout on the last VM
+    #                 while earlier VMs are reachable)
+    #   "failed"    — .build.exit != 0 and no VMs alive
+    #   "aborted"   — .build.aborted sentinel present (user-initiated stop)
+    #   "unknown"   — no sentinels at all
+    phase: str
     exit_code: Optional[int] = None
     finished_at: Optional[str] = None
     pid: Optional[int] = None
+
+
+class BuildPhases(BaseModel):
+    """Per-VM phase snapshot for the /monitor stepper.
+
+    Keys are hostnames as they appear in the topology. Values are one of
+    the strings from ``services.build_runner._PHASE_ORDER`` plus
+    ``failed`` when an error marker is observed.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    per_vm: dict[str, str] = Field(default_factory=dict)
+    overall: str  # "running" | "succeeded" | "failed" | "aborted" | "unknown"
 
 
 class TemplateSummary(BaseModel):

@@ -71,8 +71,9 @@ export function LabBudgetBar() {
       role="status"
       aria-live="polite"
       // Centred along the bottom so it doesn't collide with React Flow's
-      // MiniMap (bottom-left) or Controls (bottom-right).
-      className="pointer-events-none absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-3 rounded-md border bg-background/90 px-3 py-2 text-xs shadow-md backdrop-blur"
+      // MiniMap (bottom-left) or Controls (bottom-right). z-20 puts it on
+      // the same plane as the side panels and BELOW the Toolbar (z-40).
+      className="pointer-events-none absolute bottom-4 left-1/2 z-20 flex -translate-x-1/2 items-center gap-3 rounded-md border bg-background/90 px-3 py-2 text-xs shadow-md backdrop-blur"
     >
       <span className="font-medium">{stats.count} node{stats.count === 1 ? "" : "s"}</span>
       <span className="text-muted-foreground">·</span>

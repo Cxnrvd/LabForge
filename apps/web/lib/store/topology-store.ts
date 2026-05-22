@@ -145,6 +145,7 @@ const ZONE_PALETTE: Record<ZoneShape, string> = {
   rectangle: "#22d3ee",
   ellipse: "#a855f7",
   triangle: "#f59e0b",
+  cloud: "#38bdf8",
 };
 
 function defaultNodeFor(
@@ -226,7 +227,11 @@ function isZone(n: AnyFlowNode): n is FlowZone {
 
 function snapshot(state: TopologyState): HistoryEntry {
   return {
-    nodes: state.nodes.map((n) => ({ ...n, data: { ...n.data } })),
+    nodes: state.nodes.map((n): AnyFlowNode =>
+      isZone(n)
+        ? { ...n, data: { ...n.data } }
+        : { ...n, data: { ...n.data } },
+    ),
     edges: state.edges.map((e) => ({ ...e, data: e.data ? { ...e.data } : undefined })),
     meta: { ...state.meta },
   };
@@ -382,6 +387,7 @@ export const useTopologyStore = create<TopologyState>()(
       protocol,
       port,
       label: protocol.toUpperCase(),
+      attack_tags: [],
     };
     set((state) => ({
       ...pushHistory(state),

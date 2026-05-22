@@ -142,12 +142,31 @@ _CIDR_RE = re.compile(
 )
 _HOSTNAME_RE = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$")
 _TECHNIQUE_RE = re.compile(r"^T\d{4}(\.\d{3})?$")
+# Defence-in-depth alongside the bash_q / ps_q escaping in the generator:
+# reject the shell metacharacters that would otherwise let a password
+# break out of a bash double-quoted string, a PowerShell SecureString
+# argument, or a SQL string literal nested inside one of those.
+_PASSWORD_RE = re.compile(r"^[^\"'`$;\\\r\n]+$")
+# topology.name lands in Vagrantfile string literals, generated
+# filenames, slugs, and lab labels. Restrict to printable ASCII minus
+# quoting and Ruby-interpolation metas so the value is safe across
+# every downstream consumer.
+_TOPOLOGY_NAME_RE = re.compile(r"^[A-Za-z0-9 \-_.,!?():]+$")
 
 
 class Credentials(BaseModel):
     model_config = ConfigDict(extra="forbid")
     username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=1, max_length=128)
+
+    @field_validator("password")
+    @classmethod
+    def _validate_password(cls, v: str) -> str:
+        if not _PASSWORD_RE.match(v):
+            raise ValueError(
+                "Password must not contain shell metacharacters: \" ' ` $ ; \\ or newlines"
+            )
+        return v
 
 
 class Position(BaseModel):
@@ -275,7 +294,9 @@ class LabConfig(BaseModel):
     description: str = Field(default="", max_length=2048)
     network_cidr: str
     provider: Provider = Provider.VIRTUALBOX
-    nodes: list[TopologyNode]
+    # Upper bound is a safety net for the generator (memory, build time);
+    # 500 nodes is well past anything a single host can actually `vagrant up`.
+    nodes: list[TopologyNode] = Field(min_length=1, max_length=500)
     edges: list[TopologyEdge] = Field(default_factory=list)
     zones: list[Zone] = Field(default_factory=list)
     version: str = "1.0"
@@ -285,6 +306,15 @@ class LabConfig(BaseModel):
     def _validate_cidr(cls, v: str) -> str:
         if not _CIDR_RE.match(v):
             raise ValueError(f"Invalid CIDR: {v}")
+        return v
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, v: str) -> str:
+        if not _TOPOLOGY_NAME_RE.match(v):
+            raise ValueError(
+                "Name must be ASCII-safe (letters, digits, spaces, and -_.,!?():)"
+            )
         return v
 
 

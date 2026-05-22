@@ -228,7 +228,7 @@ export function WorkstationIllustration({
     linux: ["#0ea5e9", "#1e3a8a"],
     default: ["#0ea5e9", "#1e3a8a"],
   };
-  const [c0, c1] = screenGradient[variant] ?? screenGradient.default;
+  const [c0, c1] = screenGradient[variant] ?? screenGradient.default!;
 
   return (
     <svg viewBox="0 0 120 120" className={className} xmlns="http://www.w3.org/2000/svg" aria-hidden>
@@ -602,7 +602,7 @@ export function DatabaseIllustration({
     mssql: ["#A91D22", "#5a0c10"],
     default: ["#34d399", "#047857"],
   };
-  const [stop0, stop1] = diskGradient[variant] ?? diskGradient.default;
+  const [stop0, stop1] = diskGradient[variant] ?? diskGradient.default!;
   const emblem: Record<string, string> = {
     mysql: "SQL",
     postgresql: "PG",

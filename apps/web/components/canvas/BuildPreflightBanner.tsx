@@ -51,7 +51,9 @@ export function BuildPreflightBanner(): React.ReactElement | null {
   return (
     <div
       className={cn(
-        "pointer-events-auto absolute left-1/2 top-[60px] z-20 -translate-x-1/2",
+        // z-30: above NodePalette/AttackPathOverlay (z-20), below the
+        // Toolbar (z-40). Banner must be visible whenever vagrant is missing.
+        "pointer-events-auto absolute left-1/2 top-[60px] z-30 -translate-x-1/2",
         "flex max-w-[680px] items-center gap-2 rounded-md border px-3 py-1.5 text-xs shadow-sm",
         tone === "destructive"
           ? "border-red-500/50 bg-red-500/10 text-red-800 dark:text-red-200"

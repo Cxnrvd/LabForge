@@ -9,7 +9,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useCveSearch } from "@/lib/api/hooks";
-import type { CVEEntry, Severity } from "@labforge/schema";
+import type { CVEEntry } from "@labforge/schema";
+
+type Severity = CVEEntry["severity"];
 
 interface CVESearchPanelProps {
   attached: string[];

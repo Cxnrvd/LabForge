@@ -46,8 +46,6 @@ const ACCENTS: Record<NodeType, string> = {
   internet: "#7AAFC9",
 };
 
-const ILLUSTRATION_SIZE = 112; // px
-
 export function BaseNode({ id, data, selected, type }: BaseNodeProps) {
   const setSelectedNode = useTopologyStore((s) => s.setSelectedNode);
   const issues = useTopologyStore(
@@ -89,24 +87,24 @@ export function BaseNode({ id, data, selected, type }: BaseNodeProps) {
         if (e.key === "Enter" || e.key === " ") setSelectedNode(id);
       }}
     >
-      {/* Connection handles — anchored at left & right of the illustration mid-line. */}
-      {/*
-        Container width is 148px (flex column wraps a 112px illustration);
-        the illustration is centered, so its edges sit at x=18 and x=130.
-        Position handles at those x's so edges connect to the visible
-        chassis, not the empty space around it.
-      */}
+      {/* Connection handles — anchored at the left / right perimeter of
+          the node's illustration so React Flow's getBezierPath /
+          getStraightPath draws clean edges that meet the chassis instead
+          of overshooting through the icon. Handles are invisible by
+          default; on hover/focus of the parent ``.group`` they fade in
+          as small accent-orange dots so the user has a clear "grab here
+          to draw a connection" affordance. */}
       <Handle
         type="target"
         position={Position.Left}
-        style={{ top: ILLUSTRATION_SIZE / 2, left: 18 }}
-        className="!h-3 !w-3 !border-2 !border-background !bg-foreground/70 opacity-0 transition-opacity group-hover:opacity-100"
+        className="!h-3 !w-3 !rounded-full !border-2 !border-transparent !bg-transparent transition-colors duration-150 group-hover:!border-[#ff8a3d] group-hover:!bg-[#ff8a3d] group-focus-within:!border-[#ff8a3d] group-focus-within:!bg-[#ff8a3d]"
+        style={{ top: "50%", transform: "translate(-50%, -50%)" }}
       />
       <Handle
         type="source"
         position={Position.Right}
-        style={{ top: ILLUSTRATION_SIZE / 2, right: 18 }}
-        className="!h-3 !w-3 !border-2 !border-background !bg-foreground/70 opacity-0 transition-opacity group-hover:opacity-100"
+        className="!h-3 !w-3 !rounded-full !border-2 !border-transparent !bg-transparent transition-colors duration-150 group-hover:!border-[#ff8a3d] group-hover:!bg-[#ff8a3d] group-focus-within:!border-[#ff8a3d] group-focus-within:!bg-[#ff8a3d]"
+        style={{ top: "50%", transform: "translate(50%, -50%)" }}
       />
 
       {/* Illustration with optional selection / error glow */}

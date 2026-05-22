@@ -61,7 +61,7 @@ export function NodeCvePopover({ nodeId, role, children }: NodeCvePopoverProps) 
         <div className="flex items-center gap-2 border-b px-3 py-2">
           <ShieldAlert className="h-4 w-4 text-muted-foreground" />
           <p className="text-sm font-semibold">
-            {vendor?.name ?? parsed.id}
+            {vendor?.label ?? parsed.id}
             {parsed.version && (
               <span className="ml-1 font-mono text-xs text-muted-foreground">
                 @{parsed.version}

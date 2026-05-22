@@ -1,0 +1,1236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>LabForge — Soft Light & Ops Console variants</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet" />
+<style>
+  /* ---------- shell ---------- */
+  :root {
+    --shell-bg: #07090f;
+    --shell-text: #e6edf6;
+    --shell-muted: #8a95b2;
+    --shell-line: #232c4a;
+    --shell-panel: #11172a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    background:
+      radial-gradient(1200px 800px at 80% -10%, rgba(110,231,255,.05), transparent 60%),
+      radial-gradient(900px 700px at -10% 110%, rgba(196,181,253,.04), transparent 60%),
+      var(--shell-bg);
+    color: var(--shell-text);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page { max-width: 1480px; margin: 0 auto; padding: 36px 28px 80px; }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+
+  /* hero */
+  .hero {
+    padding: 40px 36px;
+    border: 1px solid var(--shell-line);
+    border-radius: 18px;
+    background:
+      radial-gradient(600px 300px at 90% 0%, rgba(110,231,255,.10), transparent 60%),
+      radial-gradient(500px 400px at 0% 100%, rgba(196,181,253,.08), transparent 60%),
+      linear-gradient(180deg, #11172a, #0b0f1a);
+    margin-bottom: 40px;
+  }
+  .hero .eyebrow { color: #6ee7ff; font-family: 'JetBrains Mono', monospace; font-size: 12px; letter-spacing: .12em; text-transform: uppercase; }
+  .hero h1 { margin: 8px 0 12px; font-size: 30px; font-weight: 800; letter-spacing: -.02em; }
+  .hero h1 .accent { color: #6ee7ff; }
+  .hero p { color: var(--shell-muted); margin: 0; max-width: 780px; line-height: 1.7; }
+
+  /* family heading */
+  .family {
+    margin: 28px 0 12px;
+    padding: 14px 22px;
+    border-radius: 12px;
+    background: linear-gradient(90deg, rgba(110,231,255,.08), transparent);
+    border-left: 3px solid #6ee7ff;
+    display: flex; align-items: baseline; gap: 16px;
+  }
+  .family h2 { margin: 0; font-size: 22px; letter-spacing: -.01em; font-weight: 700; }
+  .family .tag { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #6ee7ff; letter-spacing: .12em; text-transform: uppercase; }
+  .family p { margin: 0 0 0 auto; color: var(--shell-muted); font-size: 13px; max-width: 460px; text-align: right; }
+
+  /* option header */
+  .opt-head { display: flex; align-items: baseline; gap: 14px; margin: 24px 0 12px; }
+  .opt-tag {
+    font-family: 'JetBrains Mono', monospace; font-size: 12px;
+    background: rgba(110,231,255,.08); color: #6ee7ff;
+    border: 1px solid rgba(110,231,255,.25);
+    padding: 4px 10px; border-radius: 4px; letter-spacing: .08em;
+  }
+  .opt-head h3 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -.015em; }
+  .opt-head .tag { color: var(--shell-muted); font-size: 13px; margin-left: auto; }
+  .opt-sub { color: var(--shell-muted); font-size: 13.5px; margin: 0 0 10px; max-width: 780px; line-height: 1.6; }
+  .opt-vibes { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+  .vibe {
+    background: rgba(255,255,255,.04); border: 1px solid var(--shell-line);
+    padding: 3px 9px; border-radius: 999px;
+    font-size: 11px; color: var(--shell-muted);
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .frame {
+    border-radius: 16px;
+    overflow: hidden;
+    border: 1px solid var(--shell-line);
+    background: var(--shell-panel);
+    box-shadow: 0 30px 80px rgba(0,0,0,.55);
+  }
+  .frame-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px;
+    background: rgba(255,255,255,.02);
+    border-bottom: 1px solid var(--shell-line);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; color: var(--shell-muted);
+  }
+  .frame-bar .dots { display: flex; gap: 6px; margin-right: 8px; }
+  .frame-bar .dots i { width: 10px; height: 10px; border-radius: 50%; background: #2a3252; }
+  .frame-bar .dots i:nth-child(1) { background: #ef4444; }
+  .frame-bar .dots i:nth-child(2) { background: #f59e0b; }
+  .frame-bar .dots i:nth-child(3) { background: #22c55e; }
+  .frame-bar .url { flex: 1; text-align: center; opacity: .75; }
+
+  .verdict {
+    margin-top: 12px;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+  }
+  .verdict > div {
+    border: 1px solid var(--shell-line);
+    border-left: 3px solid #6ee7ff;
+    background: linear-gradient(180deg, rgba(110,231,255,.04), transparent);
+    padding: 10px 14px; border-radius: 6px;
+    font-size: 13px; color: var(--shell-muted);
+  }
+  .verdict > div b { color: var(--shell-text); }
+  .verdict > div.no { border-left-color: #f87171; background: linear-gradient(180deg, rgba(248,113,113,.04), transparent); }
+
+  /* ===========================================================
+     C1 — EDITORIAL CREAM (Notion / Apple Notes warm)
+     =========================================================== */
+  .c1 { font-family: 'Inter', sans-serif; color: #1c1917; }
+  .c1 .app { display: grid; grid-template-columns: 230px 1fr; min-height: 620px; background: #f7f4ed; }
+  .c1 .side { background: #efeadd; border-right: 1px solid #e0d9c5; padding: 22px 14px; }
+  .c1 .brand { display: flex; gap: 10px; align-items: center; padding: 4px 6px 18px; margin-bottom: 14px; }
+  .c1 .brand-mark { width: 30px; height: 30px; border-radius: 50%; background: #1c1917; color: #f7f4ed; display: grid; place-items: center; font-family: 'Fraunces', serif; font-weight: 700; font-size: 16px; }
+  .c1 .brand-name { font-family: 'Fraunces', serif; font-weight: 600; font-size: 17px; letter-spacing: -.005em; }
+  .c1 .brand-name .sub { display: block; font-family: 'Inter', sans-serif; font-size: 10px; color: #78716c; font-weight: 400; letter-spacing: .12em; text-transform: uppercase; margin-top: 2px; }
+  .c1 .nav { display: flex; flex-direction: column; gap: 0; }
+  .c1 .nav .sec { font-size: 10px; color: #a8a29e; letter-spacing: .14em; text-transform: uppercase; padding: 14px 8px 6px; font-weight: 600; }
+  .c1 .nav a { display: grid; grid-template-columns: 16px 1fr auto; gap: 10px; align-items: center; text-decoration: none; color: #57534e; padding: 7px 8px; border-radius: 6px; font-size: 13px; }
+  .c1 .nav a.active { background: #1c1917; color: #f7f4ed; }
+  .c1 .nav a .ico { width: 16px; height: 16px; }
+  .c1 .nav a .ct { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #a8a29e; }
+  .c1 .nav a.active .ct { color: #d6d3d1; }
+  .c1 .top { display: grid; grid-template-columns: 1fr auto auto; gap: 14px; align-items: center; padding: 18px 32px; border-bottom: 1px solid #e7e2d5; }
+  .c1 .search { background: #fefcf7; border: 1px solid #e0d9c5; border-radius: 8px; padding: 9px 12px; font-size: 13px; color: #78716c; display: flex; align-items: center; gap: 8px; max-width: 360px; }
+  .c1 .kbd { font-family: 'JetBrains Mono', monospace; font-size: 10px; padding: 2px 5px; border-radius: 4px; background: #efeadd; color: #78716c; border: 1px solid #e0d9c5; }
+  .c1 .pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 500; background: #efeadd; color: #57534e; border: 1px solid #e0d9c5; }
+  .c1 .pill .ic { width: 6px; height: 6px; border-radius: 50%; background: #16a34a; }
+  .c1 .avatar { width: 32px; height: 32px; border-radius: 50%; background: #4338ca; color: #f7f4ed; display: grid; place-items: center; font-weight: 600; font-size: 12px; }
+  .c1 .content { padding: 36px 44px; max-width: 1100px; }
+  .c1 .greeting { font-family: 'Fraunces', serif; font-weight: 500; font-size: 32px; letter-spacing: -.02em; margin: 0 0 6px; line-height: 1.15; }
+  .c1 .greeting em { font-style: italic; color: #4338ca; }
+  .c1 .greeting-sub { color: #78716c; margin: 0 0 32px; font-size: 15px; }
+  .c1 .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; margin-bottom: 40px; padding: 4px 0; }
+  .c1 .stat { padding: 6px 28px 6px 0; border-right: 1px solid #e7e2d5; }
+  .c1 .stat:last-child { border-right: 0; padding-right: 0; }
+  .c1 .stat .label { font-size: 11px; color: #78716c; text-transform: uppercase; letter-spacing: .12em; font-weight: 600; }
+  .c1 .stat .value { font-family: 'Fraunces', serif; font-weight: 600; font-size: 36px; margin: 8px 0 4px; letter-spacing: -.02em; line-height: 1; }
+  .c1 .stat .meta { font-size: 12px; color: #a8a29e; }
+  .c1 .stat.accent .value { color: #4338ca; }
+  .c1 .stat.ok .value { color: #15803d; }
+  .c1 .sec-head { display: flex; align-items: baseline; justify-content: space-between; margin: 0 0 16px; }
+  .c1 .sec-head h2 { margin: 0; font-family: 'Fraunces', serif; font-size: 22px; font-weight: 500; letter-spacing: -.01em; }
+  .c1 .sec-head a { font-size: 13px; color: #4338ca; text-decoration: none; font-weight: 500; }
+  .c1 .lab-row { display: grid; grid-template-columns: 40px 1fr auto auto auto; gap: 16px; align-items: center; padding: 16px 0; border-bottom: 1px solid #e7e2d5; }
+  .c1 .lab-row .ico { width: 40px; height: 40px; border-radius: 8px; background: #efeadd; display: grid; place-items: center; }
+  .c1 .lab-row .name { font-weight: 600; font-size: 14px; }
+  .c1 .lab-row .sub { font-size: 12px; color: #78716c; margin-top: 2px; }
+  .c1 .lab-row .vm { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #78716c; }
+  .c1 .lab-row .ts { font-size: 11px; color: #a8a29e; font-family: 'JetBrains Mono', monospace; }
+  .c1 .neo-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 500; }
+  .c1 .neo-pill.run { background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; }
+  .c1 .neo-pill.stop { background: #efeadd; color: #78716c; border: 1px solid #e0d9c5; }
+  .c1 .neo-pill.fail { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+  .c1 .neo-pill.draft { background: #eef2ff; color: #4338ca; border: 1px solid #c7d2fe; }
+  .c1 .btn { background: #fefcf7; border: 1px solid #d6cfb8; color: #1c1917; padding: 9px 16px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; }
+  .c1 .btn-primary { background: #1c1917; color: #f7f4ed; border-color: #1c1917; }
+
+  /* ===========================================================
+     C2 — CRISP WHITE (Stripe / Vercel SaaS)
+     =========================================================== */
+  .c2 { font-family: 'Inter', sans-serif; color: #0a2540; }
+  .c2 .app { display: grid; grid-template-columns: 220px 1fr; min-height: 620px; background: #ffffff; }
+  .c2 .side { background: #ffffff; border-right: 1px solid #e6ebf1; padding: 18px 12px; }
+  .c2 .brand { display: flex; gap: 10px; align-items: center; padding: 4px 6px 18px; margin-bottom: 12px; border-bottom: 1px solid #f0f4f8; }
+  .c2 .brand-mark { width: 30px; height: 30px; border-radius: 8px; background: linear-gradient(135deg, #635bff, #00d4ff); display: grid; place-items: center; }
+  .c2 .brand-mark svg { width: 18px; height: 18px; color: white; }
+  .c2 .brand-name { font-weight: 700; font-size: 15px; letter-spacing: -.01em; }
+  .c2 .brand-name .sub { display: block; font-size: 10px; color: #8898aa; font-weight: 400; letter-spacing: .1em; text-transform: uppercase; }
+  .c2 .nav { display: flex; flex-direction: column; gap: 1px; }
+  .c2 .nav .sec { font-size: 10px; color: #8898aa; letter-spacing: .12em; text-transform: uppercase; padding: 14px 8px 6px; font-weight: 700; }
+  .c2 .nav a { display: grid; grid-template-columns: 16px 1fr auto; gap: 10px; align-items: center; text-decoration: none; color: #425466; padding: 7px 8px; border-radius: 6px; font-size: 13px; font-weight: 500; }
+  .c2 .nav a:hover { background: #f7fafc; }
+  .c2 .nav a.active { background: #f0f4f8; color: #0a2540; }
+  .c2 .nav a .ico { width: 16px; height: 16px; color: #8898aa; }
+  .c2 .nav a.active .ico { color: #635bff; }
+  .c2 .nav a .ct { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #8898aa; }
+  .c2 .top { display: grid; grid-template-columns: 1fr auto auto auto; gap: 14px; align-items: center; padding: 14px 28px; border-bottom: 1px solid #e6ebf1; background: #ffffff; }
+  .c2 .search { background: #f7fafc; border: 1px solid #e6ebf1; border-radius: 8px; padding: 9px 12px; font-size: 13px; color: #8898aa; display: flex; align-items: center; gap: 8px; max-width: 380px; }
+  .c2 .kbd { font-family: 'JetBrains Mono', monospace; font-size: 10px; padding: 2px 5px; border-radius: 4px; background: white; color: #8898aa; border: 1px solid #e6ebf1; }
+  .c2 .pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 500; background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+  .c2 .pill .ic { width: 6px; height: 6px; border-radius: 50%; background: #16a34a; box-shadow: 0 0 6px rgba(22,163,74,.4); }
+  .c2 .btn { background: white; border: 1px solid #d8dee9; color: #0a2540; padding: 8px 14px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; box-shadow: 0 1px 1px rgba(10,37,64,.03); }
+  .c2 .btn-primary { background: linear-gradient(180deg, #635bff, #5a52e8); color: white; border-color: #5a52e8; box-shadow: 0 1px 3px rgba(99,91,255,.4); }
+  .c2 .avatar { width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, #635bff, #00d4ff); color: white; display: grid; place-items: center; font-weight: 600; font-size: 12px; }
+  .c2 .content { padding: 32px 36px; max-width: 1100px; }
+  .c2 .page-title { font-size: 24px; font-weight: 700; letter-spacing: -.02em; margin: 0 0 4px; }
+  .c2 .page-sub { color: #425466; margin: 0 0 28px; font-size: 14px; }
+  .c2 .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 32px; }
+  .c2 .stat { background: linear-gradient(180deg, #ffffff, #fafbfc); border: 1px solid #e6ebf1; border-radius: 10px; padding: 18px 20px; box-shadow: 0 1px 1px rgba(10,37,64,.03); position: relative; overflow: hidden; }
+  .c2 .stat::after { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, #635bff, #00d4ff); border-radius: 10px 10px 0 0; opacity: 0; }
+  .c2 .stat.accent::after { opacity: 1; }
+  .c2 .stat .label { font-size: 11px; color: #425466; text-transform: uppercase; letter-spacing: .08em; font-weight: 600; }
+  .c2 .stat .value { font-size: 32px; font-weight: 700; margin: 8px 0 6px; letter-spacing: -.02em; }
+  .c2 .stat .meta { font-size: 12px; color: #8898aa; }
+  .c2 .stat .meta b { color: #16a34a; }
+  .c2 .stat.accent .value { color: #635bff; }
+  .c2 .sec-head { display: flex; align-items: baseline; justify-content: space-between; margin: 0 0 16px; }
+  .c2 .sec-head h2 { margin: 0; font-size: 17px; font-weight: 700; }
+  .c2 .grid2 { display: grid; grid-template-columns: 1.6fr 1fr; gap: 24px; }
+  .c2 .card { background: white; border: 1px solid #e6ebf1; border-radius: 10px; padding: 18px 20px; box-shadow: 0 1px 1px rgba(10,37,64,.03); }
+  .c2 .lab-row { display: grid; grid-template-columns: 36px 1fr auto auto auto; gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid #f0f4f8; }
+  .c2 .lab-row:last-child { border-bottom: 0; }
+  .c2 .lab-row .ico { width: 36px; height: 36px; border-radius: 8px; background: linear-gradient(135deg, #f7fafc, #e6ebf1); display: grid; place-items: center; }
+  .c2 .lab-row .name { font-weight: 600; font-size: 14px; }
+  .c2 .lab-row .sub { font-size: 12px; color: #8898aa; }
+  .c2 .lab-row .vm { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #425466; background: #f7fafc; padding: 2px 8px; border-radius: 4px; }
+  .c2 .neo-pill { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 5px; font-size: 11px; font-weight: 500; }
+  .c2 .neo-pill.run { background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; }
+  .c2 .neo-pill.stop { background: #f7fafc; color: #425466; border: 1px solid #e6ebf1; }
+  .c2 .neo-pill.fail { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+  .c2 .feed { display: flex; flex-direction: column; gap: 4px; }
+  .c2 .feed-row { display: grid; grid-template-columns: 8px 1fr auto; gap: 10px; align-items: start; padding: 8px 0; border-bottom: 1px solid #f0f4f8; font-size: 12.5px; }
+  .c2 .feed-row:last-child { border-bottom: 0; }
+  .c2 .feed-row .d { width: 6px; height: 6px; border-radius: 50%; background: #635bff; margin-top: 7px; }
+  .c2 .feed-row .ts { color: #8898aa; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+
+  /* ===========================================================
+     C3 — MATERIAL PAPER (Google consumer)
+     =========================================================== */
+  .c3 { font-family: 'Roboto', 'Inter', sans-serif; color: #202124; }
+  .c3 .app { display: grid; grid-template-columns: 80px 1fr; min-height: 620px; background: #f5f6f8; }
+  .c3 .side { background: white; border-right: 1px solid #e8eaed; padding: 16px 8px; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .c3 .brand-mark { width: 44px; height: 44px; border-radius: 50%; background: linear-gradient(135deg, #1a73e8, #34a853); display: grid; place-items: center; margin-bottom: 14px; }
+  .c3 .brand-mark svg { width: 22px; height: 22px; color: white; }
+  .c3 .nav-icon {
+    width: 48px; height: 48px; border-radius: 12px; display: grid; place-items: center;
+    color: #5f6368; cursor: pointer; position: relative;
+  }
+  .c3 .nav-icon.active { background: #e8f0fe; color: #1a73e8; }
+  .c3 .nav-icon svg { width: 22px; height: 22px; }
+  .c3 .nav-icon .badge { position: absolute; top: 4px; right: 6px; background: #ea4335; color: white; font-size: 9px; padding: 1px 5px; border-radius: 8px; font-weight: 600; }
+  .c3 .top { display: grid; grid-template-columns: 1fr auto auto auto; gap: 16px; align-items: center; padding: 18px 28px; background: white; border-bottom: 1px solid #e8eaed; }
+  .c3 .top h1 { margin: 0; font-size: 22px; font-weight: 400; color: #202124; }
+  .c3 .top h1 span { color: #5f6368; font-size: 14px; }
+  .c3 .search { background: #f1f3f4; border: 0; border-radius: 24px; padding: 10px 18px; font-size: 14px; color: #5f6368; display: flex; align-items: center; gap: 10px; max-width: 480px; min-width: 320px; }
+  .c3 .icon-btn { width: 40px; height: 40px; border-radius: 50%; background: transparent; border: 0; display: grid; place-items: center; cursor: pointer; color: #5f6368; }
+  .c3 .icon-btn:hover { background: #f1f3f4; }
+  .c3 .icon-btn svg { width: 20px; height: 20px; }
+  .c3 .avatar { width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg, #1a73e8, #d93025); color: white; display: grid; place-items: center; font-weight: 500; font-size: 14px; }
+  .c3 .content { padding: 28px 32px; }
+  .c3 .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 28px; }
+  .c3 .stat { background: white; border-radius: 16px; padding: 22px 24px; box-shadow: 0 1px 2px rgba(60,64,67,.08), 0 1px 3px rgba(60,64,67,.04); position: relative; }
+  .c3 .stat .icon { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; margin-bottom: 10px; }
+  .c3 .stat.blue .icon { background: #e8f0fe; color: #1a73e8; }
+  .c3 .stat.green .icon { background: #e6f4ea; color: #1e8e3e; }
+  .c3 .stat.amber .icon { background: #fef7e0; color: #f9ab00; }
+  .c3 .stat.purple .icon { background: #f3e8ff; color: #9333ea; }
+  .c3 .stat .icon svg { width: 22px; height: 22px; }
+  .c3 .stat .label { font-size: 13px; color: #5f6368; font-weight: 500; }
+  .c3 .stat .value { font-size: 32px; font-weight: 500; margin: 4px 0 2px; letter-spacing: -.01em; color: #202124; }
+  .c3 .stat .meta { font-size: 12px; color: #5f6368; }
+  .c3 .stat .meta b { color: #1e8e3e; font-weight: 500; }
+  .c3 .grid2 { display: grid; grid-template-columns: 1.6fr 1fr; gap: 16px; }
+  .c3 .card { background: white; border-radius: 16px; padding: 22px 24px; box-shadow: 0 1px 2px rgba(60,64,67,.08), 0 1px 3px rgba(60,64,67,.04); }
+  .c3 .card h2 { margin: 0 0 16px; font-size: 16px; font-weight: 500; color: #202124; display: flex; justify-content: space-between; align-items: center; }
+  .c3 .card h2 .more { color: #1a73e8; font-size: 13px; cursor: pointer; }
+  .c3 .lab-row { display: grid; grid-template-columns: 44px 1fr auto auto; gap: 14px; align-items: center; padding: 12px 0; border-bottom: 1px solid #f1f3f4; }
+  .c3 .lab-row:last-child { border-bottom: 0; }
+  .c3 .lab-row .ico { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; }
+  .c3 .lab-row .ico.blue { background: #e8f0fe; color: #1a73e8; }
+  .c3 .lab-row .ico.green { background: #e6f4ea; color: #1e8e3e; }
+  .c3 .lab-row .ico.red { background: #fce8e6; color: #d93025; }
+  .c3 .lab-row .ico.amber { background: #fef7e0; color: #f9ab00; }
+  .c3 .lab-row .ico svg { width: 22px; height: 22px; }
+  .c3 .lab-row .name { font-weight: 500; font-size: 14px; }
+  .c3 .lab-row .sub { font-size: 12px; color: #5f6368; }
+  .c3 .lab-row .vm { font-size: 12px; color: #5f6368; font-family: 'JetBrains Mono', monospace; }
+  .c3 .neo-pill { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 999px; font-size: 12px; font-weight: 500; }
+  .c3 .neo-pill.run { background: #e6f4ea; color: #1e8e3e; }
+  .c3 .neo-pill.stop { background: #f1f3f4; color: #5f6368; }
+  .c3 .neo-pill.fail { background: #fce8e6; color: #d93025; }
+  .c3 .neo-pill.draft { background: #fef7e0; color: #b06000; }
+  .c3 .fab { position: absolute; right: 28px; bottom: 28px; width: 56px; height: 56px; border-radius: 50%; background: #1a73e8; color: white; display: grid; place-items: center; box-shadow: 0 4px 12px rgba(26,115,232,.4); border: 0; cursor: pointer; }
+  .c3 .fab svg { width: 24px; height: 24px; }
+  .c3 .feed-row { display: grid; grid-template-columns: 32px 1fr auto; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid #f1f3f4; }
+  .c3 .feed-row:last-child { border-bottom: 0; }
+  .c3 .feed-row .av { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-size: 14px; }
+  .c3 .feed-row .av.green { background: #e6f4ea; color: #1e8e3e; }
+  .c3 .feed-row .av.red { background: #fce8e6; color: #d93025; }
+  .c3 .feed-row .av.blue { background: #e8f0fe; color: #1a73e8; }
+  .c3 .feed-row .av.amber { background: #fef7e0; color: #f9ab00; }
+  .c3 .feed-row .av.purple { background: #f3e8ff; color: #9333ea; }
+  .c3 .feed-row .body { font-size: 13px; color: #202124; }
+  .c3 .feed-row .ts { font-size: 11px; color: #5f6368; font-family: 'JetBrains Mono', monospace; }
+
+  /* ===========================================================
+     E1 — GITHUB DARK (modern devops)
+     =========================================================== */
+  .e1 { font-family: 'Inter', sans-serif; color: #c9d1d9; }
+  .e1 .app { background: #0d1117; min-height: 620px; display: grid; grid-template-rows: auto auto 1fr; }
+  .e1 .top { display: grid; grid-template-columns: auto 1fr auto auto; gap: 18px; align-items: center; padding: 14px 22px; border-bottom: 1px solid #21262d; }
+  .e1 .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; color: #f0f6fc; font-size: 15px; }
+  .e1 .brand i { width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, #58a6ff, #3fb950); display: grid; place-items: center; }
+  .e1 .brand i svg { width: 16px; height: 16px; color: #0d1117; }
+  .e1 .nav-h { display: flex; gap: 4px; }
+  .e1 .nav-h a { color: #8b949e; text-decoration: none; padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 500; }
+  .e1 .nav-h a.active { background: #21262d; color: #f0f6fc; }
+  .e1 .nav-h a:hover { background: #161b22; color: #c9d1d9; }
+  .e1 .top-r { display: flex; gap: 10px; align-items: center; }
+  .e1 .pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-family: 'JetBrains Mono', monospace; background: rgba(63,185,80,.1); color: #3fb950; border: 1px solid rgba(63,185,80,.3); }
+  .e1 .pill .ic { width: 6px; height: 6px; border-radius: 50%; background: #3fb950; box-shadow: 0 0 6px rgba(63,185,80,.6); }
+  .e1 .avatar { width: 30px; height: 30px; border-radius: 50%; background: linear-gradient(135deg, #58a6ff, #3fb950); display: grid; place-items: center; color: #0d1117; font-weight: 700; font-size: 12px; }
+  .e1 .crumbs { padding: 12px 22px; border-bottom: 1px solid #21262d; display: flex; gap: 10px; align-items: center; font-size: 13px; color: #8b949e; font-family: 'JetBrains Mono', monospace; }
+  .e1 .crumbs b { color: #f0f6fc; font-weight: 600; }
+  .e1 .crumbs .sep { color: #30363d; }
+  .e1 .content { padding: 22px 26px; }
+  .e1 .stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: 1px; background: #21262d; border: 1px solid #21262d; border-radius: 8px; overflow: hidden; margin-bottom: 22px; }
+  .e1 .stat { background: #0d1117; padding: 14px 16px; }
+  .e1 .stat .label { font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: .08em; }
+  .e1 .stat .value { font-size: 24px; font-weight: 700; margin: 6px 0 4px; letter-spacing: -.01em; color: #f0f6fc; line-height: 1; }
+  .e1 .stat .meta { font-size: 11px; color: #6e7681; font-family: 'JetBrains Mono', monospace; }
+  .e1 .stat .meta.up { color: #3fb950; }
+  .e1 .stat .meta.down { color: #f85149; }
+  .e1 .stat .spark { margin-top: 8px; }
+  .e1 .grid2 { display: grid; grid-template-columns: 1.4fr 1fr; gap: 14px; }
+  .e1 .panel { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 0; overflow: hidden; }
+  .e1 .panel .h { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid #21262d; }
+  .e1 .panel .h h3 { margin: 0; font-size: 14px; font-weight: 600; color: #f0f6fc; }
+  .e1 .lab-row { display: grid; grid-template-columns: 12px 1fr 80px 80px 80px; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid #21262d; font-size: 13px; }
+  .e1 .lab-row:last-child { border-bottom: 0; }
+  .e1 .lab-row:hover { background: rgba(56,139,253,.05); }
+  .e1 .lab-row .st { width: 8px; height: 8px; border-radius: 50%; }
+  .e1 .lab-row .st.run { background: #3fb950; box-shadow: 0 0 8px rgba(63,185,80,.6); }
+  .e1 .lab-row .st.stop { background: #6e7681; }
+  .e1 .lab-row .st.fail { background: #f85149; box-shadow: 0 0 8px rgba(248,81,73,.6); }
+  .e1 .lab-row .st.draft { background: #d29922; }
+  .e1 .lab-row .name { color: #f0f6fc; font-weight: 600; }
+  .e1 .lab-row .sub { color: #8b949e; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+  .e1 .lab-row .vm { color: #c9d1d9; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+  .e1 .lab-row .pill { padding: 2px 8px; border-radius: 12px; font-size: 10px; font-family: 'JetBrains Mono', monospace; text-align: center; }
+  .e1 .lab-row .pill.run { background: rgba(63,185,80,.15); color: #3fb950; border: 1px solid rgba(63,185,80,.4); }
+  .e1 .lab-row .pill.stop { background: rgba(110,118,129,.15); color: #8b949e; border: 1px solid rgba(110,118,129,.4); }
+  .e1 .lab-row .pill.fail { background: rgba(248,81,73,.15); color: #f85149; border: 1px solid rgba(248,81,73,.4); }
+  .e1 .lab-row .pill.draft { background: rgba(210,153,34,.15); color: #d29922; border: 1px solid rgba(210,153,34,.4); }
+  .e1 .lab-row .ts { color: #8b949e; font-family: 'JetBrains Mono', monospace; font-size: 11px; text-align: right; }
+  .e1 .feed { padding: 8px 16px; }
+  .e1 .feed-row { display: grid; grid-template-columns: 80px 60px 1fr; gap: 12px; padding: 6px 0; font-size: 12px; font-family: 'JetBrains Mono', monospace; border-bottom: 1px solid #21262d; }
+  .e1 .feed-row:last-child { border-bottom: 0; }
+  .e1 .feed-row .ts { color: #6e7681; }
+  .e1 .feed-row .src { color: #d29922; }
+  .e1 .feed-row .msg { color: #c9d1d9; }
+  .e1 .feed-row .msg.ok { color: #3fb950; }
+  .e1 .feed-row .msg.err { color: #f85149; }
+  .e1 .feed-row .msg.warn { color: #d29922; }
+  .e1 .btn { background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 6px 12px; border-radius: 6px; font-size: 12px; font-family: 'JetBrains Mono', monospace; cursor: pointer; }
+  .e1 .btn-primary { background: #238636; border-color: rgba(63,185,80,.4); color: #ffffff; font-family: 'Inter', sans-serif; font-weight: 600; }
+
+  /* ===========================================================
+     E2 — DATADOG COLOR (enterprise observability)
+     =========================================================== */
+  .e2 { font-family: 'Inter', sans-serif; color: #e6e7ed; }
+  .e2 .app { background: #1c1d3a; min-height: 620px; display: grid; grid-template-rows: auto 1fr; }
+  .e2 .top { display: grid; grid-template-columns: auto auto 1fr auto auto; gap: 18px; align-items: center; padding: 12px 20px; background: #0f1023; border-bottom: 1px solid #2d2e4f; }
+  .e2 .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 15px; color: white; }
+  .e2 .brand i { width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, #7c5cff, #ff6ad5); display: grid; place-items: center; box-shadow: 0 0 16px rgba(124,92,255,.4); }
+  .e2 .brand i svg { width: 16px; height: 16px; color: white; }
+  .e2 .env { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #ff9c3d; padding: 4px 10px; border: 1px solid #ff9c3d; border-radius: 4px; }
+  .e2 .timerange { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #b3b5c8; background: #25264a; border: 1px solid #2d2e4f; padding: 6px 10px; border-radius: 6px; }
+  .e2 .timerange b { color: #e6e7ed; }
+  .e2 .nav-h { display: flex; gap: 4px; }
+  .e2 .nav-h a { color: #b3b5c8; text-decoration: none; padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 500; }
+  .e2 .nav-h a.active { background: #25264a; color: white; }
+  .e2 .avatar { width: 30px; height: 30px; border-radius: 50%; background: linear-gradient(135deg, #ff6ad5, #7c5cff); color: white; display: grid; place-items: center; font-weight: 700; font-size: 12px; }
+  .e2 .grid { display: grid; grid-template-columns: repeat(12, 1fr); grid-auto-rows: minmax(110px, auto); gap: 12px; padding: 16px 20px; }
+  .e2 .cell { background: #25264a; border: 1px solid #2d2e4f; border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; min-height: 0; position: relative; overflow: hidden; }
+  .e2 .cell h4 { margin: 0; font-size: 11px; color: #9c9eb8; text-transform: uppercase; letter-spacing: .08em; font-weight: 600; }
+  .e2 .cell .v { font-size: 30px; font-weight: 700; line-height: 1; letter-spacing: -.02em; color: white; }
+  .e2 .cell .v.green { color: #6ad34a; }
+  .e2 .cell .v.purple { color: #b181ff; }
+  .e2 .cell .v.cyan { color: #4ddcdc; }
+  .e2 .cell .v.pink { color: #ff6ad5; }
+  .e2 .cell .v.orange { color: #ff9c3d; }
+  .e2 .cell .sub { font-size: 12px; color: #9c9eb8; }
+  .e2 .cell .sub b { color: #6ad34a; }
+  .e2 .cell .sub .d { color: #ff6273; }
+  .e2 .span-2 { grid-column: span 2; }
+  .e2 .span-3 { grid-column: span 3; }
+  .e2 .span-4 { grid-column: span 4; }
+  .e2 .span-5 { grid-column: span 5; }
+  .e2 .span-6 { grid-column: span 6; }
+  .e2 .span-7 { grid-column: span 7; }
+  .e2 .span-8 { grid-column: span 8; }
+  .e2 .span-12 { grid-column: span 12; }
+  .e2 .row-2 { grid-row: span 2; }
+  .e2 .gauge { width: 110px; height: 60px; margin: 8px auto 0; position: relative; }
+  .e2 .chart { width: 100%; flex: 1; min-height: 80px; margin-top: 8px; }
+  .e2 .lab-list { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+  .e2 .lab-list .h { display: grid; grid-template-columns: 1.6fr .6fr .8fr .8fr .8fr; padding: 6px 0; color: #9c9eb8; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; border-bottom: 1px solid #2d2e4f; }
+  .e2 .lab-list .r { display: grid; grid-template-columns: 1.6fr .6fr .8fr .8fr .8fr; padding: 7px 0; border-bottom: 1px dashed #2d2e4f; align-items: center; }
+  .e2 .lab-list .r:last-child { border-bottom: 0; }
+  .e2 .pill { padding: 2px 8px; border-radius: 4px; font-size: 10px; text-align: center; font-weight: 600; letter-spacing: .04em; }
+  .e2 .pill.run { background: rgba(106,211,74,.15); color: #6ad34a; border: 1px solid rgba(106,211,74,.4); }
+  .e2 .pill.stop { background: rgba(156,158,184,.15); color: #b3b5c8; border: 1px solid rgba(156,158,184,.3); }
+  .e2 .pill.fail { background: rgba(255,98,115,.15); color: #ff6273; border: 1px solid rgba(255,98,115,.4); }
+  .e2 .pill.draft { background: rgba(255,156,61,.15); color: #ff9c3d; border: 1px solid rgba(255,156,61,.4); }
+  .e2 .severity-bar { display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; margin-top: 8px; flex: 1; min-height: 60px; }
+  .e2 .severity-bar i { display: block; border-radius: 2px; min-height: 14px; }
+  .e2 .feed { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; display: flex; flex-direction: column; gap: 3px; margin-top: 6px; }
+  .e2 .feed-row { display: grid; grid-template-columns: 70px 1fr; gap: 10px; padding: 3px 0; }
+  .e2 .feed-row .ts { color: #6f7195; }
+  .e2 .feed-row .msg { color: #b3b5c8; }
+  .e2 .feed-row .msg b { color: white; }
+  .e2 .feed-row .msg.ok b { color: #6ad34a; }
+  .e2 .feed-row .msg.err b { color: #ff6273; }
+  .e2 .feed-row .msg.warn b { color: #ff9c3d; }
+
+  /* ===========================================================
+     E3 — BLOOMBERG AMBER (terminal trader)
+     =========================================================== */
+  .e3 { font-family: 'IBM Plex Mono', 'JetBrains Mono', monospace; color: #ff9c1c; background: #000; }
+  .e3 .app { background: #000; min-height: 620px; padding: 0; font-size: 12px; line-height: 1.4; }
+  .e3 .top-strip { background: #000; border-bottom: 1px solid #ff9c1c; padding: 6px 14px; display: grid; grid-template-columns: auto 1fr auto auto; gap: 16px; align-items: center; }
+  .e3 .top-strip .brand { color: #ffd700; font-weight: 700; letter-spacing: .15em; }
+  .e3 .top-strip .ticker { color: #ff9c1c; overflow: hidden; white-space: nowrap; font-size: 11px; }
+  .e3 .top-strip .ticker .up { color: #00ff7f; }
+  .e3 .top-strip .ticker .down { color: #ff3030; }
+  .e3 .top-strip .ticker .sep { color: #553a0a; padding: 0 8px; }
+  .e3 .top-strip .clock { color: #ffd700; }
+  .e3 .top-strip .user { color: #ff9c1c; background: #1a0e00; padding: 2px 8px; border: 1px solid #ff9c1c; }
+  .e3 .nav-bar { background: #000; border-bottom: 1px solid #ff9c1c; padding: 4px 14px; display: flex; gap: 4px; }
+  .e3 .nav-bar a { padding: 3px 10px; color: #ff9c1c; text-decoration: none; font-size: 11px; letter-spacing: .04em; }
+  .e3 .nav-bar a.active { background: #ff9c1c; color: #000; }
+  .e3 .nav-bar a:hover { background: #1a0e00; }
+  .e3 .panels { display: grid; grid-template-columns: 1fr 1fr 1fr; grid-template-rows: auto auto auto; gap: 1px; background: #ff9c1c; padding: 1px; }
+  .e3 .panel { background: #000; padding: 8px 12px; min-height: 100px; }
+  .e3 .panel .h {
+    color: #ffd700; font-weight: 700; font-size: 11px; letter-spacing: .12em;
+    padding-bottom: 4px; margin-bottom: 6px; border-bottom: 1px dashed #553a0a;
+    display: flex; justify-content: space-between;
+  }
+  .e3 .panel .h .badge { color: #00ff7f; font-weight: 400; font-size: 10px; }
+  .e3 .span-full { grid-column: 1 / -1; }
+  .e3 .span-2 { grid-column: span 2; }
+  .e3 .row { display: grid; padding: 3px 0; gap: 8px; font-size: 12px; }
+  .e3 .stat-row { display: grid; grid-template-columns: 1fr auto; padding: 2px 0; }
+  .e3 .stat-row .l { color: #ff9c1c; opacity: .7; }
+  .e3 .stat-row .v { color: #ffd700; font-weight: 700; }
+  .e3 .big { font-size: 36px; color: #ffd700; font-weight: 700; line-height: 1.1; margin: 4px 0; letter-spacing: .02em; }
+  .e3 .big.up { color: #00ff7f; }
+  .e3 .big.down { color: #ff3030; }
+  .e3 .sub { color: #ff9c1c; opacity: .6; font-size: 11px; }
+  .e3 .lab-list { font-size: 11px; }
+  .e3 .lab-list .head, .e3 .lab-list .r { display: grid; grid-template-columns: 1.5fr .4fr .6fr .6fr .5fr; gap: 6px; padding: 3px 0; }
+  .e3 .lab-list .head { color: #ffd700; border-bottom: 1px solid #553a0a; }
+  .e3 .lab-list .r { border-bottom: 1px dashed #2a1d00; color: #ff9c1c; }
+  .e3 .lab-list .r .name { color: #ffd700; }
+  .e3 .lab-list .r .st.run { color: #00ff7f; }
+  .e3 .lab-list .r .st.fail { color: #ff3030; }
+  .e3 .lab-list .r .st.stop { color: #ff9c1c; opacity: .6; }
+  .e3 .lab-list .r .st.draft { color: #ffd700; }
+  .e3 .feed { font-size: 11px; max-height: 200px; overflow: hidden; }
+  .e3 .feed-row { display: grid; grid-template-columns: 50px 60px 1fr; padding: 2px 0; gap: 8px; }
+  .e3 .feed-row .ts { color: #ff9c1c; opacity: .55; }
+  .e3 .feed-row .src { color: #ffd700; }
+  .e3 .feed-row .msg { color: #ff9c1c; }
+  .e3 .feed-row .msg.ok { color: #00ff7f; }
+  .e3 .feed-row .msg.err { color: #ff3030; }
+  .e3 .footer-strip { background: #000; border-top: 1px solid #ff9c1c; padding: 4px 14px; display: flex; gap: 16px; font-size: 11px; color: #ff9c1c; }
+  .e3 .footer-strip .k { background: #ff9c1c; color: #000; padding: 0 6px; font-weight: 700; }
+  .e3 pre.spark { color: #00ff7f; line-height: 1; font-size: 10px; margin: 4px 0 0; }
+
+  /* ---------- final ---------- */
+  .compare { margin-top: 60px; padding: 28px; border: 1px solid var(--shell-line); border-radius: 16px; background: linear-gradient(135deg, rgba(110,231,255,.04), rgba(196,181,253,.03)); }
+  .compare h2 { margin: 0 0 6px; font-size: 22px; font-weight: 700; }
+  .compare p.lead { margin: 0 0 22px; color: var(--shell-muted); }
+  .compare table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .compare th, .compare td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #1c2440; }
+  .compare th { color: #6ee7ff; font-weight: 600; font-family: 'JetBrains Mono', monospace; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; }
+  .compare td:first-child { font-weight: 600; color: #e6edf6; }
+  .compare td { color: var(--shell-muted); vertical-align: top; }
+  .compare .pick {
+    margin-top: 24px; padding: 16px 20px;
+    border-left: 3px solid #6ee7ff; background: rgba(110,231,255,.05);
+    border-radius: 6px; font-size: 13.5px; color: var(--shell-muted); line-height: 1.7;
+  }
+  .compare .pick b { color: var(--shell-text); }
+</style>
+</head>
+<body>
+
+<div class="page">
+  <!-- HERO -->
+  <section class="hero">
+    <div class="eyebrow">Variants · soft light × 3 · ops console × 3</div>
+    <h1>Six more directions: <span class="accent">Soft Light</span> & <span class="accent">Ops Console</span>.</h1>
+    <p>Same data across all six (3 running labs, 12 healthy VMs, identical recent-lab list) so the comparison is purely about visual language. Soft Light variants explore "what kind of calm is the right kind?" — editorial, SaaS, or consumer. Ops Console variants explore "what kind of dense is the right kind?" — devops, observability, or trader.</p>
+  </section>
+
+  <!-- ====================================================== -->
+  <!-- SOFT LIGHT FAMILY                                       -->
+  <!-- ====================================================== -->
+  <div class="family">
+    <span class="tag">Family A</span>
+    <h2>Soft Light · three personalities</h2>
+    <p>All light themes, all calm — but each picks a different reference and lives in a different world.</p>
+  </div>
+
+  <!-- C1: EDITORIAL CREAM ============================== -->
+  <section>
+    <div class="opt-head">
+      <span class="opt-tag">C1</span>
+      <h3>Editorial Cream</h3>
+      <span class="tag">Notion / Apple Notes · serif headers · warm</span>
+    </div>
+    <p class="opt-sub">Warm cream paper, near-black text, a serif (Fraunces) for greetings and section heads. Feels like a reading app or a thinking tool. The dashboard you wouldn't mind opening with morning coffee.</p>
+    <div class="opt-vibes">
+      <span class="vibe">#f7f4ed cream</span><span class="vibe">Fraunces serif</span><span class="vibe">indigo accent</span><span class="vibe">single column</span><span class="vibe">low chrome</span>
+    </div>
+    <div class="frame">
+      <div class="frame-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">labforge.local · /dashboard</div></div>
+      <div class="c1">
+        <div class="app">
+          <aside class="side">
+            <div class="brand"><div class="brand-mark">L</div><div class="brand-name">LabForge<span class="sub">v0.1 · local</span></div></div>
+            <nav class="nav">
+              <div class="sec">Workspace</div>
+              <a class="active" href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg> Dashboard</a>
+              <a href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h18M3 12h18M3 17h18"/></svg> Labs <span class="ct">12</span></a>
+              <a href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16v13H4z"/><path d="M4 7l8-4 8 4"/></svg> Templates</a>
+              <a href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg> History</a>
+              <div class="sec">Catalog</div>
+              <a href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 7h7l-5.5 4 2 7L12 16l-6.5 4 2-7L2 9h7z"/></svg> CVEs</a>
+              <a href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg> Vendors</a>
+              <div class="sec">System</div>
+              <a href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 11-14 0z"/></svg> Settings</a>
+            </nav>
+          </aside>
+          <div>
+            <div class="top">
+              <div class="search">⌕ Search labs, nodes, CVEs… <span class="kbd" style="margin-left:auto;">⌘K</span></div>
+              <span class="pill"><span class="ic"></span> All systems normal</span>
+              <div class="avatar">CW</div>
+            </div>
+            <div class="content">
+              <h1 class="greeting">Good afternoon, <em>Conrad.</em></h1>
+              <p class="greeting-sub">Three labs are running. Everything looks healthy.</p>
+
+              <div class="stats">
+                <div class="stat accent"><div class="label">Running labs</div><div class="value">3</div><div class="meta">↑ 1 in the last hour</div></div>
+                <div class="stat ok"><div class="label">VMs healthy</div><div class="value">12<span style="color:#a8a29e;font-size:18px;">/14</span></div><div class="meta">2 still provisioning</div></div>
+                <div class="stat"><div class="label">NVD cache</div><div class="value">217K</div><div class="meta">refreshed 4 minutes ago</div></div>
+                <div class="stat"><div class="label">In queue</div><div class="value">1</div><div class="meta">redteam-q2 · ~2m</div></div>
+              </div>
+
+              <div class="sec-head"><h2>Recent labs</h2><a href="#">View all →</a></div>
+              <div class="lab-row">
+                <div class="ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4338ca" stroke-width="1.6"><path d="M12 2l9 5-9 5-9-5 9-5z"/></svg></div>
+                <div><div class="name">ad-forest-finance</div><div class="sub">Active Directory · Windows Server 2019</div></div>
+                <div class="vm">6 VMs</div>
+                <span class="neo-pill run">● Running</span>
+                <span class="ts">3h 42m</span>
+              </div>
+              <div class="lab-row">
+                <div class="ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#78716c" stroke-width="1.6"><path d="M3 12l4-4 4 4-4 4z"/></svg></div>
+                <div><div class="name">soc-splunk-demo</div><div class="sub">Splunk SOC demo · Ubuntu 22.04</div></div>
+                <div class="vm">4 VMs</div>
+                <span class="neo-pill stop">○ Stopped</span>
+                <span class="ts">2 days ago</span>
+              </div>
+              <div class="lab-row">
+                <div class="ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#b91c1c" stroke-width="1.6"><circle cx="12" cy="12" r="9"/></svg></div>
+                <div><div class="name">redteam-q2-engagement</div><div class="sub">Red team engagement · Kali</div></div>
+                <div class="vm">5 VMs</div>
+                <span class="neo-pill fail">✕ Failed</span>
+                <span class="ts">17m ago</span>
+              </div>
+              <div class="lab-row" style="border-bottom:0;">
+                <div class="ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4338ca" stroke-width="1.6"><rect x="2" y="6" width="20" height="12" rx="2"/></svg></div>
+                <div><div class="name">ot-water-utility</div><div class="sub">OT / SCADA water utility · Modbus, S7</div></div>
+                <div class="vm">7 VMs</div>
+                <span class="neo-pill draft">○ Draft</span>
+                <span class="ts">yesterday</span>
+              </div>
+
+              <div style="margin-top: 24px; display: flex; gap: 10px;">
+                <button class="btn-primary btn">+ New Lab</button>
+                <button class="btn">Import topology…</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="verdict">
+      <div><b>Great for</b><br/>Long sessions, screenshots in docs, users tired of dark dashboards. Feels considered, not corporate.</div>
+      <div class="no"><b>Not great for</b><br/>NOC walls, multi-monitor power users, anyone who needs density. The serif headers may feel too soft for some.</div>
+    </div>
+  </section>
+
+  <!-- C2: CRISP WHITE ============================== -->
+  <section>
+    <div class="opt-head">
+      <span class="opt-tag">C2</span>
+      <h3>Crisp White SaaS</h3>
+      <span class="tag">Stripe / Vercel · sharp · gradient accents</span>
+    </div>
+    <p class="opt-sub">Pure white background, deep navy text, indigo-to-cyan gradient accents on key surfaces. Cards have subtle shadows and crisp borders. The dashboard that looks at home next to Stripe, Linear, or Resend.</p>
+    <div class="opt-vibes">
+      <span class="vibe">pure white</span><span class="vibe">deep navy text</span><span class="vibe">indigo→cyan gradient</span><span class="vibe">Inter</span><span class="vibe">soft shadows</span>
+    </div>
+    <div class="frame">
+      <div class="frame-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">labforge.local · /dashboard</div></div>
+      <div class="c2">
+        <div class="app">
+          <aside class="side">
+            <div class="brand"><div class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2l9 5-9 5-9-5 9-5z"/></svg></div><div class="brand-name">LabForge<span class="sub">v0.1</span></div></div>
+            <nav class="nav">
+              <div class="sec">Workspace</div>
+              <a class="active" href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg> Dashboard</a>
+              <a href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h18M3 12h18M3 17h18"/></svg> Labs <span class="ct">12</span></a>
+              <a href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16v13H4z"/><path d="M4 7l8-4 8 4"/></svg> Templates <span class="ct">9</span></a>
+              <a href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg> Builds <span class="ct">48</span></a>
+              <div class="sec">Catalog</div>
+              <a href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 7h7l-5.5 4 2 7L12 16l-6.5 4 2-7L2 9h7z"/></svg> CVEs <span class="ct">217K</span></a>
+              <a href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg> Vendors</a>
+              <div class="sec">Account</div>
+              <a href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 11-14 0z"/></svg> Settings</a>
+            </nav>
+          </aside>
+          <div>
+            <div class="top">
+              <div class="search">⌕ Search… <span class="kbd" style="margin-left:auto;">⌘K</span></div>
+              <span class="pill"><span class="ic"></span> Agent online · 14ms</span>
+              <button class="btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg> Inbox</button>
+              <div class="avatar">CW</div>
+            </div>
+            <div class="content">
+              <h1 class="page-title">Dashboard</h1>
+              <p class="page-sub">Overview of your local lab workspace.</p>
+
+              <div class="stats">
+                <div class="stat accent"><div class="label">Running labs</div><div class="value">3</div><div class="meta"><b>↑ 1</b> in last hour</div></div>
+                <div class="stat"><div class="label">VMs healthy</div><div class="value">12<span style="color:#8898aa;font-size:18px;">/14</span></div><div class="meta">86% · 2 provisioning</div></div>
+                <div class="stat"><div class="label">NVD cache</div><div class="value">217K</div><div class="meta">Fresh · refreshed 4m ago</div></div>
+                <div class="stat"><div class="label">Build queue</div><div class="value">1</div><div class="meta">ETA 2m 13s</div></div>
+              </div>
+
+              <div class="grid2">
+                <div class="card">
+                  <div class="sec-head"><h2>Recent labs</h2><button class="btn-primary btn">+ New Lab</button></div>
+                  <div class="lab-row">
+                    <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#635bff" stroke-width="2"><path d="M12 2l9 5-9 5-9-5 9-5z"/></svg></div>
+                    <div><div class="name">ad-forest-finance</div><div class="sub">Win Server 2019 · VirtualBox · 3h42m</div></div>
+                    <span class="vm">6 VMs</span>
+                    <span class="neo-pill run">● Running</span>
+                  </div>
+                  <div class="lab-row">
+                    <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#425466" stroke-width="2"><path d="M3 12l4-4 4 4-4 4z"/></svg></div>
+                    <div><div class="name">soc-splunk-demo</div><div class="sub">Ubuntu 22.04 · libvirt · 2d ago</div></div>
+                    <span class="vm">4 VMs</span>
+                    <span class="neo-pill stop">○ Stopped</span>
+                  </div>
+                  <div class="lab-row">
+                    <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#b91c1c" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg></div>
+                    <div><div class="name">redteam-q2-engagement</div><div class="sub">Kali · VirtualBox · 17m ago</div></div>
+                    <span class="vm">5 VMs</span>
+                    <span class="neo-pill fail">✕ Failed</span>
+                  </div>
+                  <div class="lab-row">
+                    <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#635bff" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/></svg></div>
+                    <div><div class="name">ot-water-utility</div><div class="sub">Modbus · libvirt · yesterday</div></div>
+                    <span class="vm">7 VMs</span>
+                    <span class="neo-pill stop">○ Draft</span>
+                  </div>
+                </div>
+
+                <div class="card">
+                  <div class="sec-head"><h2>Activity</h2><span class="pill"><span class="ic"></span> live</span></div>
+                  <div class="feed">
+                    <div class="feed-row"><span class="d" style="background:#16a34a;"></span><div><b>fw-edge</b> healthy</div><span class="ts">14:32</span></div>
+                    <div class="feed-row"><span class="d"></span><div>Vagrantfile · 412 KB</div><span class="ts">14:31</span></div>
+                    <div class="feed-row"><span class="d" style="background:#d97706;"></span><div>NVD rate-limit 78%</div><span class="ts">14:30</span></div>
+                    <div class="feed-row"><span class="d" style="background:#7c3aed;"></span><div>Pinned CVE-2024-38063</div><span class="ts">14:24</span></div>
+                    <div class="feed-row"><span class="d" style="background:#b91c1c;"></span><div>Build failed · vmware_desktop</div><span class="ts">14:18</span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="verdict">
+      <div><b>Great for</b><br/>Marketing site screenshots, hosted-product procurement, customer-facing builders. Reads as "modern SaaS."</div>
+      <div class="no"><b>Not great for</b><br/>Looking distinctively security. Could be any developer tool. Indigo accent may need tuning to feel "labforge."</div>
+    </div>
+  </section>
+
+  <!-- C3: MATERIAL PAPER ============================== -->
+  <section>
+    <div class="opt-head">
+      <span class="opt-tag">C3</span>
+      <h3>Material Paper</h3>
+      <span class="tag">Google consumer · friendly · multi-color · FAB</span>
+    </div>
+    <p class="opt-sub">Light gray base, white rounded cards on soft shadows, full-color state coding (blue/green/amber/red), a floating action button in the corner. Less stark, more approachable — the consumer-app feel.</p>
+    <div class="opt-vibes">
+      <span class="vibe">light gray base</span><span class="vibe">Roboto</span><span class="vibe">multi-color states</span><span class="vibe">rail navigation</span><span class="vibe">FAB · floating action</span>
+    </div>
+    <div class="frame">
+      <div class="frame-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">labforge.local · /dashboard</div></div>
+      <div class="c3">
+        <div class="app" style="position: relative;">
+          <aside class="side">
+            <div class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2l9 5-9 5-9-5 9-5z"/></svg></div>
+            <div class="nav-icon active" title="Dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></div>
+            <div class="nav-icon" title="Labs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h18M3 12h18M3 17h18"/></svg><span class="badge">12</span></div>
+            <div class="nav-icon" title="Templates"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16v13H4z"/><path d="M4 7l8-4 8 4"/></svg></div>
+            <div class="nav-icon" title="History"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg></div>
+            <div class="nav-icon" title="CVEs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 7h7l-5.5 4 2 7L12 16l-6.5 4 2-7L2 9h7z"/></svg></div>
+            <div style="flex: 1;"></div>
+            <div class="nav-icon" title="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 11-14 0z"/></svg></div>
+          </aside>
+          <div>
+            <div class="top">
+              <h1>Lab dashboard <span>· local workspace</span></h1>
+              <div class="search">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+                Search labs, nodes, CVEs
+              </div>
+              <button class="icon-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg></button>
+              <button class="icon-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 11-14 0z"/></svg></button>
+              <div class="avatar">CW</div>
+            </div>
+            <div class="content">
+              <div class="stats">
+                <div class="stat blue">
+                  <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg></div>
+                  <div class="label">Running labs</div><div class="value">3</div><div class="meta"><b>↑ 1</b> in last hour</div>
+                </div>
+                <div class="stat green">
+                  <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><path d="M22 4L12 14.01l-3-3"/></svg></div>
+                  <div class="label">VMs healthy</div><div class="value">12/14</div><div class="meta">86% · 2 provisioning</div>
+                </div>
+                <div class="stat purple">
+                  <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 7h7l-5.5 4 2 7L12 16l-6.5 4 2-7L2 9h7z"/></svg></div>
+                  <div class="label">NVD cache</div><div class="value">217K</div><div class="meta">Refreshed 4 minutes ago</div>
+                </div>
+                <div class="stat amber">
+                  <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12l4-4 4 4-4 4z"/><circle cx="17" cy="12" r="3"/></svg></div>
+                  <div class="label">Build queue</div><div class="value">1</div><div class="meta">ETA 2m 13s</div>
+                </div>
+              </div>
+
+              <div class="grid2">
+                <div class="card">
+                  <h2>Recent labs <span class="more">View all</span></h2>
+                  <div class="lab-row">
+                    <div class="ico blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l9 5-9 5-9-5 9-5z"/></svg></div>
+                    <div><div class="name">ad-forest-finance</div><div class="sub">Win Server 2019 · VirtualBox</div></div>
+                    <div class="vm">6 VMs</div>
+                    <span class="neo-pill run">● Running</span>
+                  </div>
+                  <div class="lab-row">
+                    <div class="ico amber"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12l4-4 4 4-4 4z"/></svg></div>
+                    <div><div class="name">soc-splunk-demo</div><div class="sub">Ubuntu 22.04 · libvirt</div></div>
+                    <div class="vm">4 VMs</div>
+                    <span class="neo-pill stop">Stopped</span>
+                  </div>
+                  <div class="lab-row">
+                    <div class="ico red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg></div>
+                    <div><div class="name">redteam-q2-engagement</div><div class="sub">Kali · VirtualBox</div></div>
+                    <div class="vm">5 VMs</div>
+                    <span class="neo-pill fail">Failed</span>
+                  </div>
+                  <div class="lab-row">
+                    <div class="ico green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/></svg></div>
+                    <div><div class="name">ot-water-utility</div><div class="sub">Modbus · S7 · libvirt</div></div>
+                    <div class="vm">7 VMs</div>
+                    <span class="neo-pill draft">Draft</span>
+                  </div>
+                </div>
+                <div class="card">
+                  <h2>Activity</h2>
+                  <div class="feed-row">
+                    <div class="av green">✓</div>
+                    <div class="body"><b>fw-edge</b> reached healthy state</div>
+                    <span class="ts">14:32</span>
+                  </div>
+                  <div class="feed-row">
+                    <div class="av blue">⚡</div>
+                    <div class="body">Vagrantfile generated · 412 KB</div>
+                    <span class="ts">14:31</span>
+                  </div>
+                  <div class="feed-row">
+                    <div class="av amber">!</div>
+                    <div class="body">NVD rate-limit 78% · backoff</div>
+                    <span class="ts">14:29</span>
+                  </div>
+                  <div class="feed-row">
+                    <div class="av purple">★</div>
+                    <div class="body">Pinned CVE-2024-38063 → dc01</div>
+                    <span class="ts">14:24</span>
+                  </div>
+                  <div class="feed-row">
+                    <div class="av red">✕</div>
+                    <div class="body">Build failed · provider missing</div>
+                    <span class="ts">14:18</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <button class="fab" title="New Lab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg></button>
+        </div>
+      </div>
+    </div>
+    <div class="verdict">
+      <div><b>Great for</b><br/>Reaching beyond hardcore security. Friendly state coding, recognizable navigation rail, mobile-friendly. Great for trial users.</div>
+      <div class="no"><b>Not great for</b><br/>Feeling like a serious infosec tool. Multi-color states can become noisy when the lab list grows.</div>
+    </div>
+  </section>
+
+  <!-- ====================================================== -->
+  <!-- OPS CONSOLE FAMILY                                      -->
+  <!-- ====================================================== -->
+  <div class="family">
+    <span class="tag">Family B</span>
+    <h2>Ops Console · three densities</h2>
+    <p>All dense, all data-heavy — but each picks a different reference: modern devops, enterprise observability, or pure trader terminal.</p>
+  </div>
+
+  <!-- E1: GITHUB DARK ============================== -->
+  <section>
+    <div class="opt-head">
+      <span class="opt-tag">E1</span>
+      <h3>GitHub Dark</h3>
+      <span class="tag">Modern devops · clean lines · readable density</span>
+    </div>
+    <p class="opt-sub">GitHub Actions / Vercel logs aesthetic. Dark base, accent green for healthy, amber for warnings, red for errors, blue for info. 6-up stat strip with sparklines, clean panels, monospace for any number that matters.</p>
+    <div class="opt-vibes">
+      <span class="vibe">#0d1117 base</span><span class="vibe">github accent green</span><span class="vibe">Inter + JetBrains Mono</span><span class="vibe">6-up stats</span><span class="vibe">sparklines</span>
+    </div>
+    <div class="frame">
+      <div class="frame-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">labforge.local · /ops</div></div>
+      <div class="e1">
+        <div class="app">
+          <div class="top">
+            <div class="brand"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2l9 5-9 5-9-5 9-5z"/></svg></i> LabForge</div>
+            <nav class="nav-h">
+              <a class="active" href="#">Ops</a>
+              <a href="#">Labs</a>
+              <a href="#">Builds</a>
+              <a href="#">CVEs</a>
+              <a href="#">Settings</a>
+            </nav>
+            <div class="top-r">
+              <span class="pill"><span class="ic"></span> live · 2s</span>
+              <button class="btn-primary btn">+ New Lab</button>
+              <div class="avatar">CW</div>
+            </div>
+          </div>
+          <div class="crumbs">
+            <span>workspace</span><span class="sep">/</span><b>conrad@labforge.local</b><span class="sep">·</span><span>3 running · 12 healthy · 0.8% err</span>
+          </div>
+          <div class="content">
+            <div class="stats">
+              <div class="stat">
+                <div class="label">Running</div><div class="value">3</div><div class="meta up">↑ +1 / 1h</div>
+                <svg class="spark" width="100%" height="28" viewBox="0 0 100 28" preserveAspectRatio="none"><polyline points="0,22 14,18 28,20 42,12 56,8 70,12 84,4 100,8" fill="none" stroke="#3fb950" stroke-width="1.5"/></svg>
+              </div>
+              <div class="stat">
+                <div class="label">VMs healthy</div><div class="value">12/14</div><div class="meta">86%</div>
+                <svg class="spark" width="100%" height="28" viewBox="0 0 100 28" preserveAspectRatio="none"><polyline points="0,24 14,22 28,16 42,18 56,10 70,12 84,4 100,2" fill="none" stroke="#58a6ff" stroke-width="1.5"/></svg>
+              </div>
+              <div class="stat">
+                <div class="label">Build queue</div><div class="value">1</div><div class="meta">ETA 2m13s</div>
+                <svg class="spark" width="100%" height="28" viewBox="0 0 100 28" preserveAspectRatio="none"><polyline points="0,14 14,16 28,12 42,16 56,10 70,14 84,8 100,12" fill="none" stroke="#d29922" stroke-width="1.5"/></svg>
+              </div>
+              <div class="stat">
+                <div class="label">Error rate</div><div class="value">0.8%</div><div class="meta down">↓ −0.3</div>
+                <svg class="spark" width="100%" height="28" viewBox="0 0 100 28" preserveAspectRatio="none"><polyline points="0,4 14,8 28,10 42,14 56,16 70,20 84,22 100,24" fill="none" stroke="#f85149" stroke-width="1.5"/></svg>
+              </div>
+              <div class="stat">
+                <div class="label">NVD cache</div><div class="value">217K</div><div class="meta">fresh · 4m</div>
+                <svg class="spark" width="100%" height="28" viewBox="0 0 100 28" preserveAspectRatio="none"><polyline points="0,22 14,20 28,20 42,16 56,14 70,12 84,4 100,2" fill="none" stroke="#58a6ff" stroke-width="1.5"/></svg>
+              </div>
+              <div class="stat">
+                <div class="label">Host load</div><div class="value">42%</div><div class="meta">22G/64G</div>
+                <svg class="spark" width="100%" height="28" viewBox="0 0 100 28" preserveAspectRatio="none"><polyline points="0,16 14,12 28,14 42,10 56,14 70,12 84,16 100,18" fill="none" stroke="#c9d1d9" stroke-width="1.5"/></svg>
+              </div>
+            </div>
+
+            <div class="grid2">
+              <div class="panel">
+                <div class="h"><h3>Labs · current state</h3><span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#8b949e;">7 total · 3 running</span></div>
+                <div class="lab-row"><div class="st run"></div><div><div class="name">ad-forest-finance</div><div class="sub">win2019 · vbox · 6 vms</div></div><div class="vm">6 VMs</div><span class="pill run">RUNNING</span><span class="ts">3h42m</span></div>
+                <div class="lab-row"><div class="st run"></div><div><div class="name">kube-prom-stack</div><div class="sub">k3s · vbox · 4 vms</div></div><div class="vm">4 VMs</div><span class="pill run">RUNNING</span><span class="ts">12h08m</span></div>
+                <div class="lab-row"><div class="st run"></div><div><div class="name">dmz-webapp-test</div><div class="sub">ubuntu · libvirt · 5 vms</div></div><div class="vm">5 VMs</div><span class="pill run">RUNNING</span><span class="ts">22m</span></div>
+                <div class="lab-row"><div class="st stop"></div><div><div class="name">soc-splunk-demo</div><div class="sub">ubuntu · libvirt · 4 vms</div></div><div class="vm">4 VMs</div><span class="pill stop">STOPPED</span><span class="ts">2d</span></div>
+                <div class="lab-row"><div class="st fail"></div><div><div class="name">redteam-q2-engagement</div><div class="sub">kali · vbox · 5 vms</div></div><div class="vm">5 VMs</div><span class="pill fail">FAILED</span><span class="ts">17m</span></div>
+                <div class="lab-row"><div class="st draft"></div><div><div class="name">ot-water-utility</div><div class="sub">modbus · libvirt · 7 vms</div></div><div class="vm">7 VMs</div><span class="pill draft">DRAFT</span><span class="ts">1d</span></div>
+              </div>
+
+              <div class="panel">
+                <div class="h"><h3>Event stream</h3><span class="pill" style="color:#3fb950;">tail -f</span></div>
+                <div class="feed">
+                  <div class="feed-row"><span class="ts">14:32:11</span><span class="src">fw-edge</span><span class="msg ok">healthy</span></div>
+                  <div class="feed-row"><span class="ts">14:31:08</span><span class="src">gen</span><span class="msg">vagrantfile 412 KB</span></div>
+                  <div class="feed-row"><span class="ts">14:29:55</span><span class="src">nvd</span><span class="msg warn">rate-limit 78%</span></div>
+                  <div class="feed-row"><span class="ts">14:24:02</span><span class="src">cve</span><span class="msg">pinned CVE-2024-38063</span></div>
+                  <div class="feed-row"><span class="ts">14:18:44</span><span class="src">build</span><span class="msg err">vmware_desktop missing</span></div>
+                  <div class="feed-row"><span class="ts">14:15:30</span><span class="src">dc01</span><span class="msg ok">forest.lab provisioned</span></div>
+                  <div class="feed-row"><span class="ts">14:12:01</span><span class="src">ws-cfo</span><span class="msg">joined domain</span></div>
+                  <div class="feed-row"><span class="ts">14:09:18</span><span class="src">agent</span><span class="msg ok">heartbeat 6/6</span></div>
+                  <div class="feed-row"><span class="ts">14:05:12</span><span class="src">api</span><span class="msg">cors check ok</span></div>
+                  <div class="feed-row"><span class="ts">14:02:00</span><span class="src">build</span><span class="msg">ad-forest-finance start</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="verdict">
+      <div><b>Great for</b><br/>Engineers who already live in GitHub / Vercel / Render. Clean lines, no overload, real-time feel. Easiest to actually build well.</div>
+      <div class="no"><b>Not great for</b><br/>Standing out from "every other devops dashboard." Could blur into the broader category.</div>
+    </div>
+  </section>
+
+  <!-- E2: DATADOG COLOR ============================== -->
+  <section>
+    <div class="opt-head">
+      <span class="opt-tag">E2</span>
+      <h3>Datadog Color</h3>
+      <span class="tag">Enterprise observability · charts · vivid</span>
+    </div>
+    <p class="opt-sub">Deeper, more saturated dark blue base with full-color charts (line, area, heatmap, gauge). Cells feel like Datadog tiles — title, big number, chart that fills the remaining space. For users who want the dashboard to <i>look like work</i>.</p>
+    <div class="opt-vibes">
+      <span class="vibe">#1c1d3a deep blue</span><span class="vibe">vivid charts</span><span class="vibe">heatmap</span><span class="vibe">tile-per-metric</span><span class="vibe">env badge</span>
+    </div>
+    <div class="frame">
+      <div class="frame-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">labforge.local · /ops</div></div>
+      <div class="e2">
+        <div class="app">
+          <div class="top">
+            <div class="brand"><i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2l9 5-9 5-9-5 9-5z"/></svg></i> LabForge Ops</div>
+            <span class="env">env · local</span>
+            <span class="timerange">past <b>1h</b> · refresh 2s</span>
+            <nav class="nav-h">
+              <a class="active" href="#">Overview</a>
+              <a href="#">Labs</a>
+              <a href="#">CVE feed</a>
+              <a href="#">Logs</a>
+            </nav>
+            <div class="avatar">CW</div>
+          </div>
+
+          <div class="grid">
+            <!-- Top row: 4 stat tiles + 1 gauge tile -->
+            <div class="cell span-2">
+              <h4>Running labs</h4>
+              <div class="v green">3</div>
+              <div class="sub"><b>+1</b> vs 1h ago</div>
+              <svg class="chart" viewBox="0 0 200 60" preserveAspectRatio="none">
+                <defs><linearGradient id="g1" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="#6ad34a" stop-opacity=".5"/><stop offset="100%" stop-color="#6ad34a" stop-opacity="0"/></linearGradient></defs>
+                <path d="M0,48 L25,42 L50,46 L75,32 L100,28 L125,30 L150,18 L175,14 L200,10 L200,60 L0,60 Z" fill="url(#g1)"/>
+                <polyline points="0,48 25,42 50,46 75,32 100,28 125,30 150,18 175,14 200,10" fill="none" stroke="#6ad34a" stroke-width="2"/>
+              </svg>
+            </div>
+            <div class="cell span-2">
+              <h4>VMs healthy</h4>
+              <div class="v">12<span style="color:#9c9eb8;font-size:18px;">/14</span></div>
+              <div class="sub">86% · 2 provisioning</div>
+              <svg class="chart" viewBox="0 0 200 60" preserveAspectRatio="none">
+                <defs><linearGradient id="g2" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="#b181ff" stop-opacity=".5"/><stop offset="100%" stop-color="#b181ff" stop-opacity="0"/></linearGradient></defs>
+                <path d="M0,52 L25,50 L50,40 L75,42 L100,28 L125,30 L150,18 L175,14 L200,12 L200,60 L0,60 Z" fill="url(#g2)"/>
+                <polyline points="0,52 25,50 50,40 75,42 100,28 125,30 150,18 175,14 200,12" fill="none" stroke="#b181ff" stroke-width="2"/>
+              </svg>
+            </div>
+            <div class="cell span-2">
+              <h4>Build queue</h4>
+              <div class="v orange">1</div>
+              <div class="sub">ETA 2m 13s</div>
+              <svg class="chart" viewBox="0 0 200 60" preserveAspectRatio="none">
+                <g>
+                  <rect x="0" y="40" width="22" height="20" fill="#ff9c3d" opacity=".5"/>
+                  <rect x="26" y="36" width="22" height="24" fill="#ff9c3d" opacity=".6"/>
+                  <rect x="52" y="44" width="22" height="16" fill="#ff9c3d" opacity=".5"/>
+                  <rect x="78" y="30" width="22" height="30" fill="#ff9c3d" opacity=".7"/>
+                  <rect x="104" y="42" width="22" height="18" fill="#ff9c3d" opacity=".55"/>
+                  <rect x="130" y="38" width="22" height="22" fill="#ff9c3d" opacity=".6"/>
+                  <rect x="156" y="32" width="22" height="28" fill="#ff9c3d" opacity=".7"/>
+                </g>
+              </svg>
+            </div>
+            <div class="cell span-3">
+              <h4>Host utilization · last 5m</h4>
+              <div style="display: flex; gap: 22px; margin-top: 6px;">
+                <div>
+                  <div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#9c9eb8;margin-bottom:2px;">CPU</div>
+                  <svg width="80" height="46" viewBox="0 0 80 46"><path d="M 8 38 A 32 32 0 1 1 72 38" fill="none" stroke="#2d2e4f" stroke-width="6"/><path d="M 8 38 A 32 32 0 0 1 50 12" fill="none" stroke="#4ddcdc" stroke-width="6" stroke-linecap="round"/><text x="40" y="34" text-anchor="middle" fill="#4ddcdc" font-size="14" font-weight="700">42%</text></svg>
+                </div>
+                <div>
+                  <div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#9c9eb8;margin-bottom:2px;">RAM</div>
+                  <svg width="80" height="46" viewBox="0 0 80 46"><path d="M 8 38 A 32 32 0 1 1 72 38" fill="none" stroke="#2d2e4f" stroke-width="6"/><path d="M 8 38 A 32 32 0 0 1 38 8" fill="none" stroke="#b181ff" stroke-width="6" stroke-linecap="round"/><text x="40" y="34" text-anchor="middle" fill="#b181ff" font-size="14" font-weight="700">34%</text></svg>
+                </div>
+                <div>
+                  <div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#9c9eb8;margin-bottom:2px;">Disk</div>
+                  <svg width="80" height="46" viewBox="0 0 80 46"><path d="M 8 38 A 32 32 0 1 1 72 38" fill="none" stroke="#2d2e4f" stroke-width="6"/><path d="M 8 38 A 32 32 0 0 1 60 16" fill="none" stroke="#ff9c3d" stroke-width="6" stroke-linecap="round"/><text x="40" y="34" text-anchor="middle" fill="#ff9c3d" font-size="14" font-weight="700">58%</text></svg>
+                </div>
+              </div>
+            </div>
+            <div class="cell span-3">
+              <h4>Error rate</h4>
+              <div class="v pink">0.8%</div>
+              <div class="sub">↓ −0.3 last hour</div>
+              <svg class="chart" viewBox="0 0 240 60" preserveAspectRatio="none">
+                <defs><linearGradient id="g3" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="#ff6ad5" stop-opacity=".4"/><stop offset="100%" stop-color="#ff6ad5" stop-opacity="0"/></linearGradient></defs>
+                <path d="M0,10 L30,12 L60,8 L90,16 L120,22 L150,30 L180,40 L210,46 L240,50 L240,60 L0,60 Z" fill="url(#g3)"/>
+                <polyline points="0,10 30,12 60,8 90,16 120,22 150,30 180,40 210,46 240,50" fill="none" stroke="#ff6ad5" stroke-width="2"/>
+              </svg>
+            </div>
+
+            <!-- Mid: lab list -->
+            <div class="cell span-8 row-2">
+              <h4>Active labs</h4>
+              <div class="lab-list" style="margin-top: 6px;">
+                <div class="h"><span>NAME</span><span>VMS</span><span>PROVIDER</span><span>UPTIME</span><span>STATUS</span></div>
+                <div class="r"><span style="color:white;">ad-forest-finance</span><span>6</span><span>vbox</span><span>3h42m</span><span class="pill run">RUN</span></div>
+                <div class="r"><span style="color:white;">kube-prom-stack</span><span>4</span><span>vbox</span><span>12h08m</span><span class="pill run">RUN</span></div>
+                <div class="r"><span style="color:white;">dmz-webapp-test</span><span>5</span><span>libvirt</span><span>22m</span><span class="pill run">RUN</span></div>
+                <div class="r"><span style="color:white;">soc-splunk-demo</span><span>4</span><span>libvirt</span><span>—</span><span class="pill stop">STOP</span></div>
+                <div class="r"><span style="color:white;">redteam-q2-engagement</span><span>5</span><span>vbox</span><span>—</span><span class="pill fail">FAIL</span></div>
+                <div class="r"><span style="color:white;">ot-water-utility</span><span>7</span><span>libvirt</span><span>—</span><span class="pill draft">DRAFT</span></div>
+                <div class="r"><span style="color:white;">mitre-attck-sim</span><span>8</span><span>vbox</span><span>—</span><span class="pill stop">STOP</span></div>
+              </div>
+            </div>
+
+            <div class="cell span-4 row-2">
+              <h4>Event stream · live</h4>
+              <div class="feed">
+                <div class="feed-row"><span class="ts">14:32</span><span class="msg ok"><b>fw-edge</b> healthy</span></div>
+                <div class="feed-row"><span class="ts">14:31</span><span class="msg">vagrantfile · <b>412 KB</b></span></div>
+                <div class="feed-row"><span class="ts">14:29</span><span class="msg warn"><b>NVD</b> rate-limit 78%</span></div>
+                <div class="feed-row"><span class="ts">14:24</span><span class="msg">pinned <b>CVE-2024-38063</b></span></div>
+                <div class="feed-row"><span class="ts">14:18</span><span class="msg err"><b>build failed</b> · vmware_desktop missing</span></div>
+                <div class="feed-row"><span class="ts">14:15</span><span class="msg ok"><b>dc01</b> forest.lab provisioned</span></div>
+                <div class="feed-row"><span class="ts">14:12</span><span class="msg">ws-cfo joined domain</span></div>
+                <div class="feed-row"><span class="ts">14:09</span><span class="msg ok">agent <b>heartbeat 6/6</b></span></div>
+                <div class="feed-row"><span class="ts">14:05</span><span class="msg">api cors check ok</span></div>
+                <div class="feed-row"><span class="ts">14:02</span><span class="msg">build ad-forest-finance start</span></div>
+              </div>
+            </div>
+
+            <!-- Bottom: severity heatmap -->
+            <div class="cell span-12">
+              <h4>CVE severity heatmap · 24 hourly buckets</h4>
+              <div class="severity-bar">
+                <i style="background:#1e3a3a;"></i><i style="background:#1e3a3a;"></i><i style="background:#2d5a6a;"></i><i style="background:#4ddcdc;"></i>
+                <i style="background:#1e3a3a;"></i><i style="background:#7c5cff;"></i><i style="background:#b181ff;"></i><i style="background:#1e3a3a;"></i>
+                <i style="background:#ff6ad5;"></i><i style="background:#b181ff;"></i><i style="background:#4ddcdc;"></i><i style="background:#7c5cff;"></i>
+                <i style="background:#ff6273;"></i><i style="background:#ff9c3d;"></i><i style="background:#ff6273;"></i><i style="background:#ff9c3d;"></i>
+                <i style="background:#7c5cff;"></i><i style="background:#b181ff;"></i><i style="background:#4ddcdc;"></i><i style="background:#1e3a3a;"></i>
+                <i style="background:#2d5a6a;"></i><i style="background:#1e3a3a;"></i><i style="background:#7c5cff;"></i><i style="background:#b181ff;"></i>
+              </div>
+              <div class="sub" style="display:flex;justify-content:space-between;margin-top:6px;">
+                <span>14h ago</span><span>low ░ med ▒ high ▓ crit █</span><span>now</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="verdict">
+      <div><b>Great for</b><br/>Enterprise demos, observability-savvy users, multi-team setups. Looks immediately serious and "production."</div>
+      <div class="no"><b>Not great for</b><br/>Casual / first-time users. Implementation cost is real — every tile is a chart that needs to render fast.</div>
+    </div>
+  </section>
+
+  <!-- E3: BLOOMBERG AMBER ============================== -->
+  <section>
+    <div class="opt-head">
+      <span class="opt-tag">E3</span>
+      <h3>Bloomberg Amber</h3>
+      <span class="tag">Trader terminal · pure mono · amber on black</span>
+    </div>
+    <p class="opt-sub">Maximum density. Black background, amber primary, gold for headers, terminal-green for up, red for down. Top ticker, function-key navigation, 3×3 panel grid separated by amber dividers. The "Wall Street rolodex" feel — for users running many labs and watching all of them at once.</p>
+    <div class="opt-vibes">
+      <span class="vibe">pure black</span><span class="vibe">amber + gold</span><span class="vibe">IBM Plex Mono</span><span class="vibe">ticker tape</span><span class="vibe">function keys</span>
+    </div>
+    <div class="frame">
+      <div class="frame-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url" style="color:#ff9c1c;">LBFG &lt;GO&gt;</div></div>
+      <div class="e3">
+        <div class="app">
+          <div class="top-strip">
+            <span class="brand">LABFORGE&nbsp;TERMINAL&nbsp;v0.1</span>
+            <span class="ticker">
+              RUNNING <span class="up">3↑</span> <span class="sep">·</span>
+              VMS <span class="up">12/14</span> <span class="sep">·</span>
+              QUEUE <span class="down">1</span> <span class="sep">·</span>
+              ERR <span class="up">0.8%↓</span> <span class="sep">·</span>
+              CPU <span class="up">42%</span> <span class="sep">·</span>
+              RAM <span class="up">22G/64G</span> <span class="sep">·</span>
+              NVD <span class="up">217K · FRESH</span> <span class="sep">·</span>
+              LAST BUILD <span class="up">412KB</span>
+            </span>
+            <span class="clock">2026-05-21 14:32:11 UTC</span>
+            <span class="user">CONRAD@LBFG</span>
+          </div>
+          <nav class="nav-bar">
+            <a class="active" href="#">F1 OVERVIEW</a>
+            <a href="#">F2 LABS</a>
+            <a href="#">F3 BUILDS</a>
+            <a href="#">F4 CVE</a>
+            <a href="#">F5 EVENTS</a>
+            <a href="#">F6 SYSTEM</a>
+            <a href="#" style="margin-left: auto;">⌕ SEARCH</a>
+          </nav>
+
+          <div class="panels">
+            <div class="panel">
+              <div class="h">RUNNING LABS<span class="badge">+1 / 1H</span></div>
+              <div class="big up">3</div>
+              <div class="sub">peak today: 5 at 09:12</div>
+              <pre class="spark">▁▂▃▂▃▄▅▆▇█</pre>
+            </div>
+            <div class="panel">
+              <div class="h">VMS HEALTHY<span class="badge">86%</span></div>
+              <div class="big up">12<span style="color:#ff9c1c;opacity:.6;font-size:24px;">/14</span></div>
+              <div class="sub">2 provisioning · 0 failed</div>
+              <pre class="spark">▃▄▅▆▆▇▇▇█</pre>
+            </div>
+            <div class="panel">
+              <div class="h">BUILD QUEUE<span class="badge" style="color:#ff9c1c;">ETA 02:13</span></div>
+              <div class="big">1</div>
+              <div class="sub">redteam-q2-engagement</div>
+              <pre class="spark" style="color:#ff9c1c;">▂▃▂▄▃▅▃▄▂</pre>
+            </div>
+
+            <div class="panel span-2">
+              <div class="h">LABS ─ CURRENT STATE<span class="badge">7 TOTAL</span></div>
+              <div class="lab-list">
+                <div class="head"><span>NAME</span><span>VMS</span><span>PROV</span><span>UPTIME</span><span>STATUS</span></div>
+                <div class="r"><span class="name">ad-forest-finance</span><span>6</span><span>VBOX</span><span>3:42</span><span class="st run">▲ RUN</span></div>
+                <div class="r"><span class="name">kube-prom-stack</span><span>4</span><span>VBOX</span><span>12:08</span><span class="st run">▲ RUN</span></div>
+                <div class="r"><span class="name">dmz-webapp-test</span><span>5</span><span>LIBV</span><span>0:22</span><span class="st run">▲ RUN</span></div>
+                <div class="r"><span class="name">soc-splunk-demo</span><span>4</span><span>LIBV</span><span>—</span><span class="st stop">○ STOP</span></div>
+                <div class="r"><span class="name">redteam-q2-engagement</span><span>5</span><span>VBOX</span><span>—</span><span class="st fail">▼ FAIL</span></div>
+                <div class="r"><span class="name">ot-water-utility</span><span>7</span><span>LIBV</span><span>—</span><span class="st draft">◐ DRFT</span></div>
+                <div class="r"><span class="name">mitre-attck-sim</span><span>8</span><span>VBOX</span><span>—</span><span class="st stop">○ STOP</span></div>
+              </div>
+            </div>
+            <div class="panel">
+              <div class="h">CPU<span class="badge">42%</span></div>
+              <div class="big">42<span style="font-size:20px;color:#ff9c1c;">%</span></div>
+              <pre class="spark">▂▃▅▄▆▅▇▆█▇</pre>
+              <div class="stat-row"><span class="l">load avg</span><span class="v">2.1</span></div>
+              <div class="stat-row"><span class="l">cores</span><span class="v">12</span></div>
+            </div>
+
+            <div class="panel">
+              <div class="h">ERR RATE<span class="badge">↓ −0.3</span></div>
+              <div class="big" style="color:#ff3030;">0.8%</div>
+              <pre class="spark" style="color:#ff3030;">█▇▆▅▅▄▃▃▂▁</pre>
+              <div class="stat-row"><span class="l">prov fails</span><span class="v" style="color:#ff3030;">1</span></div>
+              <div class="stat-row"><span class="l">build fails</span><span class="v" style="color:#00ff7f;">0</span></div>
+            </div>
+            <div class="panel">
+              <div class="h">NVD CACHE<span class="badge">FRESH · 4M</span></div>
+              <div class="big">217K</div>
+              <div class="sub">last sync 14:28:11 · stale @ 14:43</div>
+              <div class="stat-row"><span class="l">rate limit</span><span class="v" style="color:#ff9c1c;">78%</span></div>
+              <div class="stat-row"><span class="l">key set</span><span class="v" style="color:#00ff7f;">YES</span></div>
+            </div>
+            <div class="panel">
+              <div class="h">EVENT TAPE<span class="badge">● LIVE</span></div>
+              <div class="feed">
+                <div class="feed-row"><span class="ts">14:32</span><span class="src">FW-EDG</span><span class="msg ok">HEALTHY</span></div>
+                <div class="feed-row"><span class="ts">14:31</span><span class="src">GEN   </span><span class="msg">VFILE 412KB</span></div>
+                <div class="feed-row"><span class="ts">14:29</span><span class="src">NVD   </span><span class="msg" style="color:#ff9c1c;">RATE 78%</span></div>
+                <div class="feed-row"><span class="ts">14:24</span><span class="src">CVE   </span><span class="msg">PIN 2024-38063</span></div>
+                <div class="feed-row"><span class="ts">14:18</span><span class="src">BUILD </span><span class="msg err">VMWARE MISSING</span></div>
+                <div class="feed-row"><span class="ts">14:15</span><span class="src">DC01  </span><span class="msg ok">FOREST OK</span></div>
+                <div class="feed-row"><span class="ts">14:12</span><span class="src">WS-CFO</span><span class="msg">JOINED</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="footer-strip">
+            <span><span class="k">F1</span> HELP</span>
+            <span><span class="k">F2</span> NEW LAB</span>
+            <span><span class="k">F3</span> FILTER</span>
+            <span><span class="k">F4</span> SHELL</span>
+            <span><span class="k">F5</span> RELOAD</span>
+            <span style="margin-left:auto;">labforge v0.1.0 · ws://localhost:8000/ops · refresh 2s · <span class="k">Q</span> QUIT</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="verdict">
+      <div><b>Great for</b><br/>Power users running many labs, finance-adjacent security teams, anyone who treats their host like a trading desk. Iconic and memorable.</div>
+      <div class="no"><b>Not great for</b><br/>Onboarding new users. Amber-on-black has accessibility considerations. Possible to feel costumed if overplayed.</div>
+    </div>
+  </section>
+
+  <!-- COMPARE -->
+  <section class="compare">
+    <h2>Pick a personality</h2>
+    <p class="lead">Soft Light directions all stay calm but pick different references; Ops Console directions all stay dense but pick different intensities.</p>
+    <table>
+      <thead>
+        <tr><th>Variant</th><th>Reference</th><th>Best user</th><th>Mood</th><th>Implementation cost</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>C1 · Editorial Cream</td><td>Notion / Apple Notes</td><td>Solo practitioner, docs author</td><td>Quiet, considered</td><td>Low — type + spacing only</td></tr>
+        <tr><td>C2 · Crisp White SaaS</td><td>Stripe / Vercel / Linear</td><td>Trial users, hosted-product buyers</td><td>Professional, modern</td><td>Low — well-known patterns</td></tr>
+        <tr><td>C3 · Material Paper</td><td>Google consumer apps</td><td>Cross-functional / non-engineer</td><td>Friendly, approachable</td><td>Medium — multi-color states</td></tr>
+        <tr><td>E1 · GitHub Dark</td><td>GitHub Actions / Vercel logs</td><td>Devops engineer</td><td>Clean, focused</td><td>Low — close to current dark</td></tr>
+        <tr><td>E2 · Datadog Color</td><td>Datadog / New Relic</td><td>Enterprise / multi-team</td><td>Vivid, productive</td><td>High — real charts everywhere</td></tr>
+        <tr><td>E3 · Bloomberg Amber</td><td>Bloomberg Terminal</td><td>Power user, finance-adjacent</td><td>Iconic, intense</td><td>Medium — but high commitment</td></tr>
+      </tbody>
+    </table>
+    <div class="pick">
+      <b>My take.</b> If you want Soft Light to feel like <i>LabForge</i> and not a generic SaaS, pick <b>C1 · Editorial Cream</b> — the serif gives it identity that C2 lacks. If you want broad adoption beyond hardcore security folks, <b>C3 · Material Paper</b> wins.<br/>
+      For Ops Console, <b>E1 · GitHub Dark</b> is the safest, fastest-to-ship, and most familiar to your audience. <b>E2 · Datadog Color</b> is the most impressive in a demo but is the heaviest lift. <b>E3 · Bloomberg Amber</b> is the most memorable — if you go this route, ship it as an opt-in <span class="mono">/terminal</span> mode rather than the default.<br/>
+      Pairing recommendation: <b>C1 + E1</b> if you want a coherent product (calm by default, dense when needed). Tell me which combo wins and I'll extend it across canvas / node config / CVE picker / generate / live-run.
+    </div>
+  </section>
+</div>
+
+</body>
+</html>

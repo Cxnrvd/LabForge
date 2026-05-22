@@ -29,6 +29,7 @@ from labforge_core.models import Lab, LabHeartbeat, get_session
 from labforge_core.schemas.api import (
     ActivityEntry,
     BuildLogChunk,
+    BuildPhases,
     BuildRequest,
     BuildResponse,
     BuildStatus,
@@ -38,12 +39,14 @@ from labforge_core.schemas.api import (
 )
 from labforge_core.services.build_runner import (
     BuildPrereqError,
+    parse_per_vm_phases,
     read_build_status,
     read_log_chunk,
     start_build,
     stop_build,
     vagrant_available,
 )
+from labforge_schema import LabConfig
 from labforge_core.services.live_bus import bus
 
 _LOGGER = logging.getLogger("labforge.labs")
@@ -55,8 +58,14 @@ _AUTH = [Depends(require_agent_token)]
 @router.get("", response_model=list[LabSummary])
 def list_labs(
     session: Annotated[Session, Depends(get_session)],
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
 ) -> list[LabSummary]:
-    rows = session.exec(select(Lab).order_by(Lab.updated_at.desc())).all()
+    """Most-recently-updated first; pagination caps the response so a long
+    history doesn't blow out the dashboard's initial render."""
+    rows = session.exec(
+        select(Lab).order_by(Lab.updated_at.desc()).offset(offset).limit(limit)
+    ).all()
     return [LabSummary.model_validate(r, from_attributes=True) for r in rows]
 
 
@@ -304,15 +313,89 @@ def build_status(
     snap = read_build_status(workspace)
     # Reflect terminal state into the persisted lab status the dashboard
     # already shows on /labs.
+    #   succeeded → running       (everything came up clean)
+    #   partial   → partial       (build exited non-zero but at least one
+    #                              VM is alive — common when one VM's SSH
+    #                              hand-shake times out but the others
+    #                              are reachable; user can still poke
+    #                              the live ones)
+    #   failed    → failed        (build exited non-zero AND no VMs alive)
+    #   aborted   → failed        (treated as a hard stop for the lab row)
+    new_status: str | None = None
     if snap["phase"] == "succeeded" and lab.status == "building":
-        lab.status = "running"
-        session.add(lab)
-        session.commit()
+        new_status = "running"
+    elif snap["phase"] == "partial" and lab.status in ("building", "failed"):
+        # Allow promotion FROM failed too — a prior status poll may have
+        # written `failed` before all VMs finished hand-shake.
+        new_status = "partial"
     elif snap["phase"] in ("failed", "aborted") and lab.status == "building":
-        lab.status = "failed"
+        new_status = "failed"
+    if new_status is not None and new_status != lab.status:
+        lab.status = new_status
+        lab.updated_at = datetime.utcnow()
         session.add(lab)
         session.commit()
     return BuildStatus(**snap)
+
+
+@router.get("/{lab_id}/build/phases", response_model=BuildPhases)
+def build_phases(
+    lab_id: int,
+    session: Annotated[Session, Depends(get_session)],
+) -> BuildPhases:
+    """Per-VM phase snapshot driven by parsing ``build.log``.
+
+    The /monitor topology view polls this every few seconds to colour
+    each node's status ring. Cheap regex scan — see
+    ``services.build_runner.parse_per_vm_phases`` for the markers.
+    """
+    lab = session.get(Lab, lab_id)
+    if lab is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": f"Lab {lab_id} not found", "code": "not_found"},
+        )
+    workspace = _resolve_workspace(lab)
+    per_vm = parse_per_vm_phases(workspace)
+    snap = read_build_status(workspace)
+    return BuildPhases(per_vm=per_vm, overall=snap.get("phase", "unknown"))
+
+
+@router.get("/{lab_id}/topology", response_model=LabConfig)
+def get_lab_topology(
+    lab_id: int,
+    session: Annotated[Session, Depends(get_session)],
+) -> LabConfig:
+    """Return the topology JSON that was frozen into the workspace.
+
+    The build runner writes ``topology.json`` into the workspace dir at
+    build time. Serving it back here lets the live-topology view on
+    /monitor render the same canvas the user designed, without needing
+    a separate persisted-topology slug.
+    """
+    lab = session.get(Lab, lab_id)
+    if lab is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": f"Lab {lab_id} not found", "code": "not_found"},
+        )
+    workspace = _resolve_workspace(lab)
+    topology_file = workspace / "topology.json"
+    if not topology_file.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "detail": f"Lab {lab_id} has no topology.json in its workspace",
+                "code": "no_topology",
+            },
+        )
+    try:
+        return LabConfig.model_validate_json(topology_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"detail": f"Could not parse topology.json: {exc}", "code": "bad_topology"},
+        ) from exc
 
 
 @router.post(

@@ -5,12 +5,10 @@ import {
   Background,
   BackgroundVariant,
   Controls,
-  MiniMap,
   ReactFlow,
   ReactFlowProvider,
   useReactFlow,
   type Connection,
-  type Node as RFNode,
   type OnConnect,
 } from "@xyflow/react";
 
@@ -34,11 +32,14 @@ import {
   hasSeenBuild,
   markBuildSeen,
 } from "@/lib/canvas/sample-topology";
-import { NODE_STYLES } from "@/lib/utils/node-style";
 import type { NodeType, Protocol } from "@labforge/schema";
 import { ConnectionPopover } from "@/components/panels/ConnectionPopover";
 
-function InnerCanvas() {
+interface InnerCanvasProps {
+  hideToolbar?: boolean;
+}
+
+function InnerCanvas({ hideToolbar = false }: InnerCanvasProps) {
   const nodes = useTopologyStore((s) => s.nodes);
   const edges = useTopologyStore((s) => s.edges);
   const fitToken = useTopologyStore((s) => s.fitToken);
@@ -49,9 +50,35 @@ function InnerCanvas() {
   const loadTopology = useTopologyStore((s) => s.loadTopology);
   const addNode = useTopologyStore((s) => s.addNode);
 
-  const { fitView, screenToFlowPosition } = useReactFlow();
+  const { fitView, screenToFlowPosition, zoomTo } = useReactFlow();
   const lastFitToken = React.useRef(0);
   const highlight = useAttackHighlight();
+  // Local toggle for the dotted background grid. Listens for the
+  // tb3 toolbar's "▦ Grid" button via a window event.
+  const [showGrid, setShowGrid] = React.useState(true);
+
+  // tb3 toolbar buttons on /build live OUTSIDE the ReactFlowProvider,
+  // so they communicate with this inner canvas via window events
+  // instead of direct refs.
+  React.useEffect(() => {
+    const onFit = (): void => {
+      fitView({ padding: 0.25, duration: 450, minZoom: 0.2, maxZoom: 1.5 });
+    };
+    const onZoom100 = (): void => {
+      zoomTo(1, { duration: 250 });
+    };
+    const onToggleGrid = (): void => {
+      setShowGrid((v) => !v);
+    };
+    window.addEventListener("labforge:fit", onFit);
+    window.addEventListener("labforge:zoom-100", onZoom100);
+    window.addEventListener("labforge:toggle-grid", onToggleGrid);
+    return () => {
+      window.removeEventListener("labforge:fit", onFit);
+      window.removeEventListener("labforge:zoom-100", onZoom100);
+      window.removeEventListener("labforge:toggle-grid", onToggleGrid);
+    };
+  }, [fitView, zoomTo]);
 
   // When the attack-path overlay is active, dim every edge that isn't on a
   // ranked path. Computed in a memo so we don't allocate new edge style
@@ -174,28 +201,27 @@ function InnerCanvas() {
         proOptions={{ hideAttribution: true }}
         defaultEdgeOptions={{ type: "protocol" }}
       >
-        <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
-        <Controls position="bottom-right" />
-        <MiniMap
-          position="bottom-left"
-          pannable
-          zoomable
-          nodeColor={(node: RFNode) => {
-            const t = (node.type ?? "workstation") as NodeType;
-            return NODE_STYLES[t]?.miniMapColor ?? "#64748b";
-          }}
-          maskColor="hsl(var(--background) / 0.6)"
-          className="!bg-card !border"
-        />
+        {showGrid && <Background variant={BackgroundVariant.Dots} gap={20} size={1} />}
+        {/* CSS in labforge-d10.css overrides position to right-edge,
+            vertically centred — sits below the Attack Paths panel. */}
+        <Controls position="top-right" />
       </ReactFlow>
 
-      <Toolbar />
+      {!hideToolbar && <Toolbar />}
       <BuildPreflightBanner />
       <ValidationPanel />
 
-      {/* Left-rail palette: drag a type onto the canvas, or click/Enter to
-          drop it at the centre. */}
-      <NodePalette className="absolute left-4 top-20 w-56" />
+      {/*
+        z-index ladder for floating canvas chrome:
+          z-50  ConnectionPopover modal + OnboardingTour coach-marks
+          z-40  Toolbar + NodeConfigPanel right drawer
+          z-30  BuildPreflightBanner (red/amber blocker, must be visible)
+          z-20  NodePalette (left), AttackPathOverlay (right), LabBudgetBar (bottom)
+          z-10  React Flow Controls + MiniMap (their built-in z)
+        Left-rail palette is collapsible via a chevron on its header so the
+        user can claim back the left edge of the canvas when needed.
+      */}
+      <NodePalette className="absolute left-4 top-4 bottom-4 z-20" />
 
       {/* Live RAM/CPU/time budget; pinned bottom-left, hides when empty. */}
       <LabBudgetBar />
@@ -218,10 +244,19 @@ function InnerCanvas() {
   );
 }
 
-export function LabCanvas() {
+export interface LabCanvasProps {
+  /**
+   * When true, the floating in-canvas Toolbar (legacy actions row) is
+   * suppressed. The D10 /build page has all those actions in the page-
+   * level tb3 toolbar, so rendering them twice is redundant.
+   */
+  hideToolbar?: boolean;
+}
+
+export function LabCanvas({ hideToolbar = false }: LabCanvasProps = {}) {
   return (
     <ReactFlowProvider>
-      <InnerCanvas />
+      <InnerCanvas hideToolbar={hideToolbar} />
     </ReactFlowProvider>
   );
 }

@@ -11,12 +11,13 @@ echo "[$(date -Is)] === LabForge provisioner start for {{ node.config.hostname }
 
 # Hostname — Vagrant already sets this from config.vm.hostname, but we keep a
 # fallback so the script works outside Vagrant too.
-hostnamectl set-hostname "{{ node.config.hostname }}" 2>/dev/null || true
+hostnamectl set-hostname {{ node.config.hostname | bash_q }} 2>/dev/null || true
 
 # Set the topology-defined password on the default vagrant user. We don't
 # create a fresh user — the `vagrant` account already has sudo + SSH keys
-# wired up by the Vagrant base box.
-echo "vagrant:{{ node.config.credentials.password }}" | chpasswd 2>/dev/null || true
+# wired up by the Vagrant base box. The password is passed via printf so
+# shlex-quoted values can't break out of the chpasswd line.
+printf '%s\n' "vagrant:"{{ node.config.credentials.password | bash_q }} | chpasswd 2>/dev/null || true
 
 {% if install_blocks %}
 echo "[+] Applying {{ install_blocks | length }} role install block(s)..."

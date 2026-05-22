@@ -17,7 +17,14 @@ export function Providers({ children }: { children: React.ReactNode }) {
       }),
   );
   return (
-    <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
+    <ThemeProvider
+      // Drive BOTH shadcn (`.dark` class) and the design-system CSS
+      // (`[data-theme="..."]` attribute) from a single next-themes
+      // instance, so flipping one toggle re-themes both.
+      attribute={["class", "data-theme"]}
+      defaultTheme="dark"
+      enableSystem
+    >
       <QueryClientProvider client={client}>
         <TooltipProvider delayDuration={200}>{children}</TooltipProvider>
         <Toaster theme="system" richColors closeButton />

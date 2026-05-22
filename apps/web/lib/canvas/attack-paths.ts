@@ -61,7 +61,7 @@ const PRIVILEGED_PROTOCOLS = new Set(["ssh", "rdp", "smb", "ldap", "kerberos"]);
 function roleScore(node: TopologyNode): number {
   let s = 0;
   for (const role of node.config.roles) {
-    const bare = role.split("@", 1)[0];
+    const bare = role.split("@", 1)[0] ?? role;
     if (HIGH_VALUE_ROLES.has(bare)) s += 10;
   }
   return s;
@@ -170,7 +170,7 @@ export function computeAttackPaths(topology: LabConfig, maxDepth = 5): AttackPat
   }
 
   paths.sort((a, b) => b.score - a.score);
-  const maxScore = paths.length > 0 ? paths[0].score : 0;
+  const maxScore = paths.length > 0 && paths[0] ? paths[0].score : 0;
   return { paths, involvedEdges, involvedNodes, maxScore };
 }
 

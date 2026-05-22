@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import io
 import re
+import shlex
 import zipfile
 from dataclasses import dataclass
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
 
-from labforge_schema import LabConfig, NodeType, OsType, TopologyNode
+from labforge_schema import LabConfig, NodeType, OsType, Provider, TopologyNode
 
 from labforge_core.provisioners.cve_lookup import resolve_cve_payload
 from labforge_core.provisioners.role_installers import (
@@ -29,16 +30,24 @@ from labforge_core.settings import get_settings
 # OpenWrt, ICS RTOS like VxWorks / Siemens SIMATIC, IP-camera firmware)
 # falls back to ubuntu/jammy64 and the provisioner sets up the appropriate
 # emulator (OpenPLC, MediaMTX, dnsmasq+iptables for routers, etc.).
-SAFE_FALLBACK_BOX = "ubuntu/jammy64"
+# Use the same Ubuntu LTS for every OS that has no public Vagrant box
+# (router/firewall appliances, ICS RTOS, camera firmware, niche distros).
+# Pinning to bento/ubuntu-22.04 keeps everything in the same cache
+# entry as UBUNTU_2204 — one provider variant per provider, no
+# duplicate downloads.
+SAFE_FALLBACK_BOX = "bento/ubuntu-22.04"
 
 BOX_MAP: dict[OsType, str] = {
-    # ---- Windows: gusztavvargadr maintains evaluation boxes for all of these
-    OsType.WINDOWS_10: "gusztavvargadr/windows-10",
-    OsType.WINDOWS_11: "gusztavvargadr/windows-10",
-    OsType.WINDOWS_SERVER_2019: "gusztavvargadr/windows-server-2019",
-    OsType.WINDOWS_SERVER_2022: "gusztavvargadr/windows-server-2022",
-    # ---- Mainstream Linux servers
-    OsType.UBUNTU_2204: "ubuntu/jammy64",
+    # ---- Windows: StefanScherer ships eval-licensed boxes for both
+    # ``virtualbox`` and ``vmware_desktop`` providers on Win10/11/2019/2022,
+    # so we don't have to vendor-switch when the topology changes provider.
+    OsType.WINDOWS_10: "StefanScherer/windows_10",
+    OsType.WINDOWS_11: "StefanScherer/windows_11",
+    OsType.WINDOWS_SERVER_2019: "StefanScherer/windows_2019",
+    OsType.WINDOWS_SERVER_2022: "StefanScherer/windows_2022",
+    # ---- Mainstream Linux servers. bento/ubuntu-22.04 ships both providers
+    # publicly; ubuntu/jammy64 is virtualbox-only on Vagrant Cloud.
+    OsType.UBUNTU_2204: "bento/ubuntu-22.04",
     OsType.UBUNTU_2404: "bento/ubuntu-24.04",
     OsType.DEBIAN_12: "debian/bookworm64",
     OsType.CENTOS_STREAM_9: "generic/centos9s",
@@ -52,8 +61,12 @@ BOX_MAP: dict[OsType, str] = {
     OsType.MACOS_SONOMA: SAFE_FALLBACK_BOX,
     OsType.MACOS_SEQUOIA: SAFE_FALLBACK_BOX,
     # ---- Offensive / privacy
-    OsType.KALI_ROLLING: "kalilinux/rolling",
-    OsType.PARROT_SECURITY: "kalilinux/rolling",  # closest stand-in
+    # The official kalilinux/rolling box is ~3 GB and isn't always in the
+    # local cache; bootstrap an Ubuntu base instead and let the role
+    # installers (nmap, metasploit, impacket, etc.) add the offensive
+    # toolchain on top. Same VM, faster first build.
+    OsType.KALI_ROLLING: "bento/ubuntu-22.04",
+    OsType.PARROT_SECURITY: "bento/ubuntu-22.04",
     OsType.BLACKARCH_ROLLING: "archlinux/archlinux",
     OsType.TAILS_6: "debian/bookworm64",
     OsType.WHONIX_17: "debian/bookworm64",
@@ -95,6 +108,24 @@ def is_emulated_os(os: OsType) -> bool:
     return os not in _REAL_BOX_OSES
 
 
+# Vagrant provider names differ from our LabConfig enum: the official
+# Vagrant VMware plugin registers itself as ``vmware_desktop`` on
+# Windows/Linux (and ``vmware_fusion`` on macOS, which we don't target),
+# not ``vmware``. The Vagrantfile and the ``--provider`` CLI flag must
+# both use the registered plugin name or Vagrant errors with "Provider
+# 'vmware' could not be found". Keep this mapping in one place so the
+# generator and the build runner can't drift.
+_VAGRANT_PROVIDER_NAMES: dict[Provider, str] = {
+    Provider.VIRTUALBOX: "virtualbox",
+    Provider.VMWARE: "vmware_desktop",
+    Provider.LIBVIRT: "libvirt",
+}
+
+
+def vagrant_provider_name(provider: Provider) -> str:
+    return _VAGRANT_PROVIDER_NAMES.get(provider, provider.value)
+
+
 @dataclass(frozen=True)
 class GeneratedArtifacts:
     vagrantfile: str
@@ -108,9 +139,32 @@ def _safe_slug(value: str) -> str:
     return slug.lower() or "node"
 
 
+def bash_q(value: object) -> str:
+    """Render ``value`` as a POSIX-shell-safe quoted token.
+
+    Use this filter on EVERY template interpolation that lands inside a
+    bash command, even when the source field is regex-validated — the
+    schema can be relaxed later, and tojson-style universal escaping is
+    cheaper than auditing each callsite again.
+    """
+    return shlex.quote("" if value is None else str(value))
+
+
+def ps_q(value: object) -> str:
+    """Render ``value`` as a single-quoted PowerShell string literal.
+
+    PowerShell single quotes are inert except for the single-quote
+    character itself, which is escaped by doubling. Use this for any
+    string interpolated into a PowerShell command — including SecureString
+    payloads, hostnames, and IPs surfaced by the topology.
+    """
+    s = "" if value is None else str(value)
+    return "'" + s.replace("'", "''") + "'"
+
+
 def _jinja_env() -> Environment:
     settings = get_settings()
-    return Environment(
+    env = Environment(
         loader=FileSystemLoader(str(settings.jinja_dir)),
         autoescape=select_autoescape(default=False),
         undefined=StrictUndefined,
@@ -118,6 +172,9 @@ def _jinja_env() -> Environment:
         trim_blocks=True,
         lstrip_blocks=True,
     )
+    env.filters["bash_q"] = bash_q
+    env.filters["ps_q"] = ps_q
+    return env
 
 
 def _parse_role(role: str) -> tuple[str, str | None]:
@@ -279,6 +336,7 @@ def generate_artifacts(
         topology=topology,
         vagrant_nodes=vagrant_nodes,
         external_nodes=external_nodes,
+        vagrant_provider=vagrant_provider_name(topology.provider),
     )
 
     hosts_file = ""

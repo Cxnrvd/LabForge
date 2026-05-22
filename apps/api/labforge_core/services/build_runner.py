@@ -33,7 +33,7 @@ from sqlmodel import Session, select
 from labforge_schema import LabConfig
 
 from labforge_core.models import Lab
-from labforge_core.services.generator import generate_artifacts
+from labforge_core.services.generator import generate_artifacts, vagrant_provider_name
 from labforge_core.settings import get_settings
 
 BUILD_LOG = "build.log"
@@ -192,7 +192,7 @@ def start_build(
     session.commit()
     session.refresh(lab)
 
-    pid = _spawn_vagrant_up(workspace, topology.provider.value)
+    pid = _spawn_vagrant_up(workspace, vagrant_provider_name(topology.provider))
     # Spawn the heartbeat daemon so once VMs come up the dashboard
     # populates without the user having to run `labforge run` in parallel.
     try:
@@ -248,8 +248,108 @@ def read_log_chunk(workspace: Path, since: int = 0, max_bytes: int = 64 * 1024) 
     }
 
 
+def _provider_vms_running(workspace: Path) -> int:
+    """Cheap, per-provider probe: how many of this workspace's VMs are up?
+
+    Each Vagrant-managed VM stamps its hypervisor UUID into
+    ``.vagrant/machines/<name>/<provider>/id`` when it's first created.
+    We collect those UUIDs and cross-reference against the hypervisor's
+    running-VM list — UUID match is provider-canonical and survives
+    every renaming convention (the human-readable VM name embeds the
+    topology label which we can't reverse-engineer from the workspace
+    slug).
+
+    Returns the count of VMs whose hypervisor process can still be
+    observed. Returns -1 when we can't probe at all (no .vagrant dir,
+    no provider CLI on PATH) — callers treat that as "unknown" and do
+    NOT promote a failure to partial in that case.
+    """
+    machines_dir = workspace / ".vagrant" / "machines"
+    if not machines_dir.exists():
+        return -1
+
+    # Collect (machine_name, provider, uuid) tuples for every VM
+    # Vagrant has created. We use the directory layout instead of
+    # parsing state files because the layout is documented and
+    # stable across Vagrant 2.2 → 2.4.
+    expected: list[tuple[str, str, str]] = []
+    try:
+        for machine_dir in machines_dir.iterdir():
+            if not machine_dir.is_dir():
+                continue
+            machine = machine_dir.name
+            for provider_dir in machine_dir.iterdir():
+                if not provider_dir.is_dir():
+                    continue
+                id_file = provider_dir / "id"
+                if not id_file.exists():
+                    continue
+                try:
+                    uuid = id_file.read_text(encoding="utf-8").strip()
+                except OSError:
+                    continue
+                if uuid:
+                    expected.append((machine, provider_dir.name, uuid))
+    except OSError:
+        return -1
+    if not expected:
+        return -1
+
+    # We only check VirtualBox + VMware because they're the two
+    # providers LabForge supports today. libvirt would require
+    # virsh + a session bus; bail to -1 in that case so the caller
+    # doesn't make a decision on stale data.
+    providers = {p for _, p, _ in expected}
+    if "virtualbox" not in providers:
+        return -1
+
+    try:
+        out = subprocess.run(
+            _vboxmanage_command() + ["list", "runningvms"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        running_blob = out.stdout or ""
+    except (OSError, subprocess.TimeoutExpired):
+        return -1
+
+    # Each line looks like:  "labforge-foo-kali" {2644078d-...}
+    # We just look for the UUIDs Vagrant stamped — name renaming
+    # cannot fool the match.
+    alive = sum(
+        1 for _machine, provider, uuid in expected
+        if provider == "virtualbox" and uuid in running_blob
+    )
+    return alive
+
+
+def _vboxmanage_command() -> list[str]:
+    """Locate VBoxManage on PATH or at the Windows default install dir."""
+    found = shutil.which("VBoxManage") or shutil.which("vboxmanage")
+    if found:
+        return [found]
+    if os.name == "nt":
+        default = Path(r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe")
+        if default.exists():
+            return [str(default)]
+    return ["VBoxManage"]
+
+
 def read_build_status(workspace: Path) -> dict:
-    """Resolve build state from sentinel files."""
+    """Resolve build state from sentinel files.
+
+    Normally the ``.build.exit`` exit code is authoritative — zero means
+    succeeded, anything else failed, plus the ``.build.aborted`` flag
+    overrides to ``aborted``. The one tricky case the original logic got
+    wrong: ``vagrant up`` can exit non-zero (e.g. SSH timeout on the last
+    VM) WHILE earlier VMs in the multi-machine config are healthy and
+    SSH-reachable. We now poll the hypervisor's running-VM list and, when
+    at least one of this workspace's VMs is alive, downgrade ``failed``
+    to ``partial`` so the dashboard reflects what the user can actually
+    see in VirtualBox / VMware.
+    """
     pid_file = workspace / BUILD_PID
     exit_file = workspace / BUILD_EXIT
     aborted_file = workspace / BUILD_ABORTED
@@ -262,8 +362,14 @@ def read_build_status(workspace: Path) -> dict:
         finished_at = body[1] if len(body) > 1 else None
         if aborted_file.exists():
             phase = "aborted"
+        elif exit_code == 0:
+            phase = "succeeded"
         else:
-            phase = "succeeded" if exit_code == 0 else "failed"
+            # Build exited non-zero. Check if any VM is still alive in
+            # the hypervisor — if so this is a partial success rather
+            # than a hard failure.
+            alive = _provider_vms_running(workspace)
+            phase = "partial" if alive > 0 else "failed"
         return {
             "phase": phase,
             "exit_code": exit_code,
@@ -278,6 +384,80 @@ def read_build_status(workspace: Path) -> dict:
             "pid": int(pid_file.read_text().strip()),
         }
     return {"phase": "unknown", "exit_code": None, "finished_at": None, "pid": None}
+
+
+# Phase parsing — every Vagrant log line prefixed `==> hostname:` is
+# enough to drive a coarse 5-step stepper. The patterns below match the
+# observed text of `vagrant up` for both the virtualbox and the
+# vmware_desktop providers. Order matters: later matches override earlier
+# ones because a VM that has reached "Running provisioner" has already
+# passed the boot/network steps even if those markers are also present.
+_VM_LINE_RE = re.compile(r"==>\s+([A-Za-z0-9][A-Za-z0-9._-]*):\s+(.*)$")
+_PHASE_MARKERS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("downloading", re.compile(r"^(Downloading:|Box Provider:|Adding box)")),
+    ("importing", re.compile(r"^(Importing base box|Cloning VMware VM)")),
+    ("booting", re.compile(r"^(Booting VM|Waiting for the VM to receive an address|Starting the VMware VM)")),
+    ("network", re.compile(r"^(Setting hostname|Configuring (?:and enabling )?network|Preparing network adapters|Forwarding ports)")),
+    ("provisioning", re.compile(r"^Running provisioner")),
+    ("ready", re.compile(r"^Machine booted and ready!|LabForge provisioner complete")),
+)
+_PHASE_ORDER: tuple[str, ...] = (
+    "defined",
+    "downloading",
+    "importing",
+    "booting",
+    "network",
+    "provisioning",
+    "ready",
+)
+_PHASE_RANK = {p: i for i, p in enumerate(_PHASE_ORDER)}
+
+
+def parse_per_vm_phases(workspace: Path) -> dict[str, str]:
+    """Scan build.log and return ``{hostname: phase}`` per VM.
+
+    The returned phase is the highest-ranked one we saw for that VM —
+    so a brief "booting" line followed by "Running provisioner: shell"
+    yields ``provisioning``. Hostnames that have never appeared in the
+    log map to nothing (omitted from the dict). VMs that hit an error
+    marker map to ``failed``.
+
+    Cheap regex pass; runs once per request, no caching. build.log
+    rarely exceeds ~1 MB even for long builds so this is fine.
+    """
+    path = workspace / BUILD_LOG
+    if not path.exists():
+        return {}
+    out: dict[str, str] = {}
+    error_seen: set[str] = set()
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            for raw in fh:
+                m = _VM_LINE_RE.match(raw)
+                if not m:
+                    continue
+                host, rest = m.group(1), m.group(2)
+                # Any obvious error from this VM line marks it failed,
+                # but only after it has at least started progressing —
+                # an early "Box could not be found" isn't a failure.
+                lower = rest.lower()
+                if (
+                    "error:" in lower
+                    or "exception" in lower
+                    or "could not connect" in lower
+                ) and host in out:
+                    error_seen.add(host)
+                for phase, pattern in _PHASE_MARKERS:
+                    if pattern.match(rest):
+                        existing = out.get(host)
+                        if existing is None or _PHASE_RANK[phase] > _PHASE_RANK[existing]:
+                            out[host] = phase
+                        break
+    except OSError:
+        return {}
+    for host in error_seen:
+        out[host] = "failed"
+    return out
 
 
 def is_pid_alive(pid: int) -> bool:
@@ -369,7 +549,7 @@ def stop_build(workspace: Path, *, kill_timeout_s: float = 5.0) -> dict:
                 if os.name == "nt":
                     subprocess.call(["taskkill", "/F", "/T", "/PID", str(pid)])
                 else:
-                    os.kill(pid, signal.SIGKILL)
+                    os.kill(pid, signal.SIGKILL)  # type: ignore[attr-defined]
                 force_killed = True
             except (ProcessLookupError, OSError) as exc:
                 _LOGGER.info("stop_build_kill_failed pid=%s err=%s", pid, exc)

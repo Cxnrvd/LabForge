@@ -2,250 +2,421 @@
 
 import * as React from "react";
 import Link from "next/link";
-import {
-  BookOpen,
-  CheckCircle2,
-  ChevronRight,
-  Circle,
-  GraduationCap,
-  ShieldAlert,
-} from "lucide-react";
-
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 
 /**
- * Learning paths — curriculum mode.
+ * Learning paths — three curated curricula rendered with the LabForge
+ * design-system classes (apps/web/styles/labforge-ds.css). Progress
+ * is tracked per-user in localStorage under `labforge.learn-progress`
+ * as `{ [pathId]: doneCount }`.
  *
- * A learning path is an ordered list of bundled templates, each tagged
- * with the ATT&CK tactic it covers. The user's progress is stored in
- * localStorage (no auth yet) so they can resume across sessions.
- *
- * This scaffold ships three opinionated paths — Defender / Red-Teamer /
- * OT Engineer — pointing at templates that already exist in
- * ``packages/schema/templates``. Adding a new path is a single object
- * in ``PATHS`` below.
+ * The page renders inside the global AppShell — do NOT wrap it in a
+ * sidebar or topbar here.
  */
-const PROGRESS_KEY = "labforge.learn.progress.v1";
 
-interface PathStep {
-  templateId: string;
+const PROGRESS_KEY = "labforge.learn-progress";
+
+type Track = "blue" | "red" | "amber";
+
+type LessonKind = "reading" | "workshop" | "template";
+
+interface Lesson {
   title: string;
-  blurb: string;
-  attack: string;
+  kind: LessonKind;
+  /** Template id when kind === "template" — opens /canvas?template=… */
+  templateId?: string;
 }
 
 interface LearningPath {
   id: string;
   title: string;
+  track: Track;
   audience: string;
-  icon: React.ComponentType<{ className?: string }>;
   blurb: string;
-  steps: PathStep[];
+  lessons: Lesson[];
 }
 
 const PATHS: LearningPath[] = [
   {
-    id: "defender",
-    title: "Blue Team Foundations",
-    audience: "SOC analyst / Threat hunter",
-    icon: ShieldAlert,
+    id: "blue-team",
+    title: "Blue Team Defense",
+    track: "blue",
+    audience: "SOC analyst · Detection engineer",
     blurb:
-      "Build the muscle to triage AD attacks, write detection content, and survive a tabletop with a vendor.",
-    steps: [
+      "SIEM, EDR, and detection engineering — investigate real incidents inside a contained lab.",
+    lessons: [
+      { title: "Why detection beats prevention", kind: "reading" },
+      { title: "Spin up Splunk + Wazuh", kind: "template", templateId: "dfir-lab" },
+      { title: "Generate Sysmon events", kind: "workshop" },
+      { title: "Write your first detection", kind: "workshop" },
+      { title: "Tune false positives", kind: "workshop" },
+      { title: "Threat hunting with KQL", kind: "workshop" },
+      { title: "MITRE ATT&CK mapping", kind: "reading" },
       {
-        templateId: "basic-ad",
-        title: "Stand up an AD forest",
-        blurb: "Get comfortable with Kerberos, RDP, and AS-REP roasting in a 3-node lab.",
-        attack: "credential_access",
-      },
-      {
-        templateId: "dfir-lab",
-        title: "Wire up Sysmon + Splunk",
-        blurb: "Stream Windows endpoint telemetry, then run an adversary emulator and confirm the alert.",
-        attack: "execution",
-      },
-      {
+        title: "Final exercise: Active intrusion",
+        kind: "template",
         templateId: "red-team-range",
-        title: "Defend a full DMZ",
-        blurb: "Eight nodes, mixed Windows + Linux, a firewall, and a Kali attacker. Catch the chain.",
-        attack: "lateral_movement",
       },
     ],
   },
   {
-    id: "red",
-    title: "Offensive Operator",
-    audience: "Red teamer / Pentester",
-    icon: GraduationCap,
-    blurb: "Walk through the chain from initial access to data exfil in a permissioned lab.",
-    steps: [
+    id: "offensive-red-team",
+    title: "Offensive Red Team",
+    track: "red",
+    audience: "Red teamer · Pentester",
+    blurb:
+      "Walk an ATT&CK chain end-to-end: recon, initial access, lateral movement, exfil.",
+    lessons: [
+      { title: "Recon basics with nmap", kind: "reading" },
+      { title: "Active Directory enumeration", kind: "template", templateId: "basic-ad" },
+      { title: "Kerberoasting", kind: "workshop" },
+      { title: "Lateral movement via SMB", kind: "workshop" },
+      { title: "Persistence + cleanup", kind: "workshop" },
       {
+        title: "Log4Shell exploitation",
+        kind: "template",
         templateId: "cve-lab-log4shell",
-        title: "Pop a Log4Shell host",
-        blurb: "Get the JNDI callback right, escalate, and pivot.",
-        attack: "initial_access",
       },
       {
+        title: "Final exercise: Pivot to crown jewels",
+        kind: "template",
         templateId: "red-team-range",
-        title: "Multi-stage AD attack",
-        blurb: "Phish, Kerberoast, lateral-move, dump LSASS.",
-        attack: "lateral_movement",
-      },
-      {
-        templateId: "llm-red-team-range",
-        title: "Prompt-injection range",
-        blurb: "Test garak probes against a real local LLM stack.",
-        attack: "impact",
       },
     ],
   },
   {
-    id: "ot",
-    title: "OT / ICS Engineer",
-    audience: "ICS security",
-    icon: BookOpen,
-    blurb: "Bridge IT and OT — bring up a factory floor, then explore the protocol attack surface.",
-    steps: [
+    id: "ot-ics-defense",
+    title: "OT/ICS Defense",
+    track: "amber",
+    audience: "ICS security · OT engineer",
+    blurb:
+      "Modbus, OpenPLC, SCADA hardening — defend an industrial environment end-to-end.",
+    lessons: [
+      { title: "How OT networks differ from IT", kind: "reading" },
+      { title: "Modbus protocol basics", kind: "reading" },
       {
+        title: "Spin up OpenPLC + SCADA",
+        kind: "template",
         templateId: "smart-factory",
-        title: "Spin up a smart factory",
-        blurb: "Two PLCs (OpenPLC), an HMI (Rapid SCADA), cameras, Wazuh.",
-        attack: "discovery",
       },
+      { title: "Detect Modbus tampering", kind: "workshop" },
+      { title: "Camera + IP feed monitoring", kind: "workshop" },
       {
-        templateId: "wan-sim",
-        title: "Model a multi-site WAN",
-        blurb: "Add OSPF to understand how routing changes the attack surface.",
-        attack: "lateral_movement",
+        title: "Final exercise: Plant intrusion",
+        kind: "template",
+        templateId: "smart-factory",
       },
     ],
   },
 ];
 
-function readProgress(): Record<string, string[]> {
+const TRACK_BG: Record<Track, string> = {
+  blue: "linear-gradient(135deg, rgba(0,112,243,0.06), transparent)",
+  red: "linear-gradient(135deg, rgba(204,0,0,0.06), transparent)",
+  amber: "linear-gradient(135deg, rgba(200,122,0,0.06), transparent)",
+};
+
+const TRACK_ACCENT: Record<Track, string> = {
+  blue: "var(--blue)",
+  red: "var(--red)",
+  amber: "var(--amber)",
+};
+
+const TRACK_BADGE: Record<Track, "info" | "err" | "warn"> = {
+  blue: "info",
+  red: "err",
+  amber: "warn",
+};
+
+const KIND_LABEL: Record<LessonKind, string> = {
+  reading: "reading",
+  workshop: "workshop",
+  template: "template",
+};
+
+type ProgressMap = Record<string, number>;
+
+function readProgress(): ProgressMap {
   if (typeof window === "undefined") return {};
   try {
-    return JSON.parse(window.localStorage.getItem(PROGRESS_KEY) ?? "{}");
+    const raw = window.localStorage.getItem(PROGRESS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === "object") {
+      const out: ProgressMap = {};
+      for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+        if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
+      }
+      return out;
+    }
+    return {};
   } catch {
     return {};
   }
 }
 
-function writeProgress(value: Record<string, string[]>): void {
+function writeProgress(value: ProgressMap): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(PROGRESS_KEY, JSON.stringify(value));
   } catch {
-    /* ignore */
+    /* ignore quota / disabled storage */
   }
 }
 
-export default function LearnPage() {
-  const [progress, setProgress] = React.useState<Record<string, string[]>>({});
+export default function LearnPage(): React.ReactElement {
+  const [progress, setProgress] = React.useState<ProgressMap>({});
+  const [hydrated, setHydrated] = React.useState(false);
 
   React.useEffect(() => {
     setProgress(readProgress());
+    setHydrated(true);
   }, []);
 
-  const toggle = (pathId: string, stepId: string): void => {
+  const advance = React.useCallback((pathId: string, lessonIndex: number): void => {
     setProgress((prev) => {
-      const taken = new Set(prev[pathId] ?? []);
-      if (taken.has(stepId)) taken.delete(stepId);
-      else taken.add(stepId);
-      const next = { ...prev, [pathId]: Array.from(taken) };
-      writeProgress(next);
-      return next;
+      const current = prev[pathId] ?? 0;
+      const next = Math.max(current, lessonIndex + 1);
+      if (next === current) return prev;
+      const updated: ProgressMap = { ...prev, [pathId]: next };
+      writeProgress(updated);
+      return updated;
     });
+  }, []);
+
+  const resetAll = (): void => {
+    setProgress({});
+    writeProgress({});
   };
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-6 p-6">
-      <header>
-        <h1 className="text-2xl font-semibold">Learning paths</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Opinionated curricula stitched out of the bundled templates. Local progress is
-          saved per browser. Add your own paths in
-          <code className="mx-1">apps/web/app/learn/page.tsx</code>.
-        </p>
-      </header>
+    <main className="page">
+      <div className="pagehead">
+        <div className="grow">
+          <h1 className="h1">Learning paths</h1>
+          <div className="meta mono">
+            3 curated curricula · localStorage-tracked · pick a track and spin up the lab
+          </div>
+        </div>
+        <button type="button" className="btn" onClick={resetAll}>
+          Reset progress
+        </button>
+      </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+      <div className="grid12">
         {PATHS.map((path) => {
-          const taken = new Set(progress[path.id] ?? []);
-          const pct = Math.round((taken.size / path.steps.length) * 100);
-          const Icon = path.icon;
+          const done = hydrated ? progress[path.id] ?? 0 : 0;
+          const total = path.lessons.length;
+          const pct = Math.round((done / total) * 100);
           return (
-            <Card key={path.id} className="flex flex-col">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <Icon className="h-4 w-4" />
-                  {path.title}
-                </CardTitle>
-                <CardDescription>{path.audience}</CardDescription>
-                <p className="mt-1 text-xs text-muted-foreground">{path.blurb}</p>
-              </CardHeader>
-              <CardContent className="flex flex-1 flex-col gap-2">
-                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                  <div
-                    className="h-full bg-emerald-500 transition-all"
-                    style={{ width: `${pct}%` }}
-                  />
+            <div key={path.id} className="card s4" style={{ display: "flex", flexDirection: "column" }}>
+              <div
+                style={{
+                  padding: "20px 22px",
+                  borderBottom: "1px solid var(--line)",
+                  background: TRACK_BG[path.track],
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                  <span className={`badge ${TRACK_BADGE[path.track]}`}>
+                    <span className="d" style={{ background: TRACK_ACCENT[path.track] }} />
+                    {path.track === "blue"
+                      ? "Defensive"
+                      : path.track === "red"
+                      ? "Offensive"
+                      : "OT / ICS"}
+                  </span>
+                  <div style={{ flex: 1 }} />
+                  <span className="mono" style={{ fontSize: 11, color: "var(--ink-mute)" }}>
+                    {done} of {total} lessons
+                  </span>
                 </div>
-                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                  {taken.size} / {path.steps.length} completed
+                <h2
+                  style={{
+                    margin: "0 0 6px",
+                    fontSize: 18,
+                    fontWeight: 600,
+                    letterSpacing: "-0.015em",
+                  }}
+                >
+                  {path.title}
+                </h2>
+                <div className="meta-line" style={{ marginBottom: 8 }}>
+                  {path.audience}
+                </div>
+                <p
+                  style={{
+                    margin: 0,
+                    color: "var(--ink-mute)",
+                    fontSize: 13.5,
+                    lineHeight: 1.55,
+                  }}
+                >
+                  {path.blurb}
                 </p>
-                <ol className="mt-1 space-y-1">
-                  {path.steps.map((step) => {
-                    const done = taken.has(step.templateId);
-                    return (
-                      <li
-                        key={step.templateId}
-                        className="flex items-start gap-2 rounded-md border bg-card/40 p-2"
+                <div className="prog" style={{ marginTop: 14 }}>
+                  <i style={{ width: `${pct}%`, background: TRACK_ACCENT[path.track] }} />
+                </div>
+              </div>
+
+              <div style={{ padding: "8px 0" }}>
+                {path.lessons.map((lesson, idx) => {
+                  const isDone = idx < done;
+                  const isCurrent = idx === done;
+                  const accent = TRACK_ACCENT[path.track];
+
+                  const indicator = isDone ? (
+                    <div
+                      style={{
+                        width: 22,
+                        height: 22,
+                        borderRadius: "50%",
+                        background: "var(--green)",
+                        color: "#fff",
+                        display: "grid",
+                        placeItems: "center",
+                      }}
+                      aria-label="completed"
+                    >
+                      <svg
+                        width="11"
+                        height="11"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="3"
                       >
-                        <button
-                          aria-label={done ? "Mark incomplete" : "Mark complete"}
-                          onClick={() => toggle(path.id, step.templateId)}
-                          className="mt-0.5 shrink-0"
+                        <path d="M5 12l5 5L20 7" />
+                      </svg>
+                    </div>
+                  ) : isCurrent ? (
+                    <div
+                      style={{
+                        width: 22,
+                        height: 22,
+                        borderRadius: "50%",
+                        background: "var(--bg)",
+                        border: `2px solid ${accent}`,
+                        color: accent,
+                        display: "grid",
+                        placeItems: "center",
+                        fontFamily: "'Geist Mono', 'JetBrains Mono', monospace",
+                        fontSize: 11,
+                        fontWeight: 700,
+                      }}
+                    >
+                      {idx + 1}
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        width: 22,
+                        height: 22,
+                        borderRadius: "50%",
+                        background: "var(--bg)",
+                        border: "1px solid var(--line-2)",
+                        color: "var(--ink-faint)",
+                        display: "grid",
+                        placeItems: "center",
+                        fontFamily: "'Geist Mono', 'JetBrains Mono', monospace",
+                        fontSize: 11,
+                      }}
+                    >
+                      {idx + 1}
+                    </div>
+                  );
+
+                  const rowBg = isCurrent
+                    ? path.track === "blue"
+                      ? "rgba(0,112,243,0.04)"
+                      : path.track === "red"
+                      ? "rgba(204,0,0,0.04)"
+                      : "rgba(200,122,0,0.04)"
+                    : "transparent";
+
+                  const titleColor = isDone || isCurrent ? "var(--ink)" : "var(--ink-mute)";
+
+                  const action = isDone ? (
+                    <span
+                      className="mono"
+                      style={{ color: "var(--green)", fontSize: 11 }}
+                    >
+                      DONE
+                    </span>
+                  ) : lesson.kind === "template" && lesson.templateId ? (
+                    <Link
+                      className={`btn sm ${isCurrent ? "primary" : "ghost"}`}
+                      href={`/canvas?template=${encodeURIComponent(lesson.templateId)}`}
+                      onClick={() => advance(path.id, idx)}
+                    >
+                      Open
+                    </Link>
+                  ) : (
+                    <button
+                      type="button"
+                      className={`btn sm ${isCurrent ? "primary" : "ghost"}`}
+                      onClick={() => advance(path.id, idx)}
+                    >
+                      Open
+                    </button>
+                  );
+
+                  return (
+                    <div
+                      key={`${path.id}-${idx}`}
+                      style={{
+                        padding: "10px 22px",
+                        display: "grid",
+                        gridTemplateColumns: "22px 1fr auto",
+                        gap: 10,
+                        alignItems: "center",
+                        background: rowBg,
+                      }}
+                    >
+                      {indicator}
+                      <div style={{ minWidth: 0 }}>
+                        <div
+                          style={{
+                            fontWeight: 500,
+                            fontSize: 13.5,
+                            color: titleColor,
+                          }}
                         >
-                          {done ? (
-                            <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                          ) : (
-                            <Circle className="h-4 w-4 text-muted-foreground" />
-                          )}
-                        </button>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <p className="truncate text-xs font-medium">{step.title}</p>
-                            <Badge variant="outline" className="text-[10px] capitalize">
-                              {step.attack.replace(/_/g, " ")}
-                            </Badge>
-                          </div>
-                          <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                            {step.blurb}
-                          </p>
+                          {lesson.title}
                         </div>
-                        <Button asChild size="sm" variant="ghost" className="h-7 shrink-0">
-                          <Link href={`/build?template=${step.templateId}`}>
-                            <ChevronRight className="h-3.5 w-3.5" />
-                          </Link>
-                        </Button>
-                      </li>
-                    );
-                  })}
-                </ol>
-              </CardContent>
-            </Card>
+                        <div className="meta-line">
+                          {KIND_LABEL[lesson.kind]}
+                          {lesson.templateId ? ` · ${lesson.templateId}` : ""}
+                        </div>
+                      </div>
+                      {action}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           );
         })}
       </div>
-    </div>
+
+      <div className="banner info" style={{ marginTop: 22 }}>
+        <svg
+          className="ico"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+        >
+          <circle cx="12" cy="12" r="10" />
+          <path d="M12 16v-4M12 8h.01" />
+        </svg>
+        <div className="grow">
+          Looking for the full catalogue? Every lesson here maps to a bundled template you
+          can fork.
+        </div>
+        <Link className="btn sm" href="/templates">
+          Browse templates
+        </Link>
+      </div>
+    </main>
   );
 }
