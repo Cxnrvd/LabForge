@@ -282,7 +282,7 @@ export default function LabsIndex(): React.ReactElement {
     queryFn: () => fetch("/api/v1/labs").then((r) => r.json()),
     refetchInterval: 5000,
   });
-  const labs = labsQ.data ?? [];
+  const labs = React.useMemo(() => labsQ.data ?? [], [labsQ.data]);
 
   // Status counts (used by both tb2 tabs and the .filt status group).
   const counts = React.useMemo(() => {

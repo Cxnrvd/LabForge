@@ -143,7 +143,7 @@ export default function DoctorPage(): React.JSX.Element {
     retry: 1,
   });
 
-  const token = React.useMemo(() => getStoredToken(), [healthQ.dataUpdatedAt]);
+  const token = React.useMemo(() => getStoredToken(), []);
 
   React.useEffect(() => {
     if (!healthQ.isFetching && !preflightQ.isFetching) {

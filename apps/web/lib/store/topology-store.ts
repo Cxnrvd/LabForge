@@ -591,9 +591,9 @@ export const useTopologyStore = create<TopologyState>()(
 );
 
 export const useTopologySelectors = {
-  nodes: () => useTopologyStore(useShallow((s) => s.nodes)),
-  edges: () => useTopologyStore(useShallow((s) => s.edges)),
-  meta: () => useTopologyStore(useShallow((s) => s.meta)),
+  useNodes: () => useTopologyStore(useShallow((s) => s.nodes)),
+  useEdges: () => useTopologyStore(useShallow((s) => s.edges)),
+  useMeta: () => useTopologyStore(useShallow((s) => s.meta)),
 };
 
 export function findIssuesForNode(

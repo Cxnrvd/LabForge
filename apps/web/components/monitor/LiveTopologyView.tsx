@@ -146,7 +146,7 @@ function InnerView({ labId }: { labId: number }) {
 
   // ------------------------------------------------------------- derived
   const topology = topologyQ.data;
-  const phases = phasesQ.data?.per_vm ?? {};
+  const phases = React.useMemo(() => phasesQ.data?.per_vm ?? {}, [phasesQ.data]);
   const overall = phasesQ.data?.overall ?? "unknown";
 
   const flowNodes: RFNode<LiveTopologyNodeData>[] = React.useMemo(() => {

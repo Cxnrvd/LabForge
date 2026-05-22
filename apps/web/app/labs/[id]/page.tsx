@@ -146,7 +146,10 @@ function LabDetailPageInner(): React.ReactElement {
   /* ---------- selection from ?nodeId= ---------- */
 
   const nodeIdParam = searchParams?.get("nodeId") ?? null;
-  const nodes: TopologyNode[] = topology?.nodes ?? [];
+  const nodes: TopologyNode[] = React.useMemo(
+    () => topology?.nodes ?? [],
+    [topology],
+  );
   const selectedNode: TopologyNode | null = React.useMemo(() => {
     if (!nodes.length) return null;
     if (nodeIdParam) {
