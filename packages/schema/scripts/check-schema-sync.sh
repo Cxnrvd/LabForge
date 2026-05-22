@@ -10,7 +10,7 @@
 # and (b) per-field type/enum/regex/required-ness rather than raw text.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 
 PYDANTIC_OUT="$(mktemp)"
 ZOD_OUT="$(mktemp)"
