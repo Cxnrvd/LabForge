@@ -72,15 +72,19 @@ progress as the lab provisions.
 
 ## Quick start (under 2 minutes)
 
-Prerequisites: **Node 20+**, **pnpm 9+**, **Python 3.12+**, **Vagrant 2.4+**,
+Prerequisites: **Node 20+**, **pnpm 9+**, **Python 3.12+**, **uv** (Python package installer), **Vagrant 2.4+**,
 **VirtualBox 7+** (or VMware / libvirt).
 
 ```bash
-# 1. Install everything (≈ 30s)
+# 1. Install Node dependencies
 pnpm install
-pnpm setup                # installs API + agent Python deps via uv
 
-# 2. Start both services
+# 2. Set up Python virtual environment and dependencies
+pip install uv            # install uv if you don't have it
+uv venv                   # create a virtual environment (.venv)
+pnpm run setup            # installs API + agent Python deps via uv
+
+# 3. Start both services
 pnpm dev                  # → API on :8000, web on :3000
 ```
 
