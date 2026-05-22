@@ -17,7 +17,7 @@ ZOD_OUT="$(mktemp)"
 trap 'rm -f "$PYDANTIC_OUT" "$ZOD_OUT"' EXIT
 
 (cd "$ROOT/packages/schema/python" && python -m labforge_schema.export_json_schema --out "$PYDANTIC_OUT")
-(cd "$ROOT/packages/schema" && node scripts/export-zod-schema.mjs > "$ZOD_OUT")
+(cd "$ROOT/packages/schema" && npx tsx scripts/export-zod-schema.mjs > "$ZOD_OUT")
 
 python - <<PY
 import json, sys

@@ -24,8 +24,6 @@ jobs:
         run: pip install -e packages/schema/python
       - name: Install JS deps
         run: pnpm -w install --frozen-lockfile
-      - name: Install zod-to-json-schema
-        run: pnpm --filter @labforge/schema add -D zod-to-json-schema tsx
       - name: Compare schemas
         run: bash packages/schema/scripts/check-schema-sync.sh
 
