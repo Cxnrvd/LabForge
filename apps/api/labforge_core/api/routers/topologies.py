@@ -8,9 +8,8 @@ from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlmodel import Session, select
-
 from labforge_schema import LabConfig, ValidationResult
+from sqlmodel import Session, select
 
 from labforge_core.models import StoredTopology, get_session
 from labforge_core.services.validator import validate_topology

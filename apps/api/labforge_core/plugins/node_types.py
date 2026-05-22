@@ -16,8 +16,8 @@ only the schema enum stays closed.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Optional
 
 from labforge_schema import (
     DEFAULT_OS_PER_NODE_TYPE,
@@ -42,7 +42,7 @@ class NodeTypePlugin:
     allowed_os: list[OsType] = field(default_factory=list)
     # Optional generator hook — called with the topology + node to
     # produce extra provisioner content. Most types return None.
-    extra_provisioner: Optional[Callable[..., Optional[str]]] = None
+    extra_provisioner: Callable[..., str | None] | None = None
 
 
 _REGISTRY: dict[NodeType, NodeTypePlugin] = {}

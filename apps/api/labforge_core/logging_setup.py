@@ -68,7 +68,7 @@ def configure_logging() -> None:
     for existing in list(root.handlers):
         if getattr(existing, "_labforge", False):
             root.removeHandler(existing)
-    setattr(handler, "_labforge", True)
+    handler._labforge = True  # type: ignore[attr-defined]
     root.addHandler(handler)
     root.setLevel(level)
     # Quiet noisy upstreams.

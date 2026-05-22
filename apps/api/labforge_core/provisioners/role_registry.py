@@ -108,5 +108,5 @@ def load_plugins() -> None:
         try:
             importlib.import_module(full)
             _LOGGER.info("plugin_loaded", extra={"module": full})
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             _LOGGER.warning("plugin_failed", extra={"module": full, "error": str(exc)})

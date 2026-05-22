@@ -22,7 +22,6 @@ import random
 from typing import Any
 
 import httpx
-
 from labforge_schema import CVEEntry, Severity
 
 from labforge_core.services.nvd_cache import lookup_cache, search_cache

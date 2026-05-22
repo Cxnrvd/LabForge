@@ -9,7 +9,6 @@ import zipfile
 from dataclasses import dataclass
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
-
 from labforge_schema import LabConfig, NodeType, OsType, Provider, TopologyNode
 
 from labforge_core.provisioners.cve_lookup import resolve_cve_payload
@@ -22,7 +21,6 @@ from labforge_core.services.compose_generator import render as render_compose
 from labforge_core.services.provenance import build_manifest
 from labforge_core.services.validator import is_windows
 from labforge_core.settings import get_settings
-
 
 # Vagrant boxes per OS — every entry is a publicly-downloadable box on
 # Vagrant Cloud (https://app.vagrantup.com/). Anything that doesn't have a

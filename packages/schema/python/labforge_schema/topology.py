@@ -157,7 +157,7 @@ _TOPOLOGY_NAME_RE = re.compile(r"^[A-Za-z0-9 \-_.,!?():]+$")
 class Credentials(BaseModel):
     model_config = ConfigDict(extra="forbid")
     username: str = Field(min_length=1, max_length=64)
-    password: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=1, max_length=128, pattern=r"""^[^"'`$;\\\r\n]+$""")
 
     @field_validator("password")
     @classmethod
@@ -184,8 +184,8 @@ class Size(BaseModel):
 class NodeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     os: OsType
-    ip: str
-    hostname: str = Field(min_length=1, max_length=63)
+    ip: str = Field(pattern=r"^(?:(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d?\d)$")
+    hostname: str = Field(min_length=1, max_length=63, pattern=r"^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$")
     cves: list[str] = Field(default_factory=list)
     roles: list[str] = Field(default_factory=list)
     memory_mb: int = Field(default=2048, ge=256, le=65536)
@@ -290,9 +290,9 @@ class Zone(BaseModel):
 class LabConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    name: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9 \-_.,!?():]+$")
     description: str = Field(default="", max_length=2048)
-    network_cidr: str
+    network_cidr: str = Field(pattern=r"^(?:(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\/(3[0-2]|[12]?\d)$")
     provider: Provider = Provider.VIRTUALBOX
     # Upper bound is a safety net for the generator (memory, build time);
     # 500 nodes is well past anything a single host can actually `vagrant up`.

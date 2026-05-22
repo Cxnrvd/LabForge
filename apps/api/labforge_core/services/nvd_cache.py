@@ -20,20 +20,21 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import OrderedDict
+from collections.abc import Awaitable, Callable, Hashable
 from dataclasses import dataclass
-from typing import Awaitable, Callable, Generic, Hashable, TypeVar
+from typing import TypeVar
 
 T = TypeVar("T")
 
 
 @dataclass
-class _CacheEntry(Generic[T]):
+class _CacheEntry[T]:
     value: T
     expires_at: float
     fetched_at: float
 
 
-class TTLCache(Generic[T]):
+class TTLCache[T]:
     """Tiny async-safe LRU + TTL cache.
 
     Stale-while-revalidate: ``get_or_fetch`` returns a stale entry if the

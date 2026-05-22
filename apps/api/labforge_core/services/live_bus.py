@@ -61,7 +61,7 @@ class LiveBus:
                     queue.get_nowait()
                     queue.put_nowait(message)
                     delivered += 1
-                except Exception:  # noqa: BLE001
+                except Exception:
                     _LOGGER.debug("dropped overflow message for lab %s", lab_id)
         return delivered
 

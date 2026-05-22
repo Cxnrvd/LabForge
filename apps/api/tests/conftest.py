@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from labforge_schema import (
     Credentials,
     LabConfig,
@@ -18,7 +17,6 @@ from labforge_schema import (
     TopologyEdge,
     TopologyNode,
 )
-
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TEMPLATES_DIR = REPO_ROOT / "packages" / "schema" / "templates"
@@ -128,8 +126,8 @@ def _isolate_nvd_cache():
 
 
 __all__ = [
-    "minimal_topology",
-    "two_node_topology",
     "all_template_paths",
     "load_template",
+    "minimal_topology",
+    "two_node_topology",
 ]

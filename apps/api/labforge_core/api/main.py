@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 import sys
-from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -100,11 +100,9 @@ async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
         try:
             reconcile_orphan_builds(session)
         finally:
-            try:
+            with suppress(StopIteration):
                 next(session_gen)
-            except StopIteration:
-                pass
-    except Exception as exc:  # noqa: BLE001 — startup must never block
+    except Exception as exc:
         _LOGGER.warning("reconcile_failed", extra={"error": str(exc)})
     yield
 

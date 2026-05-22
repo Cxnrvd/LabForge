@@ -22,8 +22,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
-from typing import Mapping
+from collections.abc import Mapping
+from datetime import UTC, datetime
 
 from labforge_schema import LabConfig
 
@@ -72,7 +72,7 @@ def build_manifest(
 
     manifest = {
         "manifest_version": 1,
-        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "generator": {
             "tool": "labforge-api",
             "version": LABFORGE_API_VERSION,

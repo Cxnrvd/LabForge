@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
+import time
 
 import httpx
 import pytest
 import respx
 
 from labforge_core.services import cve_client
-
 
 _FAKE_CVE = {
     "vulnerabilities": [
@@ -91,10 +90,12 @@ async def test_search_stale_while_revalidate():
             return_value=httpx.Response(200, json=_FAKE_CVE)
         )
         await cve_client.search_cves("seed")
-    # Force expiry
+    # Force expiry: set expires_at to 1 second ago so the entry is stale
+    # but still within max_stale_seconds (15 min). Using 0 would make the
+    # entry appear expired since boot (>> max_stale on any running machine).
     from labforge_core.services.nvd_cache import search_cache
-    for key, entry in list(search_cache._store.items()):  # noqa: SLF001
-        entry.expires_at = 0
+    for _key, entry in list(search_cache._store.items()):
+        entry.expires_at = time.monotonic() - 1
     # Now NVD only returns 500s — the stale entry should still come back.
     with respx.mock(base_url="https://services.nvd.nist.gov") as mock:
         mock.get("/rest/json/cves/2.0").mock(

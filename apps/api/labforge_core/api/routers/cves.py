@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
-
 from labforge_schema import CVEEntry
 
 from labforge_core.api.rate_limit import limit

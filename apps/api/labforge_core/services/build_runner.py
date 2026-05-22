@@ -15,6 +15,7 @@ the log; the /labs/{id}/build/status endpoint reads the sentinel.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import re
@@ -26,11 +27,9 @@ import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
-
-from sqlmodel import Session, select
 
 from labforge_schema import LabConfig
+from sqlmodel import Session, select
 
 from labforge_core.models import Lab
 from labforge_core.services.generator import generate_artifacts, vagrant_provider_name
@@ -157,7 +156,7 @@ with open(exit_path, "w", encoding="utf-8") as fh:
 def start_build(
     topology: LabConfig,
     session: Session,
-    workspace_root: Optional[Path] = None,
+    workspace_root: Path | None = None,
 ) -> tuple[Lab, Path]:
     """Synchronously: generate bundle + create Lab row + spawn vagrant up.
 
@@ -231,14 +230,12 @@ def read_log_chunk(workspace: Path, since: int = 0, max_bytes: int = 64 * 1024) 
     if not text.endswith("\n"):
         last_nl = text.rfind("\n")
         if last_nl >= 0:
-            held = text[last_nl + 1 :]
+            text[last_nl + 1 :]
             text = text[: last_nl + 1]
             chunk_consumed = len(text.encode("utf-8"))
         else:
-            held = ""
             chunk_consumed = 0
     else:
-        held = ""
         chunk_consumed = len(chunk)
     lines = [ln for ln in text.split("\n") if ln]
     return {
@@ -305,7 +302,7 @@ def _provider_vms_running(workspace: Path) -> int:
 
     try:
         out = subprocess.run(
-            _vboxmanage_command() + ["list", "runningvms"],
+            [*_vboxmanage_command(), "list", "runningvms"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -611,10 +608,8 @@ def reconcile_orphan_builds(session: Session) -> int:
         # so /monitor reflects it; clear the stale PID file.
         exit_file.write_text(f"-2\n{int(time.time())}\n", encoding="utf-8")
         if pid_file.exists():
-            try:
+            with contextlib.suppress(OSError):
                 pid_file.unlink()
-            except OSError:
-                pass
         lab.status = "failed"
         lab.updated_at = datetime.utcnow()
         session.add(lab)

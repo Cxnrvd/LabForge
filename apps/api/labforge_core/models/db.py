@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from datetime import datetime
 from functools import lru_cache
-from typing import Iterator, Optional
 
 from sqlalchemy import Column, Text
 from sqlmodel import Field, Session, SQLModel, create_engine
@@ -18,7 +18,7 @@ class StoredTopology(SQLModel, table=True):
 
     __tablename__ = "topologies"
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     slug: str = Field(index=True, unique=True)
     name: str
     description: str = ""
@@ -35,12 +35,12 @@ class Lab(SQLModel, table=True):
 
     __tablename__ = "labs"
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     topology_slug: str = Field(index=True)
     name: str
     provider: str = "virtualbox"
     status: str = "pending"
-    workspace_path: Optional[str] = None
+    workspace_path: str | None = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -52,7 +52,7 @@ class LabHeartbeat(SQLModel, table=True):
 
     __tablename__ = "lab_heartbeats"
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     lab_id: int = Field(index=True)
     captured_at: datetime = Field(default_factory=datetime.utcnow, index=True)
     payload_json: str = Field(sa_column=Column(Text, nullable=False))

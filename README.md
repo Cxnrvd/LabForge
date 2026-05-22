@@ -4,8 +4,6 @@ Diagram-driven virtual lab builder for cybersecurity professionals. Draw a
 network on a canvas, attach roles (Splunk, Wazuh, Kali, OpenPLC…), click
 **Generate Lab**, and `vagrant up` boots the whole thing locally.
 
-![canvas](docs/canvas.png)
-
 ---
 
 ## For penetration testers & security researchers
@@ -35,6 +33,40 @@ fork it.
 
 No cloud bills. No shared infrastructure. No waiting for provisioning. Just
 click, generate, and explore.
+
+---
+
+## Screenshots
+
+### Dashboard — Mission Control
+Track active labs, resource usage, recent activity, and quick-launch templates
+from one place.
+
+![Dashboard](docs/screenshots/dashboard.png)
+
+### Template Gallery
+8 pre-built lab topologies covering AD, CVE exploitation, DFIR, ICS/OT, LLM
+red-teaming, and WAN simulation. Pick one and the canvas pre-populates.
+
+![Templates](docs/screenshots/templates.png)
+
+### Canvas — Diagram-Driven Lab Builder
+Drag nodes from the left palette, draw edges, pin CVEs to machines, and let
+the attack-path heuristic score your topology automatically.
+
+![Canvas](docs/screenshots/canvas.png)
+
+### Labs — Provisioned Lab Manager
+See every lab that's been built, with live vagrant status, provider, uptime,
+and a live log tail so you can watch `vagrant up` in real time.
+
+![Labs](docs/screenshots/labs.png)
+
+### Monitor — Live Lab Telemetry
+Per-lab heartbeat view showing VM health, network flows, and build-phase
+progress as the lab provisions.
+
+![Monitor](docs/screenshots/monitor.png)
 
 ---
 

@@ -14,7 +14,6 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import { LabConfig } from "../src/index.ts";
 
 const schema = zodToJsonSchema(LabConfig, {
-  name: "LabConfig",
   $refStrategy: "none",
 });
 process.stdout.write(JSON.stringify(schema, null, 2) + "\n");

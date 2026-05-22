@@ -19,9 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import yaml  # provided indirectly by uvicorn[standard] -> pyyaml
-
 from labforge_schema import LabConfig, NodeType, OsType, TopologyNode
-
 
 # Default container images per role. Conservative — every image listed
 # is publicly available on Docker Hub or ghcr. Roles not in this map fall

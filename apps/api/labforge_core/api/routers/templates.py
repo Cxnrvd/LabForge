@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, status
-
 from labforge_schema import LabConfig
 
 from labforge_core.schemas.api import TemplateSummary

@@ -1,8 +1,11 @@
 """Re-export the shared schema so backend code can import from one place."""
 
 from labforge_schema import (
-    CVEEntry,
+    DEFAULT_OS_PER_NODE_TYPE,
+    NODE_TYPE_LABELS,
+    OS_LABELS,
     Credentials,
+    CVEEntry,
     LabConfig,
     NodeConfig,
     NodeType,
@@ -16,10 +19,8 @@ from labforge_schema import (
     TopologySchema,
     ValidationIssue,
     ValidationResult,
-    DEFAULT_OS_PER_NODE_TYPE,
-    NODE_TYPE_LABELS,
-    OS_LABELS,
 )
+
 from labforge_core.schemas.api import (
     ActivityEntry,
     ErrorResponse,
@@ -32,9 +33,18 @@ from labforge_core.schemas.api import (
 )
 
 __all__ = [
+    "DEFAULT_OS_PER_NODE_TYPE",
+    "NODE_TYPE_LABELS",
+    "OS_LABELS",
+    "ActivityEntry",
     "CVEEntry",
     "Credentials",
+    "ErrorResponse",
+    "GenerateRequest",
+    "HeartbeatPayload",
     "LabConfig",
+    "LabCreateRequest",
+    "LabSummary",
     "NodeConfig",
     "NodeType",
     "OsType",
@@ -42,20 +52,11 @@ __all__ = [
     "Protocol",
     "Provider",
     "Severity",
+    "TemplateSummary",
     "TopologyEdge",
     "TopologyNode",
     "TopologySchema",
     "ValidationIssue",
     "ValidationResult",
-    "DEFAULT_OS_PER_NODE_TYPE",
-    "NODE_TYPE_LABELS",
-    "OS_LABELS",
-    "ActivityEntry",
-    "ErrorResponse",
-    "GenerateRequest",
-    "HeartbeatPayload",
-    "LabCreateRequest",
-    "LabSummary",
-    "TemplateSummary",
     "VmState",
 ]

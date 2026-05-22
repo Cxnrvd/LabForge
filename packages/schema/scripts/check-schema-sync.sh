@@ -22,8 +22,42 @@ trap 'rm -f "$PYDANTIC_OUT" "$ZOD_OUT"' EXIT
 python - <<PY
 import json, sys
 
+def resolve_refs(obj, defs):
+    """Recursively resolve all \$ref and \$defs references inline."""
+    if not isinstance(obj, dict):
+        return obj
+    # Absorb the definitions map from this level
+    local_defs = {**defs}
+    for key in ("\$defs", "definitions"):
+        if key in obj:
+            local_defs.update(obj[key])
+
+    if "\$ref" in obj:
+        ref = obj["\$ref"]
+        # Handle #/\$defs/Foo and #/definitions/Foo
+        for prefix in ("#/\$defs/", "#/definitions/"):
+            if ref.startswith(prefix):
+                name = ref[len(prefix):]
+                if name in local_defs:
+                    return resolve_refs(local_defs[name], local_defs)
+        return obj  # unresolvable ref — leave as-is
+
+    return {k: resolve_refs(v, local_defs) if isinstance(v, (dict, list)) else v
+            for k, v in obj.items()
+            if k not in ("\$defs", "definitions")}
+
+def resolve_list(lst, defs):
+    return [resolve_refs(item, defs) if isinstance(item, dict) else item for item in lst]
+
+# Patch resolve_refs to handle lists
+_orig = resolve_refs
+def resolve_refs(obj, defs):
+    if isinstance(obj, list):
+        return resolve_list(obj, defs)
+    return _orig(obj, defs)
+
 def field_set(obj, prefix=""):
-    """Walk a JSON Schema and return the set of "field path | kind" strings."""
+    """Walk a JSON Schema and return the set of 'field path | kind' strings."""
     out = set()
     if not isinstance(obj, dict):
         return out
@@ -44,9 +78,12 @@ def field_set(obj, prefix=""):
     return out
 
 with open("$PYDANTIC_OUT") as fh:
-    py = json.load(fh)
+    py_raw = json.load(fh)
 with open("$ZOD_OUT") as fh:
-    zd = json.load(fh)
+    zd_raw = json.load(fh)
+
+py = resolve_refs(py_raw, {})
+zd = resolve_refs(zd_raw, {})
 
 py_fields = field_set(py)
 zd_fields = field_set(zd)

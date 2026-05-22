@@ -711,9 +711,9 @@ def windows_snippet(role_id: str) -> RoleSnippet | None:
 
 
 __all__ = [
-    "RoleSnippet",
     "LINUX_INSTALLERS",
     "WINDOWS_INSTALLERS",
+    "RoleSnippet",
     "linux_snippet",
     "windows_snippet",
 ]

@@ -10,11 +10,11 @@ from __future__ import annotations
 import os
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import engine_from_config, pool
-
-from labforge_core.models import db  # noqa: F401 — register SQLModel tables
 from sqlmodel import SQLModel
+
+from alembic import context
+from labforge_core.models import db  # noqa: F401 — register SQLModel tables
 
 config = context.config
 

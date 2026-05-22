@@ -13,7 +13,6 @@ from labforge_schema import (
     ValidationResult,
 )
 
-
 _WINDOWS_OS = {
     OsType.WINDOWS_10,
     OsType.WINDOWS_11,
@@ -174,7 +173,7 @@ def _check_zone_geometry(topology: LabConfig) -> list[ValidationIssue]:
                 ValidationIssue(
                     field=f"zones[{zone.id}].size",
                     message=(
-                        f"Zone '{zone.id}' is smaller than 80×80 — it won't "
+                        f"Zone '{zone.id}' is smaller than 80x80 — it won't "
                         "visually contain any nodes"
                     ),
                     severity="warning",

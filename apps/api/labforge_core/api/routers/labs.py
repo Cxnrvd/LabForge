@@ -7,6 +7,7 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import (
@@ -19,9 +20,8 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
+from labforge_schema import LabConfig
 from sqlmodel import Session, select
-
-from pathlib import Path
 
 from labforge_core.api.rate_limit import limit
 from labforge_core.api.security import require_agent_token
@@ -46,7 +46,6 @@ from labforge_core.services.build_runner import (
     stop_build,
     vagrant_available,
 )
-from labforge_schema import LabConfig
 from labforge_core.services.live_bus import bus
 
 _LOGGER = logging.getLogger("labforge.labs")
@@ -188,7 +187,7 @@ async def post_heartbeat(
     # Best-effort broadcast — broker errors must not fail the ingest path.
     try:
         await bus.publish(lab_id, {"type": "heartbeat", "data": serialized})
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _LOGGER.warning("bus_publish_failed", extra={"lab_id": lab_id, "error": str(exc)})
 
     return LabSummary.model_validate(lab, from_attributes=True)
@@ -451,7 +450,7 @@ def build_preflight() -> dict[str, object]:
             )
             version = (out.stdout or "").strip().split()[-1] if out.stdout else None
             payload["vagrant_version"] = version
-        except Exception:  # noqa: BLE001 — best-effort
+        except Exception:
             payload["vagrant_version"] = None
     default_provider = os.environ.get("VAGRANT_DEFAULT_PROVIDER")
     if default_provider:

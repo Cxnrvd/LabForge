@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
-
-from pydantic import BaseModel, ConfigDict, Field
 
 from labforge_schema import LabConfig
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class GenerateRequest(BaseModel):
@@ -22,14 +20,14 @@ class BuildRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     topology: LabConfig
-    workspace_name: Optional[str] = None
+    workspace_name: str | None = None
 
 
 class BuildResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     lab_id: int
     workspace_path: str
-    pid: Optional[int] = None
+    pid: int | None = None
 
 
 class BuildLogChunk(BaseModel):
@@ -51,9 +49,9 @@ class BuildStatus(BaseModel):
     #   "aborted"   — .build.aborted sentinel present (user-initiated stop)
     #   "unknown"   — no sentinels at all
     phase: str
-    exit_code: Optional[int] = None
-    finished_at: Optional[str] = None
-    pid: Optional[int] = None
+    exit_code: int | None = None
+    finished_at: str | None = None
+    pid: int | None = None
 
 
 class BuildPhases(BaseModel):
@@ -85,7 +83,7 @@ class LabSummary(BaseModel):
     name: str
     provider: str
     status: str
-    workspace_path: Optional[str] = None
+    workspace_path: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -95,7 +93,7 @@ class LabCreateRequest(BaseModel):
     topology_slug: str = Field(min_length=1)
     name: str = Field(min_length=1, max_length=128)
     provider: str = "virtualbox"
-    workspace_path: Optional[str] = None
+    workspace_path: str | None = None
 
 
 class ErrorResponse(BaseModel):
@@ -108,8 +106,8 @@ class VmState(BaseModel):
     model_config = ConfigDict(extra="forbid")
     hostname: str
     state: str  # "running" | "poweroff" | "saved" | "not_created" | "aborted" | ...
-    provider: Optional[str] = None
-    ip: Optional[str] = None
+    provider: str | None = None
+    ip: str | None = None
 
 
 class FlowSample(BaseModel):
@@ -125,7 +123,7 @@ class FlowSample(BaseModel):
     dst_ip: str
     packets: int = 0
     bytes_estimate: int = 0
-    protocol: Optional[str] = None
+    protocol: str | None = None
 
 
 class HeartbeatPayload(BaseModel):
@@ -134,7 +132,7 @@ class HeartbeatPayload(BaseModel):
     vms: list[VmState] = Field(default_factory=list)
     log_tail: list[str] = Field(default_factory=list)
     flows: list[FlowSample] = Field(default_factory=list)
-    captured_at: Optional[datetime] = None
+    captured_at: datetime | None = None
 
 
 class ActivityEntry(BaseModel):
@@ -145,4 +143,4 @@ class ActivityEntry(BaseModel):
     lab_status: str
     running_vms: int
     total_vms: int
-    log_snippet: Optional[str] = None
+    log_snippet: str | None = None
