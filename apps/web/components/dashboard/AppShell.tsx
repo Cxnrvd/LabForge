@@ -138,6 +138,7 @@ export function AppShell({ children }: { children: React.ReactNode }): React.Rea
     pathname === "/vendors" ||
     pathname === "/labs" ||
     pathname.startsWith("/labs/") ||
+    pathname === "/build" ||
     pathname === "/build/validate";
 
   return (
@@ -382,7 +383,7 @@ function breadcrumbFor(pathname: string): string[] {
     case "build":
       if (segments[1] === "validate") return ["Build", "Validation"];
       if (segments[1] === "generate") return ["Build", "Generate"];
-      return ["Canvas", segments[1] ?? "Untitled"];
+      return ["Canvas"];
     case "labs":
       return segments.length > 1
         ? ["Workspace", "Labs", segments[1] ?? ""]
