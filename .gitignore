@@ -3,6 +3,10 @@ node_modules/
 out/
 dist/
 build/
+# Un-ignore the Next.js App Router /build route directory — the gitignore
+# `build/` pattern above would otherwise swallow apps/web/app/build/.
+!apps/web/app/build/
+!apps/web/app/build/**
 .turbo/
 .pnpm-store/
 
