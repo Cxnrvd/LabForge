@@ -56,6 +56,8 @@ const TEMPLATE_TONE: Record<string, "info" | "warn" | "purple" | "mute" | "act" 
   "smart-factory": "purple",
   "llm-red-team-range": "purple",
   "wan-sim": "info",
+  "ransomware-intrusion-hunt-docker": "danger",
+  "malware-triage-bench-docker": "danger",
 };
 
 const TEMPLATE_FILTERS: Array<{ id: string; label: string }> = [
@@ -66,10 +68,12 @@ const TEMPLATE_FILTERS: Array<{ id: string; label: string }> = [
   { id: "smart-factory", label: "smart-factory" },
   { id: "llm-red-team-range", label: "llm-red-team-range" },
   { id: "wan-sim", label: "wan-sim" },
+  { id: "ransomware-intrusion-hunt-docker", label: "ransomware-hunt (docker)" },
+  { id: "malware-triage-bench-docker", label: "malware-triage (docker)" },
   { id: "custom", label: "custom" },
 ];
 
-const PROVIDERS = ["virtualbox", "vmware", "libvirt"] as const;
+const PROVIDERS = ["virtualbox", "vmware", "libvirt", "docker"] as const;
 type Provider = (typeof PROVIDERS)[number];
 
 /* ============================================================
@@ -321,6 +325,8 @@ export default function LabsIndex(): React.ReactElement {
     "smart-factory": false,
     "llm-red-team-range": false,
     "wan-sim": false,
+    "ransomware-intrusion-hunt-docker": false,
+    "malware-triage-bench-docker": false,
     custom: false,
   }));
 

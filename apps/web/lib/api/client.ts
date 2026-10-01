@@ -46,9 +46,17 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     let detail = `${response.status} ${response.statusText}`;
     let code = "request_failed";
     try {
-      const body = (await response.json()) as { detail?: string | object; code?: string };
+      const body = (await response.json()) as {
+        detail?: string | { detail?: string; code?: string };
+        code?: string;
+      };
       if (typeof body.detail === "string") detail = body.detail;
-      else if (body.detail) detail = JSON.stringify(body.detail);
+      else if (body.detail && typeof body.detail === "object") {
+        // The API nests structured errors: {"detail": {"detail": "...", "code": "lab_exists"}}
+        if (typeof body.detail.detail === "string") detail = body.detail.detail;
+        else detail = JSON.stringify(body.detail);
+        if (body.detail.code) code = body.detail.code;
+      }
       if (body.code) code = body.code;
     } catch {
       // ignore parse failure
@@ -133,16 +141,48 @@ export const api = {
         log_snippet: string | null;
       }>
     >("/labs/activity/recent"),
-  buildLab: (topology: LabConfig) =>
+  buildLab: (topology: LabConfig, options: { replace?: boolean } = {}) =>
     request<{ lab_id: number; workspace_path: string; pid: number | null }>(
       "/labs/build",
-      { method: "POST", body: JSON.stringify({ topology }) },
+      {
+        method: "POST",
+        body: JSON.stringify({ topology, replace: options.replace ?? false }),
+      },
     ),
+  /**
+   * Build, and if a lab with the same name is already running ask before
+   * tearing it down and starting over (the API answers 409 lab_exists).
+   */
+  buildLabConfirmed: async (topology: LabConfig) => {
+    try {
+      return await api.buildLab(topology);
+    } catch (err) {
+      const e = err as ApiError;
+      if (e?.code !== "lab_exists") throw err;
+      const ok =
+        typeof window !== "undefined" &&
+        window.confirm(
+          `${e.detail}\n\nReplace it? The running lab, its containers/VMs and its data will be destroyed first.`,
+        );
+      if (!ok) throw err;
+      return await api.buildLab(topology, { replace: true });
+    }
+  },
+  destroyLab: (labId: number, options: { force?: boolean } = {}) =>
+    request<void>(`/labs/${labId}${options.force ? "?force=true" : ""}`, {
+      method: "DELETE",
+    }),
   buildPreflight: () =>
     request<{
       vagrant_available: boolean;
       vagrant_version?: string | null;
       default_provider?: string | null;
+      docker_available?: boolean;
+      docker_daemon?: boolean;
+      docker_version?: string | null;
+      compose_version?: string | null;
+      compose_supported?: boolean;
+      detail?: string | null;
     }>("/labs/build/preflight"),
   buildLog: (labId: number, since: number) =>
     request<{ lines: string[]; next_offset: number; bytes_total: number }>(

@@ -114,7 +114,7 @@ export function Toolbar() {
     Awaited<ReturnType<typeof api.buildLab>>,
     ApiError,
     Parameters<typeof api.buildLab>[0]
-  >({ mutationFn: (topology) => api.buildLab(topology) });
+  >({ mutationFn: (topology) => api.buildLabConfirmed(topology) });
   const save = useMutation<
     Awaited<ReturnType<typeof api.saveTopology>>,
     ApiError,

@@ -280,19 +280,7 @@ export default function BuildMonitorPage() {
   // ----- Destroy action: DELETE /labs/{id} (the only backend route
   // that tears a lab down). On success we navigate to /labs.
   const destroyMut = useMutation<void, ApiError>({
-    mutationFn: async () => {
-      const res = await fetch(`/api/v1/labs/${id}`, { method: "DELETE" });
-      if (!res.ok && res.status !== 204) {
-        let detail = `${res.status} ${res.statusText}`;
-        try {
-          const body = (await res.json()) as { detail?: string };
-          if (body.detail) detail = body.detail;
-        } catch {
-          // ignore
-        }
-        throw { detail, code: "destroy_failed" } satisfies ApiError;
-      }
-    },
+    mutationFn: () => api.destroyLab(id),
     onSuccess: () => {
       toast.success("Lab destroyed");
       qc.invalidateQueries({ queryKey: ["labs"] });
@@ -306,8 +294,8 @@ export default function BuildMonitorPage() {
   const handleDestroy = (): void => {
     if (destroyMut.isPending) return;
     const ok = window.confirm(
-      "Destroy this lab?\n\nAll VMs and the workspace directory will be " +
-        "removed. This cannot be undone.",
+      "Destroy this lab?\n\nAll VMs/containers, their data and the workspace " +
+        "directory will be removed. This cannot be undone.",
     );
     if (!ok) return;
     destroyMut.mutate();

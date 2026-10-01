@@ -25,12 +25,13 @@ import { cn } from "@/lib/utils/cn";
 const CIDR_REGEX =
   /^(?:(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\/(?:3[0-2]|[12]?\d)$/;
 
-type Provider = "virtualbox" | "vmware" | "libvirt";
+type Provider = "virtualbox" | "vmware" | "libvirt" | "docker";
 
 const PROVIDER_LABELS: Record<Provider, string> = {
   virtualbox: "VirtualBox",
   vmware: "VMware (Workstation/Fusion)",
   libvirt: "libvirt / KVM",
+  docker: "Docker (containers)",
 };
 
 /**
@@ -155,7 +156,11 @@ export function TopologyMetaPopover() {
             </SelectContent>
           </Select>
           <p className="text-[10px] text-muted-foreground">
-            Vagrant runs <code>vagrant up --provider {meta.provider === "vmware" ? "vmware_desktop" : meta.provider}</code>.
+            {meta.provider === "docker" ? (
+              <>Build runs <code>docker compose up --wait</code>; Destroy removes the containers, network and volumes.</>
+            ) : (
+              <>Vagrant runs <code>vagrant up --provider {meta.provider === "vmware" ? "vmware_desktop" : meta.provider}</code>.</>
+            )}
           </p>
         </div>
       </PopoverContent>

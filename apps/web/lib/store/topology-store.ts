@@ -58,7 +58,7 @@ export interface LabMeta {
   name: string;
   description: string;
   network_cidr: string;
-  provider: "virtualbox" | "vmware" | "libvirt";
+  provider: "virtualbox" | "vmware" | "libvirt" | "docker";
 }
 
 interface TopologyState {

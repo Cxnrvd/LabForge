@@ -102,7 +102,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     Awaited<ReturnType<typeof api.buildLab>>,
     ApiError,
     LabConfig
-  >({ mutationFn: (topology) => api.buildLab(topology) });
+  >({ mutationFn: (topology) => api.buildLabConfirmed(topology) });
 
   const close = (): void => onOpenChange(false);
 

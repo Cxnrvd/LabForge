@@ -34,6 +34,22 @@ export function BuildPreflightBanner(): React.ReactElement | null {
   if (preflightQ.isLoading || !preflightQ.data) return null;
 
   const data = preflightQ.data;
+
+  if (topologyProvider === "docker") {
+    let dockerMessage: string | null = null;
+    if (!data.docker_available) {
+      dockerMessage = "Docker not detected on the API host — Build will fail. Install Docker Desktop or Docker Engine and click Re-check.";
+    } else if (!data.docker_daemon) {
+      dockerMessage = `The Docker daemon is not running${data.detail ? ` (${data.detail})` : ""} — start Docker and click Re-check.`;
+    } else if (!data.compose_version) {
+      dockerMessage = "The 'docker compose' v2 plugin is missing — install it and click Re-check.";
+    } else if (!data.compose_supported) {
+      dockerMessage = `Docker Compose ${data.compose_version} is too old — 2.24 or newer is required.`;
+    }
+    if (!dockerMessage) return null;
+    return <PreflightBar tone="destructive" message={dockerMessage} onRecheck={() => preflightQ.refetch()} busy={preflightQ.isFetching} />;
+  }
+
   const missingVagrant = !data.vagrant_available;
   const providerMismatch = Boolean(
     data.vagrant_available &&
@@ -48,6 +64,22 @@ export function BuildPreflightBanner(): React.ReactElement | null {
     ? "Vagrant not detected on the API host — Build will fail. Install Vagrant 2.4+ and click Re-check."
     : `System default provider is "${data.default_provider}", but this topology targets "${topologyProvider}". Build will force --provider ${topologyProvider}; this banner is just an FYI.`;
 
+  return (
+    <PreflightBar tone={tone} message={message} onRecheck={() => preflightQ.refetch()} busy={preflightQ.isFetching} />
+  );
+}
+
+function PreflightBar({
+  tone,
+  message,
+  onRecheck,
+  busy,
+}: {
+  tone: "destructive" | "warning";
+  message: string;
+  onRecheck: () => void;
+  busy: boolean;
+}): React.ReactElement {
   return (
     <div
       className={cn(
@@ -73,17 +105,18 @@ export function BuildPreflightBanner(): React.ReactElement | null {
         variant="ghost"
         size="sm"
         className="ml-auto h-6 px-2 text-[11px]"
-        onClick={() => preflightQ.refetch()}
-        disabled={preflightQ.isFetching}
+        onClick={onRecheck}
+        disabled={busy}
       >
         <RefreshCw
           className={cn(
             "mr-1 h-3 w-3",
-            preflightQ.isFetching && "animate-spin",
+            busy && "animate-spin",
           )}
         />
         Re-check
       </Button>
     </div>
   );
+
 }

@@ -60,7 +60,7 @@ export default function GeneratePage(): React.ReactElement {
     Awaited<ReturnType<typeof api.buildLab>>,
     ApiError
   >({
-    mutationFn: () => api.buildLab(toTopology()),
+    mutationFn: () => api.buildLabConfirmed(toTopology()),
     onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: ["labs"] });
       toast.success("Build started", {

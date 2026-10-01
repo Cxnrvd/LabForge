@@ -14,7 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { getStoredToken } from "@/lib/api/client";
+import { api } from "@/lib/api/client";
 
 interface DeleteLabButtonProps {
   labId: number;
@@ -39,16 +39,7 @@ export function DeleteLabButton({
   const qc = useQueryClient();
 
   const mut = useMutation({
-    mutationFn: async () => {
-      const token = getStoredToken();
-      const res = await fetch(`/api/v1/labs/${labId}`, {
-        method: "DELETE",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!res.ok && res.status !== 204) {
-        throw new Error(`${res.status} ${res.statusText}`);
-      }
-    },
+    mutationFn: () => api.destroyLab(labId),
     onSuccess: () => {
       toast.success("Lab deleted", { description: labName });
       qc.invalidateQueries({ queryKey: ["labs"] });
@@ -57,8 +48,9 @@ export function DeleteLabButton({
       setOpen(false);
       onDeleted?.();
     },
-    onError: (err: Error) => {
-      toast.error("Delete failed", { description: err.message });
+    onError: (err: unknown) => {
+      const e = err as { detail?: string; message?: string };
+      toast.error("Delete failed", { description: e.detail ?? e.message });
     },
   });
 
@@ -81,22 +73,19 @@ export function DeleteLabButton({
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Delete this lab?</DialogTitle>
+            <DialogTitle>Destroy this lab?</DialogTitle>
             <DialogDescription asChild>
               <div className="space-y-2 text-sm">
                 <p>
-                  <span className="font-medium text-foreground">{labName}</span> will be removed
-                  from the dashboard. The Vagrant workspace on disk and any running VMs are{" "}
-                  <span className="font-medium">not</span> touched.
+                  <span className="font-medium text-foreground">{labName}</span> will be{" "}
+                  <span className="font-medium">destroyed</span>: its running VMs or containers,
+                  networks, volumes and workspace directory are removed, then the dashboard entry.
+                  This cannot be undone.
                 </p>
                 <p>
-                  If a build is still in flight, stop it from{" "}
-                  <span className="font-medium">Monitor → Stop</span> first. To tear the VMs down
-                  afterwards, either run{" "}
-                  <code className="rounded bg-muted px-1 text-xs">vagrant destroy -f</code> in
-                  the workspace directory or{" "}
-                  <code className="rounded bg-muted px-1 text-xs">labforge destroy &lt;name&gt;</code>{" "}
-                  from the CLI.
+                  If the teardown fails the lab is kept and marked{" "}
+                  <code className="rounded bg-muted px-1 text-xs">destroy_failed</code> so nothing
+                  is left running unnoticed.
                 </p>
               </div>
             </DialogDescription>
