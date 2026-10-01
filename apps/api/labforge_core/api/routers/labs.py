@@ -37,8 +37,13 @@ from labforge_core.schemas.api import (
     LabCreateRequest,
     LabSummary,
 )
+from labforge_core.services import docker_runtime
 from labforge_core.services.build_runner import (
     BuildPrereqError,
+    DestroyFailed,
+    LabExistsError,
+    SubnetConflictError,
+    destroy_lab,
     parse_per_vm_phases,
     read_build_status,
     read_log_chunk,
@@ -131,15 +136,34 @@ def update_status(
 def delete_lab(
     lab_id: int,
     session: Annotated[Session, Depends(get_session)],
+    force: Annotated[
+        bool,
+        Query(description="Remove the record even if the VMs/containers could not be torn down."),
+    ] = False,
 ) -> None:
+    """Destroy a lab: remove its VMs / containers, verify, then delete the record.
+
+    Unlike a plain row delete this tears the infrastructure down first. If that
+    fails the lab is kept (status ``destroy_failed``) and a 502 explains why, so
+    nothing is orphaned silently. ``?force=true`` removes the record anyway.
+    """
     row = session.get(Lab, lab_id)
     if row is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"detail": f"Lab {lab_id} not found", "code": "not_found"},
         )
-    session.delete(row)
-    session.commit()
+    try:
+        destroy_lab(row, session, force=force)
+    except DestroyFailed as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "detail": f"Could not tear lab {lab_id} down: {exc}. "
+                "The lab was kept; fix the problem and retry, or force-delete the record.",
+                "code": "destroy_failed",
+            },
+        ) from exc
 
 
 # ---------------------------------------------------------------- heartbeat
@@ -256,11 +280,34 @@ def trigger_build(
     (``GET /labs/{id}/build/log`` and ``/build/status``).
     """
     try:
-        lab, workspace = start_build(payload.topology, session)
+        lab, workspace = start_build(
+            payload.topology,
+            session,
+            replace=payload.replace,
+            publish=payload.publish,
+        )
     except BuildPrereqError as exc:
         raise HTTPException(
             status_code=status.HTTP_412_PRECONDITION_FAILED,
-            detail={"detail": str(exc), "code": "vagrant_missing"},
+            detail={"detail": str(exc), "code": exc.code},
+        ) from exc
+    except LabExistsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"detail": str(exc), "code": "lab_exists", "lab_ids": exc.lab_ids},
+        ) from exc
+    except SubnetConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"detail": str(exc), "code": "subnet_conflict"},
+        ) from exc
+    except DestroyFailed as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "detail": f"Could not replace the existing lab: {exc}",
+                "code": "destroy_failed",
+            },
         ) from exc
     pid_file = workspace / ".build.pid"
     pid = int(pid_file.read_text().strip()) if pid_file.exists() else None
@@ -431,10 +478,10 @@ def stop_lab_build(
 def build_preflight() -> dict[str, object]:
     """Cheap probe so the UI can disable / warn on the Build button.
 
-    Returns at minimum ``vagrant_available``. Best-effort additions:
-    ``vagrant_version`` (parsed from ``vagrant --version``), and the
-    default provider env var if one is set so the UI can call out a
-    mismatch with the topology's chosen provider.
+    ``vagrant_available`` / ``vagrant_version`` / ``default_provider`` describe
+    the VM providers; the ``docker_*`` and ``compose_*`` keys describe the
+    docker runtime. Docker keys are always present so the UI can pick the
+    check that matches the topology's provider.
     """
     import subprocess
 
@@ -455,6 +502,7 @@ def build_preflight() -> dict[str, object]:
     default_provider = os.environ.get("VAGRANT_DEFAULT_PROVIDER")
     if default_provider:
         payload["default_provider"] = default_provider
+    payload.update(docker_runtime.runtime_status())
     return payload
 
 

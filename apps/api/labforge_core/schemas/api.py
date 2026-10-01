@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from labforge_schema import LabConfig
 from pydantic import BaseModel, ConfigDict, Field
@@ -13,14 +14,21 @@ class GenerateRequest(BaseModel):
     topology: LabConfig
     include_readme: bool = True
     include_hosts_file: bool = True
+    # Docker runtime only: bind service ports to 127.0.0.1 ("loopback") or
+    # publish nothing ("none").
+    publish: Literal["none", "loopback"] = "loopback"
 
 
 class BuildRequest(BaseModel):
-    """In-app `Build Lab` — same payload as Generate, plus optional name override."""
+    """In-app `Build Lab` — same payload as Generate, plus build options."""
 
     model_config = ConfigDict(extra="forbid")
     topology: LabConfig
     workspace_name: str | None = None
+    # Tear down any existing lab built from the same topology name first.
+    # Without it a second Build of a running lab is refused (409).
+    replace: bool = False
+    publish: Literal["none", "loopback"] = "loopback"
 
 
 class BuildResponse(BaseModel):

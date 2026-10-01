@@ -64,6 +64,122 @@ def _vagrant_status(workspace: Path) -> tuple[str, list[dict]]:
     return lab_status, vms
 
 
+def _is_docker_workspace(workspace: Path) -> bool:
+    return (workspace / "docker-compose.yml").exists() and not (workspace / "Vagrantfile").exists()
+
+
+def _compose_project(workspace: Path) -> str | None:
+    path = workspace / ".labforge-project"
+    if path.exists():
+        value = path.read_text(encoding="utf-8").strip()
+        return value or None
+    return None
+
+
+def _compose_status(workspace: Path) -> tuple[str, list[dict]]:
+    """``docker compose ps`` for a docker-runtime lab.
+
+    Returns (lab_status, vms[]) in the same shape as ``_vagrant_status`` so the
+    API and dashboard need no special case: each container is one "VM" whose
+    hostname is its compose service name.
+    """
+    import json
+
+    project = _compose_project(workspace)
+    if not project:
+        return "unknown", []
+    try:
+        proc = subprocess.run(
+            ["docker", "compose", "-p", project, "ps", "-a", "--format", "json"],
+            cwd=str(workspace),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return "unknown", []
+    if proc.returncode != 0:
+        return "unknown", []
+
+    text = proc.stdout.strip()
+    rows: list[dict] = []
+    if text.startswith("["):
+        try:
+            rows = list(json.loads(text))
+        except ValueError:
+            rows = []
+    else:
+        for line in text.splitlines():
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                continue
+
+    vms: list[dict] = []
+    for row in rows:
+        state = (row.get("State") or "unknown").lower()
+        health = (row.get("Health") or "").lower()
+        if state == "running" and health in ("starting", "unhealthy"):
+            state = health
+        vms.append(
+            {
+                "hostname": row.get("Service") or row.get("Name", "?"),
+                "state": state,
+                "provider": "docker",
+            }
+        )
+    if not vms:
+        return "unknown", []
+    running = sum(1 for v in vms if v["state"] == "running")
+    if running == len(vms):
+        lab_status = "running"
+    elif running == 0:
+        lab_status = "stopped"
+    else:
+        lab_status = "partial"
+    return lab_status, vms
+
+
+def _topology_ip_map(workspace: Path) -> dict[str, str]:
+    """hostname -> IP from the frozen ``topology.json`` (docker runtime)."""
+    import json
+
+    path = workspace / "topology.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    out: dict[str, str] = {}
+    for node in data.get("nodes", []):
+        cfg = node.get("config", {})
+        if cfg.get("hostname") and cfg.get("ip"):
+            out[cfg["hostname"]] = cfg["ip"]
+    return out
+
+
+def _compose_log_tail(workspace: Path, max_lines: int = 50) -> list[str]:
+    project = _compose_project(workspace)
+    if not project:
+        return []
+    try:
+        proc = subprocess.run(
+            ["docker", "compose", "-p", project, "logs", "--no-color", "--tail", "5"],
+            cwd=str(workspace),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+    if proc.returncode != 0:
+        return []
+    return [ln for ln in proc.stdout.splitlines() if ln.strip()][-max_lines:]
+
+
 _HOST_RE = re.compile(r'config\.vm\.define\s+"([^"]+)"')
 _IP_RE = re.compile(r'ip:\s*"([0-9.]+)"')
 # tcpdump "-nn" line, e.g.:
@@ -217,7 +333,8 @@ def run(
     """Heartbeat loop. Exits cleanly when the workspace directory disappears
     or a STOP sentinel file appears in it."""
     stop_file = workspace / ".labforge-daemon-stop"
-    ip_map = _vagrantfile_ip_map(workspace)
+    docker_mode = _is_docker_workspace(workspace)
+    ip_map = _topology_ip_map(workspace) if docker_mode else _vagrantfile_ip_map(workspace)
     headers = {"Authorization": f"Bearer {api_token}"} if api_token else {}
     client = httpx.Client(base_url=api_base, timeout=5, headers=headers)
     capture_ifaces = _detect_capture_ifaces(ip_map)
@@ -245,7 +362,9 @@ def run(
                 break
 
             if build_exit.exists():
-                lab_status, vms = _vagrant_status(workspace)
+                lab_status, vms = (
+                    _compose_status(workspace) if docker_mode else _vagrant_status(workspace)
+                )
                 for vm in vms:
                     vm["ip"] = ip_map.get(vm["hostname"])
             else:
@@ -254,7 +373,7 @@ def run(
             payload = {
                 "lab_status": lab_status,
                 "vms": vms,
-                "log_tail": _tail_logs(workspace),
+                "log_tail": _compose_log_tail(workspace) if docker_mode else _tail_logs(workspace),
                 "flows": flows,
                 "captured_at": datetime.utcnow().isoformat(),
             }

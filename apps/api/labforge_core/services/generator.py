@@ -17,7 +17,7 @@ from labforge_core.provisioners.role_installers import (
     linux_snippet,
     windows_snippet,
 )
-from labforge_core.services.compose_generator import render as render_compose
+from labforge_core.services.compose_generator import build_bundle as build_compose_bundle
 from labforge_core.services.provenance import build_manifest
 from labforge_core.services.validator import is_windows
 from labforge_core.settings import get_settings
@@ -299,6 +299,10 @@ def generate_artifacts(
     include_readme: bool = True,
     include_hosts_file: bool = True,
 ) -> GeneratedArtifacts:
+    if topology.provider is Provider.DOCKER:
+        raise ValueError(
+            "topology.provider is 'docker': use the docker-compose target, not the Vagrant generator"
+        )
     env = _jinja_env()
 
     provisionable_nodes = [n for n in topology.nodes if _is_provisionable(n)]
@@ -373,6 +377,8 @@ def generate_zip(
     include_readme: bool = True,
     include_hosts_file: bool = True,
     target: str = "vagrant",
+    publish: str = "loopback",
+    project: str | None = None,
 ) -> bytes:
     """Build the downloadable zip for either target.
 
@@ -384,7 +390,7 @@ def generate_zip(
     ``manifest.json`` with sha256 digests + tool/schema versions so the
     bundle is reproducibly identifiable.
     """
-    file_contents: dict[str, str] = {}
+    file_contents: dict[str, str | bytes] = {}
 
     if target == "vagrant":
         artifacts = generate_artifacts(
@@ -400,20 +406,14 @@ def generate_zip(
         if artifacts.readme:
             file_contents["README.md"] = artifacts.readme
     elif target == "docker-compose":
-        compose = render_compose(topology)
-        file_contents["docker-compose.yml"] = compose.compose_yaml
-        for filename, body in compose.env_files.items():
-            file_contents[filename] = body
-        for hostname, note in compose.fallback_notes.items():
-            file_contents[f"notes/{hostname}.txt"] = note
-        if include_hosts_file:
-            file_contents["hosts"] = "\n".join(
-                f"{n.config.ip}\t{n.config.hostname}"
-                for n in topology.nodes
-                if n.type.value != "internet"
-            ) + "\n"
-        if include_readme:
-            file_contents["README.md"] = _compose_readme(topology, compose.fallback_notes)
+        files, _artifacts = build_compose_bundle(
+            topology,
+            publish=publish,
+            project=project,
+            include_readme=include_readme,
+            include_hosts_file=include_hosts_file,
+        )
+        file_contents.update(files)
     else:
         raise ValueError(f"Unknown target: {target!r}")
 
@@ -426,34 +426,3 @@ def generate_zip(
         for filename, body in file_contents.items():
             zf.writestr(filename, body)
     return buf.getvalue()
-
-
-def _compose_readme(topology: LabConfig, fallback_notes: dict[str, str]) -> str:
-    lines = [
-        f"# {topology.name} — docker-compose target",
-        "",
-        topology.description or "_(no description)_",
-        "",
-        "## Quick start",
-        "",
-        "```bash",
-        "docker compose up -d",
-        "docker compose ps",
-        "```",
-        "",
-        f"All services share the bridge network `labforge` ({topology.network_cidr}).",
-        "Per-service env files live in `env/`.",
-        "",
-    ]
-    if fallback_notes:
-        lines.extend([
-            "## Nodes that fall back to Vagrant",
-            "",
-            "The following nodes can't usefully run as containers — use the",
-            "Vagrant target for them:",
-            "",
-        ])
-        for hostname, note in fallback_notes.items():
-            lines.append(f"- **{hostname}** — {note.strip()}")
-        lines.append("")
-    return "\n".join(lines)

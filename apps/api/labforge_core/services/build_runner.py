@@ -1,21 +1,34 @@
 """In-app Build Lab runner.
 
 The web Build button POSTs the canvas topology here. We:
-  1. Generate the Vagrant bundle straight to disk (no zip round-trip).
-  2. Register a Lab row.
-  3. Spawn ``vagrant up`` as a detached subprocess writing combined
-     stdout+stderr to ``<workspace>/build.log``. A sentinel file
-     ``.build.exit`` carries the eventual exit code.
-  4. Spawn the heartbeat daemon so the dashboard sees per-VM state once
-     VMs come up.
+  1. Create the Lab row first, so the lab id (not its name) keys everything
+     that follows: workspace directory, Compose project, process sentinels.
+  2. Generate the bundle straight to disk (no zip round-trip): a Vagrantfile
+     for the VM providers, a docker-compose project for ``provider: docker``.
+  3. Spawn ``vagrant up`` / ``docker compose up --wait`` as a detached
+     subprocess writing combined stdout+stderr to ``<workspace>/build.log``.
+     A sentinel file ``.build.exit`` carries the eventual exit code.
+  4. Spawn the heartbeat daemon so the dashboard sees per-VM / per-container
+     state once things come up.
 
 The runner returns immediately. The /labs/{id}/build/log endpoint tails
 the log; the /labs/{id}/build/status endpoint reads the sentinel.
+
+Lifecycle rules
+---------------
+* A workspace belongs to exactly one lab row and is never reused, so a second
+  Build can no longer wipe the directory a running build is still using.
+* Building a topology whose name matches a live lab is refused (``LabExistsError``)
+  unless the caller asks to ``replace`` it, which performs a real teardown first.
+* ``destroy_lab`` removes the VMs/containers first, verifies they are gone, and
+  only then deletes the workspace. If teardown fails the lab is kept so the user
+  can see it and retry.
 """
 
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import os
 import re
@@ -24,14 +37,18 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from labforge_schema import LabConfig
+from labforge_schema import LabConfig, Provider
 from sqlmodel import Session, select
 
 from labforge_core.models import Lab
+from labforge_core.services import docker_runtime
+from labforge_core.services.compose_generator import build_bundle, project_name
 from labforge_core.services.generator import generate_artifacts, vagrant_provider_name
 from labforge_core.settings import get_settings
 
@@ -39,12 +56,50 @@ BUILD_LOG = "build.log"
 BUILD_EXIT = ".build.exit"
 BUILD_PID = ".build.pid"
 BUILD_ABORTED = ".build.aborted"
+DAEMON_PID = ".labforge-daemon.pid"
+
+# Lab statuses that mean "something may be running or still starting".
+ACTIVE_STATUSES = ("building", "running", "partial")
 
 _LOGGER = logging.getLogger("labforge.build_runner")
 
+# Serialises "is there already a live lab with this name? -> create the row".
+# The API runs as one process, so a process-local lock is enough.
+_CREATE_LOCK = threading.Lock()
+_LAB_LOCKS: dict[int, threading.Lock] = {}
+_LAB_LOCKS_GUARD = threading.Lock()
+
+
+def _lab_lock(lab_id: int) -> threading.Lock:
+    with _LAB_LOCKS_GUARD:
+        return _LAB_LOCKS.setdefault(lab_id, threading.Lock())
+
 
 class BuildPrereqError(RuntimeError):
-    """Vagrant isn't installed / wrong version / etc."""
+    """Vagrant/Docker isn't installed, not running, wrong version, etc."""
+
+    def __init__(self, message: str, code: str = "vagrant_missing") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class LabExistsError(RuntimeError):
+    """A live lab already exists for this topology name."""
+
+    def __init__(self, lab_ids: list[int], name: str) -> None:
+        super().__init__(
+            f"A lab named '{name}' already exists (id {', '.join(map(str, lab_ids))}). "
+            "Destroy it first, or build with replace to tear it down and start over."
+        )
+        self.lab_ids = lab_ids
+
+
+class SubnetConflictError(RuntimeError):
+    """The lab network overlaps one that already exists on the Docker host."""
+
+
+class DestroyFailed(RuntimeError):
+    """Teardown could not be verified; the lab was left in place."""
 
 
 def _slug(name: str) -> str:
@@ -53,6 +108,11 @@ def _slug(name: str) -> str:
 
 def vagrant_available() -> bool:
     return shutil.which("vagrant") is not None
+
+
+def runtime_of(workspace: Path) -> str:
+    """``"docker"`` or ``"vagrant"``, decided by what is in the workspace."""
+    return "docker" if docker_runtime.is_docker_workspace(workspace) else "vagrant"
 
 
 def _write_artifacts(topology: LabConfig, workspace: Path) -> None:
@@ -72,6 +132,22 @@ def _write_artifacts(topology: LabConfig, workspace: Path) -> None:
     )
 
 
+def _write_docker_bundle(
+    topology: LabConfig, workspace: Path, *, project: str, publish: str
+) -> list[str]:
+    """Write the compose project; returns the generator's warnings."""
+    files, artifacts = build_bundle(topology, publish=publish, project=project)
+    workspace.mkdir(parents=True, exist_ok=True)
+    for rel, content in files.items():
+        target = workspace / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(content, bytes):
+            target.write_bytes(content)
+        else:
+            target.write_text(content, encoding="utf-8")
+    return artifacts.warnings
+
+
 def _shim_dir() -> Path:
     """Where to drop the throwaway build-shim script.
 
@@ -84,19 +160,16 @@ def _shim_dir() -> Path:
     return d
 
 
-def _spawn_vagrant_up(workspace: Path, provider: str) -> int:
-    """Detach `vagrant up --provider <provider>` so the handler can return.
+def _spawn_build(workspace: Path, argv: list[str], *, banner: str, env_extra: dict[str, str] | None = None) -> int:
+    """Detach ``argv`` (``vagrant up ...`` / ``docker compose up ...``).
 
-    The provider is forced both via the CLI flag and by setting
-    ``VAGRANT_DEFAULT_PROVIDER`` in the spawned env, so a stale system
-    default (e.g. ``vmware_desktop``) can't silently win.
+    The shim runs the command, captures its exit code, and writes the
+    ``.build.exit`` sentinel however the command ends. Output goes to
+    ``build.log``.
     """
     log_path = workspace / BUILD_LOG
     log_path.write_text(
-        (
-            f"--- vagrant up start {datetime.utcnow().isoformat()} ---\n"
-            f"--- provider={provider} ---\n"
-        ),
+        f"--- build start {datetime.utcnow().isoformat()} ---\n{banner}\n",
         encoding="utf-8",
     )
     fh = log_path.open("a", encoding="utf-8", buffering=1)  # line-buffered
@@ -108,16 +181,14 @@ def _spawn_vagrant_up(workspace: Path, provider: str) -> int:
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
         creationflags |= 0x00000008  # DETACHED_PROCESS
 
-    # Drop the shim outside the workspace so the artifact dir stays
-    # clean. One shim file per workspace slug is enough.
     shim_name = f"build_shim_{_slug(workspace.name)}_{int(time.time())}.py"
     shim = _shim_dir() / shim_name
     shim.write_text(_BUILD_SHIM, encoding="utf-8")
 
-    env = {**os.environ, "VAGRANT_DEFAULT_PROVIDER": provider}
+    env = {**os.environ, **(env_extra or {})}
 
     proc = subprocess.Popen(
-        [sys.executable, str(shim), str(workspace), provider],
+        [sys.executable, str(shim), str(workspace), json.dumps(argv)],
         cwd=str(workspace),
         stdout=fh,
         stderr=subprocess.STDOUT,
@@ -130,19 +201,16 @@ def _spawn_vagrant_up(workspace: Path, provider: str) -> int:
     return proc.pid
 
 
-# Shim that runs `vagrant up --provider <provider>`, captures the exit
-# code, and writes the sentinel file regardless of how vagrant terminates.
-# Lives in a temp dir so the workspace stays free of build scaffolding.
+# Shim that runs the build command, captures the exit code, and writes the
+# sentinel file regardless of how the command terminates. Lives in a temp dir
+# so the workspace stays free of build scaffolding.
 _BUILD_SHIM = '''\
-import os, subprocess, sys, time
+import json, os, subprocess, sys, time
 ws = sys.argv[1]
-provider = sys.argv[2] if len(sys.argv) > 2 else "virtualbox"
+argv = json.loads(sys.argv[2])
 exit_path = os.path.join(ws, ".build.exit")
 try:
-    rc = subprocess.call(
-        ["vagrant", "up", "--provider", provider],
-        cwd=ws,
-    )
+    rc = subprocess.call(argv, cwd=ws)
 except FileNotFoundError:
     rc = 127
 except Exception as exc:
@@ -153,47 +221,8 @@ with open(exit_path, "w", encoding="utf-8") as fh:
 '''
 
 
-def start_build(
-    topology: LabConfig,
-    session: Session,
-    workspace_root: Path | None = None,
-) -> tuple[Lab, Path]:
-    """Synchronously: generate bundle + create Lab row + spawn vagrant up.
-
-    Returns the persisted Lab and the workspace path. Raises BuildPrereqError
-    if vagrant isn't installed.
-    """
-    if not vagrant_available():
-        raise BuildPrereqError(
-            "vagrant is not on PATH on the API host — install Vagrant 2.4+ first"
-        )
-    settings = get_settings()
-    root = workspace_root or settings.workspace_root
-    slug = _slug(topology.name)
-    workspace = root / slug
-    if workspace.exists() and any(workspace.iterdir()):
-        # Same convention the CLI uses: re-build wipes the previous one.
-        # The heartbeat daemon, if any, will exit cleanly because the dir
-        # disappears for a moment.
-        shutil.rmtree(workspace)
-    _write_artifacts(topology, workspace)
-
-    lab = Lab(
-        topology_slug=slug,
-        name=topology.name,
-        provider=topology.provider.value,
-        status="building",
-        workspace_path=str(workspace),
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
-    )
-    session.add(lab)
-    session.commit()
-    session.refresh(lab)
-
-    pid = _spawn_vagrant_up(workspace, vagrant_provider_name(topology.provider))
-    # Spawn the heartbeat daemon so once VMs come up the dashboard
-    # populates without the user having to run `labforge run` in parallel.
+def _spawn_daemon(lab: Lab, workspace: Path) -> None:
+    """Heartbeat daemon, best effort: the build proceeds without it."""
     try:
         from labforge_agent import daemon as _daemon
 
@@ -201,12 +230,207 @@ def start_build(
             lab_id=lab.id or 0,
             workspace=workspace,
             api_base="http://127.0.0.1:8000",
+            api_token=get_settings().agent_token,
         )
     except Exception:
-        # Heartbeat is best-effort; the build still proceeds without it.
-        pass
-    print(f"[build_runner] vagrant up pid={pid} workspace={workspace}", flush=True)
-    return lab, workspace
+        _LOGGER.warning("heartbeat_daemon_spawn_failed", exc_info=True)
+
+
+def _live_labs_named(session: Session, slug: str) -> list[Lab]:
+    rows = session.exec(select(Lab).where(Lab.topology_slug == slug)).all()
+    return [row for row in rows if row.status in ACTIVE_STATUSES]
+
+
+@dataclass
+class BuildResult:
+    lab: Lab
+    workspace: Path
+    warnings: list[str]
+
+
+def start_build(
+    topology: LabConfig,
+    session: Session,
+    workspace_root: Path | None = None,
+    *,
+    replace: bool = False,
+    publish: str = "loopback",
+) -> tuple[Lab, Path]:
+    """Create the lab, write its bundle and start the build.
+
+    Returns the persisted Lab and its workspace. Raises:
+
+    * ``BuildPrereqError`` if Vagrant / Docker is unavailable,
+    * ``LabExistsError`` if a live lab with this name exists and ``replace`` is false,
+    * ``SubnetConflictError`` if a docker lab's network overlaps an existing one,
+    * ``DestroyFailed`` if ``replace`` could not tear the old lab down.
+    """
+    result = start_build_detailed(
+        topology, session, workspace_root, replace=replace, publish=publish
+    )
+    return result.lab, result.workspace
+
+
+def start_build_detailed(
+    topology: LabConfig,
+    session: Session,
+    workspace_root: Path | None = None,
+    *,
+    replace: bool = False,
+    publish: str = "loopback",
+) -> BuildResult:
+    use_docker = topology.provider is Provider.DOCKER
+    if use_docker:
+        problem = docker_runtime.prereq_problem()
+        if problem:
+            raise BuildPrereqError(problem[1], problem[0])
+    elif not vagrant_available():
+        raise BuildPrereqError(
+            "vagrant is not on PATH on the API host — install Vagrant 2.4+ first",
+            "vagrant_missing",
+        )
+
+    settings = get_settings()
+    root = workspace_root or settings.workspace_root
+    slug = _slug(topology.name)
+
+    if replace:
+        # Real teardown of every lab built from this topology name, outside
+        # the create lock because it can take a while.
+        for old in session.exec(select(Lab).where(Lab.topology_slug == slug)).all():
+            destroy_lab(old, session)
+
+    with _CREATE_LOCK:
+        live = _live_labs_named(session, slug)
+        if live:
+            raise LabExistsError([lab.id or 0 for lab in live], topology.name)
+        lab = Lab(
+            topology_slug=slug,
+            name=topology.name,
+            provider=topology.provider.value,
+            status="building",
+            workspace_path=None,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        session.add(lab)
+        session.commit()
+        session.refresh(lab)
+        # Immutable workspace key: the lab id. The name only decorates it.
+        workspace = root / f"{slug}-{lab.id}"
+        lab.workspace_path = str(workspace)
+        session.add(lab)
+        session.commit()
+
+    warnings: list[str] = []
+    try:
+        project = project_name(f"lf{lab.id}-{slug}")
+        if use_docker:
+            conflicts = docker_runtime.subnet_conflicts(topology.network_cidr, own_project=project)
+            if conflicts:
+                raise SubnetConflictError(
+                    f"The lab network {topology.network_cidr} overlaps "
+                    + "; ".join(conflicts)
+                    + ". Change the network CIDR or destroy the other lab."
+                )
+            warnings = _write_docker_bundle(topology, workspace, project=project, publish=publish)
+            argv = docker_runtime.up_command(project)
+            banner = f"--- runtime=docker project={project} ---"
+            env_extra = None
+        else:
+            _write_artifacts(topology, workspace)
+            provider = vagrant_provider_name(topology.provider)
+            argv = ["vagrant", "up", "--provider", provider]
+            banner = f"--- runtime=vagrant provider={provider} ---"
+            env_extra = {"VAGRANT_DEFAULT_PROVIDER": provider}
+        for warning in warnings:
+            _LOGGER.info("compose_warning lab=%s %s", lab.id, warning)
+        pid = _spawn_build(workspace, argv, banner=banner, env_extra=env_extra)
+        if warnings:
+            with (workspace / BUILD_LOG).open("a", encoding="utf-8") as fh:
+                fh.writelines(f"[labforge] warning: {w}\n" for w in warnings)
+    except Exception:
+        # Never leave a half-created lab behind: drop the row and any files.
+        session.delete(lab)
+        session.commit()
+        shutil.rmtree(workspace, ignore_errors=True)
+        raise
+
+    _spawn_daemon(lab, workspace)
+    print(f"[build_runner] {banner} pid={pid} workspace={workspace}", flush=True)
+    return BuildResult(lab=lab, workspace=workspace, warnings=warnings)
+
+
+# ------------------------------------------------------------------ destroy
+
+
+def _stop_daemon(workspace: Path) -> None:
+    with contextlib.suppress(Exception):
+        from labforge_agent import daemon as _daemon
+
+        _daemon.request_stop(workspace)
+    pid_file = workspace / DAEMON_PID
+    if pid_file.exists():
+        with contextlib.suppress(ValueError, OSError):
+            pid = int(pid_file.read_text().strip())
+            if pid > 0 and is_pid_alive(pid):
+                os.kill(pid, signal.SIGTERM)
+
+
+def _vagrant_teardown(workspace: Path) -> str | None:
+    """Return an error string, or ``None`` on success."""
+    if not vagrant_available():
+        return "vagrant is not on PATH, so the VMs cannot be destroyed"
+    try:
+        proc = subprocess.run(
+            ["vagrant", "destroy", "-f"],
+            cwd=str(workspace),
+            capture_output=True,
+            text=True,
+            timeout=600,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return "vagrant destroy timed out after 10 minutes"
+    except OSError as exc:
+        return f"could not run vagrant: {exc}"
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout).strip().splitlines()[-3:]
+        return f"vagrant destroy exited {proc.returncode}: {' | '.join(tail)}"
+    return None
+
+
+def destroy_lab(lab: Lab, session: Session, *, force: bool = False) -> None:
+    """Tear down a lab for real, then delete its workspace and row.
+
+    The VMs / containers are removed first and verified gone. If that fails and
+    ``force`` is false, ``DestroyFailed`` is raised and nothing else is deleted,
+    so the lab stays visible and can be retried. ``force`` removes the record
+    even when teardown failed (for orphans whose infrastructure is already gone).
+    """
+    lab_id = lab.id or 0
+    with _lab_lock(lab_id):
+        workspace = Path(lab.workspace_path) if lab.workspace_path else None
+        if workspace is not None and workspace.exists():
+            if read_build_status(workspace)["phase"] == "running":
+                stop_build(workspace)
+            _stop_daemon(workspace)
+            if runtime_of(workspace) == "docker":
+                result = docker_runtime.teardown(workspace)
+                error = None if result.ok else (result.error or "teardown failed")
+            else:
+                error = _vagrant_teardown(workspace)
+            if error and not force:
+                lab.status = "destroy_failed"
+                lab.updated_at = datetime.utcnow()
+                session.add(lab)
+                session.commit()
+                raise DestroyFailed(error)
+            shutil.rmtree(workspace, ignore_errors=True)
+        session.delete(lab)
+        session.commit()
+    with _LAB_LOCKS_GUARD:
+        _LAB_LOCKS.pop(lab_id, None)
 
 
 def read_log_chunk(workspace: Path, since: int = 0, max_bytes: int = 64 * 1024) -> dict:
@@ -365,7 +589,10 @@ def read_build_status(workspace: Path) -> dict:
             # Build exited non-zero. Check if any VM is still alive in
             # the hypervisor — if so this is a partial success rather
             # than a hard failure.
-            alive = _provider_vms_running(workspace)
+            if runtime_of(workspace) == "docker":
+                alive = docker_runtime.running_count(workspace)
+            else:
+                alive = _provider_vms_running(workspace)
             phase = "partial" if alive > 0 else "failed"
         return {
             "phase": phase,
@@ -410,8 +637,93 @@ _PHASE_ORDER: tuple[str, ...] = (
 _PHASE_RANK = {p: i for i, p in enumerate(_PHASE_ORDER)}
 
 
+_DOCKER_CONTAINER_RE = re.compile(r"^\s*Container\s+(\S+)\s+(\w+)\s*$")
+_DOCKER_IMAGE_RE = re.compile(r"^\s*(?:Image\s+)?(\S+)\s+(Pulling|Pulled|Building|Built)\s*$")
+_DOCKER_BUILD_STEP_RE = re.compile(r"^#\d+\s+\[([A-Za-z0-9._-]+)\s")
+_DOCKER_ACTION_PHASE = {
+    "pulling": "downloading",
+    "pulled": "importing",
+    "building": "importing",
+    "built": "importing",
+    "creating": "booting",
+    "created": "booting",
+    "starting": "booting",
+    "started": "booting",
+    "waiting": "provisioning",
+    "healthy": "ready",
+    "running": "ready",
+    "error": "failed",
+    "exited": "failed",
+}
+
+
+def _compose_services(workspace: Path) -> list[str]:
+    try:
+        import yaml
+
+        doc = yaml.safe_load((workspace / docker_runtime.COMPOSE_FILE).read_text(encoding="utf-8"))
+        return list((doc or {}).get("services", {}).keys())
+    except Exception:
+        return []
+
+
+def _parse_docker_phases(workspace: Path) -> dict[str, str]:
+    """Per-service phase from ``docker compose up --progress plain`` output."""
+    path = workspace / BUILD_LOG
+    if not path.exists():
+        return {}
+    project = docker_runtime.read_project(workspace) or ""
+    services = _compose_services(workspace)
+    out: dict[str, str] = dict.fromkeys(services, "defined")
+
+    def service_of(token: str) -> str:
+        if project and token.startswith(f"{project}-"):
+            token = token[len(project) + 1 :]
+        return re.sub(r"-\d+$", "", token)
+
+    def bump(service: str, phase: str) -> None:
+        if services and service not in out:
+            return
+        current = out.get(service)
+        advances = phase == "failed" or current is None or _PHASE_RANK[phase] > _PHASE_RANK[current]
+        if advances and current != "failed":
+            out[service] = phase
+
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            for raw in fh:
+                line = raw.rstrip("\n")
+                m = _DOCKER_CONTAINER_RE.match(line)
+                if m:
+                    phase = _DOCKER_ACTION_PHASE.get(m.group(2).lower())
+                    if phase:
+                        bump(service_of(m.group(1)), phase)
+                    continue
+                m = _DOCKER_IMAGE_RE.match(line)
+                if m:
+                    phase = _DOCKER_ACTION_PHASE.get(m.group(2).lower())
+                    if phase:
+                        bump(m.group(1), phase)
+                    continue
+                m = _DOCKER_BUILD_STEP_RE.match(line)
+                if m:
+                    bump(m.group(1), "importing")
+    except OSError:
+        return {}
+
+    # ``Started`` is final for services without a healthcheck, and compose
+    # only exits 0 once everything is up and healthy: trust the exit code.
+    exit_file = workspace / BUILD_EXIT
+    if exit_file.exists():
+        body = exit_file.read_text(encoding="utf-8").strip().splitlines()
+        if body and body[0].strip() == "0":
+            for service in services:
+                out[service] = "ready"
+    return {k: v for k, v in out.items() if v != "defined"}
+
+
 def parse_per_vm_phases(workspace: Path) -> dict[str, str]:
-    """Scan build.log and return ``{hostname: phase}`` per VM.
+    """Scan build.log and return ``{hostname: phase}`` per VM / container.
 
     The returned phase is the highest-ranked one we saw for that VM —
     so a brief "booting" line followed by "Running provisioner: shell"
@@ -422,6 +734,8 @@ def parse_per_vm_phases(workspace: Path) -> dict[str, str]:
     Cheap regex pass; runs once per request, no caching. build.log
     rarely exceeds ~1 MB even for long builds so this is fine.
     """
+    if runtime_of(workspace) == "docker":
+        return _parse_docker_phases(workspace)
     path = workspace / BUILD_LOG
     if not path.exists():
         return {}
@@ -532,7 +846,12 @@ def stop_build(workspace: Path, *, kill_timeout_s: float = 5.0) -> dict:
                 # Windows in the POSIX sense.
                 os.kill(pid, signal.CTRL_BREAK_EVENT)  # type: ignore[attr-defined]
             else:
-                os.kill(pid, signal.SIGTERM)
+                # The shim leads its own session; signal the whole group so
+                # the vagrant / docker child dies with it.
+                try:
+                    os.killpg(pid, signal.SIGTERM)
+                except (ProcessLookupError, PermissionError):
+                    os.kill(pid, signal.SIGTERM)
         except (ProcessLookupError, OSError) as exc:
             _LOGGER.info("stop_build_signal_failed pid=%s err=%s", pid, exc)
 
@@ -546,7 +865,10 @@ def stop_build(workspace: Path, *, kill_timeout_s: float = 5.0) -> dict:
                 if os.name == "nt":
                     subprocess.call(["taskkill", "/F", "/T", "/PID", str(pid)])
                 else:
-                    os.kill(pid, signal.SIGKILL)  # type: ignore[attr-defined]
+                    try:
+                        os.killpg(pid, signal.SIGKILL)  # type: ignore[attr-defined]
+                    except (ProcessLookupError, PermissionError):
+                        os.kill(pid, signal.SIGKILL)  # type: ignore[attr-defined]
                 force_killed = True
             except (ProcessLookupError, OSError) as exc:
                 _LOGGER.info("stop_build_kill_failed pid=%s err=%s", pid, exc)

@@ -43,6 +43,8 @@ packages = ["labforge_core"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# Container-side role scripts: standalone programs that ship into Docker images.
+extend-exclude = ["labforge_core/docker_roles"]
 
 [tool.ruff.lint]
 select = [

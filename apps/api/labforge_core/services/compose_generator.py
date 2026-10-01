@@ -1,64 +1,54 @@
-"""Docker compose alternative to the Vagrant generator.
+"""Docker runtime generator: topology -> docker-compose project.
 
-For nodes whose role set is "container-native" (web servers, databases,
-LLM runtimes, OpenPLC, MediaMTX, Wazuh manager, etc.) we'd much rather
-spin up a `docker compose up` stack than wait 15 minutes for full VMs.
-This module renders that.
+This is the renderer behind both the in-app **Build** button (``provider:
+docker``) and ``POST /generate?target=docker-compose``. It returns a complete
+project directory as ``{relative path: content}`` so callers can write it to a
+workspace or zip it without caring which.
 
-Nodes that need a true OS (Windows DC, Kali GUI, ICS firmware emulation
-on a kernel-level network) get a `notes/<hostname>.txt` stub explaining
-that they fall back to the Vagrant target.
+What a bundle contains::
 
-The compose generator is *additive* — it doesn't replace Vagrant. The
-`/generate?target=docker-compose` endpoint hits this path; the default
-target stays Vagrant so nothing else breaks.
+    docker-compose.yml          services, one lab network, named volumes
+    env/<host>.env              per-container environment (credentials, role env)
+    build/<role>/...            Dockerfiles for the custom roles that need building
+    notes/<host>.txt            why a node was NOT started as a container
+    README.md                   commands, URLs, and the warnings from generation
+    topology.json               the source of truth (added by the callers)
+
+Design notes
+------------
+* Nothing is published to the host unless asked. ``publish="loopback"`` binds
+  each role's ports to ``127.0.0.1`` only, so intentionally vulnerable services
+  are never reachable from the LAN. ``publish="none"`` publishes nothing.
+* There is no ``container_name``: Compose names containers after the project, so
+  two labs with the same hostnames cannot collide.
+* Nodes that cannot run as a container (Windows, routers, firewalls, appliance
+  OSes with no image) are skipped with a note rather than silently replaced by
+  an empty Alpine.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import hashlib
+import ipaddress
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
 
 import yaml  # provided indirectly by uvicorn[standard] -> pyyaml
-from labforge_schema import LabConfig, NodeType, OsType, TopologyNode
+from labforge_schema import LabConfig, NodeType, TopologyNode
 
-# Default container images per role. Conservative — every image listed
-# is publicly available on Docker Hub or ghcr. Roles not in this map fall
-# through to an `alpine` placeholder with a comment explaining what to do.
-_ROLE_IMAGE: dict[str, str] = {
-    "apache": "httpd:2.4",
-    "nginx": "nginx:1.27",
-    "mysql": "mysql:8.0",
-    "postgresql": "postgres:16",
-    "mongodb": "mongo:7.0",
-    "redis": "redis:7.4",
-    "openplc": "openplc/openplc_v3:latest",
-    "mediamtx": "bluenviron/mediamtx:latest",
-    "ollama": "ollama/ollama:latest",
-    "elastic": "docker.elastic.co/elasticsearch/elasticsearch:8.15.0",
-    "kibana": "docker.elastic.co/kibana/kibana:8.15.0",
-    "grafana": "grafana/grafana:11.2.0",
-    "prometheus": "prom/prometheus:v2.54.1",
-    "keycloak": "quay.io/keycloak/keycloak:25.0",
-    "vault": "hashicorp/vault:1.18",
-    "mqtt": "eclipse-mosquitto:2",
-    "suricata": "jasonish/suricata:latest",
-    "wazuh-manager": "wazuh/wazuh-manager:4.9.0",
-    "bloodhound": "specterops/bloodhound:latest",
-    "metasploit": "metasploitframework/metasploit-framework:latest",
-}
+from labforge_core.services.docker_roles import (
+    DOCKER_ROLES,
+    OS_FALLBACK_IMAGE,
+    DockerRole,
+    lookup,
+    parse_role,
+    render_template,
+)
 
+ROLE_BUILD_ROOT = Path(__file__).resolve().parent.parent / "docker_roles"
 
-_OS_FALLBACK_IMAGE: dict[OsType, str] = {
-    OsType.UBUNTU_2204: "ubuntu:22.04",
-    OsType.UBUNTU_2404: "ubuntu:24.04",
-    OsType.DEBIAN_12: "debian:bookworm",
-    OsType.ALPINE_LATEST: "alpine:3.20",
-    OsType.KALI_ROLLING: "kalilinux/kali-rolling",
-}
-
-
-# Node types that truly need a full VM — compose can't usefully emulate
-# them, so we flag them in a notes file rather than silently pretending.
+# Node types that need a real VM; a container cannot stand in for them.
 _VM_ONLY: set[NodeType] = {
     NodeType.DOMAIN_CONTROLLER,
     NodeType.FIREWALL,
@@ -68,118 +58,405 @@ _VM_ONLY: set[NodeType] = {
     NodeType.CAMERA,
 }
 
+_PROJECT_RE = re.compile(r"[^a-z0-9_-]+")
+
+
+def project_name(label: str) -> str:
+    """Make a valid Compose project name (lowercase alnum, ``-`` and ``_``)."""
+    name = _PROJECT_RE.sub("-", label.lower()).strip("-_")
+    if not name:
+        name = "lab"
+    return name[:60]
+
 
 @dataclass(frozen=True)
 class ComposeArtifacts:
     compose_yaml: str
     env_files: dict[str, str]
     fallback_notes: dict[str, str]
+    # Build contexts for custom roles: ``build/<dir>/<file>`` -> bytes.
+    extra_files: dict[str, bytes] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
+    # hostname -> [(host_port, container_port)] for everything published.
+    published_ports: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
+    project: str = "labforge"
+    # True when the lab network has no route to the internet.
+    isolated: bool = False
 
 
-def _strip_version(role: str) -> str:
-    return role.split("@", 1)[0]
+def _is_container_capable(node: TopologyNode) -> bool:
+    if node.type in _VM_ONLY:
+        return False
+    return not node.config.os.value.startswith("windows")
 
 
-def _image_for(node: TopologyNode) -> str | None:
-    """Pick the most specific image we have. Explicit ``compose_image``
-    on the node wins; otherwise we match the first role with a known
-    image; otherwise we fall back by OS."""
-    explicit = node.config.compose_image
-    if explicit:
-        return explicit
-    for role in node.config.roles:
-        bare = _strip_version(role)
-        if bare in _ROLE_IMAGE:
-            return _ROLE_IMAGE[bare]
-    return _OS_FALLBACK_IMAGE.get(node.config.os)
+def _peer_maps(topology: LabConfig) -> tuple[dict[str, str], dict[str, str]]:
+    """First hostname / IP per role across the topology."""
+    host_by_role: dict[str, str] = {}
+    ip_by_role: dict[str, str] = {}
+    for node in topology.nodes:
+        for raw in node.config.roles:
+            name, _ = parse_role(raw)
+            host_by_role.setdefault(name, node.config.hostname)
+            ip_by_role.setdefault(name, node.config.ip)
+    return host_by_role, ip_by_role
 
 
-def _service_def(node: TopologyNode) -> dict[str, object]:
-    image = _image_for(node) or "alpine:3.20"
-    svc: dict[str, object] = {
-        "image": image,
-        "hostname": node.config.hostname,
-        "container_name": f"labforge-{node.config.hostname}",
-        "networks": {
-            "labforge": {"ipv4_address": node.config.ip},
-        },
-        "restart": "unless-stopped",
-        "mem_limit": f"{node.config.memory_mb}m",
-    }
-    # Best-effort port hints. The compose generator can't know which
-    # ports the role binds to without a full registry — we expose the
-    # most common ones based on the role list so the user can `curl`
-    # immediately.
-    role_ports: dict[str, list[str]] = {
-        "apache": ["80"],
-        "nginx": ["80"],
-        "mysql": ["3306"],
-        "postgresql": ["5432"],
-        "mongodb": ["27017"],
-        "redis": ["6379"],
-        "openplc": ["8080", "502"],
-        "mediamtx": ["8554/tcp", "8889"],
-        "ollama": ["11434"],
-        "elastic": ["9200"],
-        "kibana": ["5601"],
-        "grafana": ["3000"],
-        "prometheus": ["9090"],
-        "keycloak": ["8080"],
-        "vault": ["8200"],
-        "mqtt": ["1883", "9001"],
-    }
-    bare_roles = [_strip_version(r) for r in node.config.roles]
-    ports: list[str] = []
-    for r in bare_roles:
-        for p in role_ports.get(r, []):
-            if p not in ports:
-                ports.append(p)
-    if ports:
-        svc["ports"] = [f"{p}:{p.split('/')[0]}" if ":" not in p else p for p in ports]
-    return svc
+def _content_tag(files: dict[str, bytes]) -> str:
+    digest = hashlib.sha256()
+    for name in sorted(files):
+        digest.update(name.encode())
+        digest.update(b"\0")
+        digest.update(files[name])
+        digest.update(b"\0")
+    return digest.hexdigest()[:12]
 
 
-def _env_for(node: TopologyNode) -> str:
-    """Minimal env file the user can edit. Holds the credentials we'd
-    otherwise inline into provisioner scripts."""
-    return (
-        f"# {node.config.hostname} environment\n"
-        f"LABFORGE_HOSTNAME={node.config.hostname}\n"
-        f"LABFORGE_USER={node.config.credentials.username}\n"
-        f"LABFORGE_PASSWORD={node.config.credentials.password}\n"
-        f"# Roles: {', '.join(node.config.roles) or '(none)'}\n"
-    )
+def _read_build_dir(build_dir: str) -> dict[str, bytes]:
+    root = ROLE_BUILD_ROOT / build_dir
+    if not root.is_dir():
+        raise FileNotFoundError(f"docker role build directory missing: {root}")
+    out: dict[str, bytes] = {}
+    for path in sorted(root.rglob("*")):
+        if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc":
+            out[f"build/{build_dir}/{path.relative_to(root).as_posix()}"] = path.read_bytes()
+    return out
 
 
-def render(topology: LabConfig) -> ComposeArtifacts:
+def _env_text(node: TopologyNode, role_env: dict[str, str], roles_label: str) -> str:
+    lines = [
+        f"# {node.config.hostname} environment (generated by LabForge)",
+        f"# Roles: {roles_label or '(none)'}",
+        f"LABFORGE_HOSTNAME={node.config.hostname}",
+        f"LABFORGE_USER={node.config.credentials.username}",
+        f"LABFORGE_PASSWORD={node.config.credentials.password}",
+    ]
+    lines.extend(f"{key}={value}" for key, value in role_env.items())
+    return "\n".join(lines) + "\n"
+
+
+def _pick_host_port(wanted: int, taken: set[int]) -> int:
+    port = wanted
+    while port in taken and port < 65000:
+        port += 1000 if port + 1000 < 65000 else 1
+    taken.add(port)
+    return port
+
+
+def render(
+    topology: LabConfig,
+    *,
+    publish: str = "loopback",
+    project: str | None = None,
+) -> ComposeArtifacts:
+    if publish not in {"none", "loopback"}:
+        raise ValueError(f"publish must be 'none' or 'loopback', got {publish!r}")
+
+    proj = project_name(project or f"labforge-{topology.name}")
+    host_by_role, ip_by_role = _peer_maps(topology)
+
     services: dict[str, dict[str, object]] = {}
     env_files: dict[str, str] = {}
-    fallback_notes: dict[str, str] = {}
+    notes: dict[str, str] = {}
+    extra_files: dict[str, bytes] = {}
+    warnings: list[str] = []
+    published: dict[str, list[tuple[int, int]]] = {}
+    named_volumes: set[str] = set()
+    taken_ports: set[int] = set()
+    isolated = False
+    primary_by_host: dict[str, DockerRole | None] = {}
 
-    cidr = topology.network_cidr
+    # First pass: decide which primary role each node runs, so ``depends_on``
+    # can tell whether a dependency exposes a healthcheck.
     for node in topology.nodes:
-        if node.type in _VM_ONLY:
-            fallback_notes[node.config.hostname] = (
-                f"{node.config.hostname} ({node.type.value}) needs a full VM — "
-                "use the Vagrant target. Compose can't usefully emulate this "
-                "node type.\n"
+        primary: DockerRole | None = None
+        for raw in node.config.roles:
+            role, _ = lookup(raw)
+            if role is not None and (role.image or role.build_dir):
+                primary = role
+                break
+        primary_by_host[node.config.hostname] = primary
+
+    gateway = str(next(ipaddress.ip_network(topology.network_cidr, strict=False).hosts()))
+
+    for node in topology.nodes:
+        host = node.config.hostname
+        if not _is_container_capable(node):
+            notes[host] = (
+                f"{host} ({node.type.value}, {node.config.os.value}) needs a full VM. "
+                "It is not started in the docker runtime; use a VM provider for it.\n"
             )
             continue
-        services[node.config.hostname] = _service_def(node)
-        env_files[f"env/{node.config.hostname}.env"] = _env_for(node)
 
-    document = {
-        "version": "3.9",
-        "services": services,
-        "networks": {
-            "labforge": {
-                "driver": "bridge",
-                "ipam": {"config": [{"subnet": cidr}]},
-            },
-        },
+        primary = primary_by_host[host]
+        ignored: list[str] = []
+        for raw in node.config.roles:
+            role, _ = lookup(raw)
+            if role is None:
+                ignored.append(f"role '{parse_role(raw)[0]}' on {host} has no container preset and is ignored")
+            elif role is not primary and (role.image or role.build_dir):
+                ignored.append(
+                    f"role '{role.role_id}' on {host} is ignored: one container runs one primary role "
+                    f"(this node runs '{primary.role_id if primary else 'none'}')"
+                )
+            elif not (role.image or role.build_dir):
+                ignored.append(f"role '{role.role_id}' on {host} has no image")
+        warnings.extend(ignored)
+
+        service: dict[str, object] = {}
+        role_env: dict[str, str] = {}
+        version: str | None = None
+        for raw in node.config.roles:
+            role, ver = lookup(raw)
+            if role is primary and primary is not None:
+                version = ver
+                break
+
+        values = {
+            "username": node.config.credentials.username,
+            "password": node.config.credentials.password,
+            "hostname": host,
+            "ip": node.config.ip,
+            "version": version or "default",
+        }
+        for role_id, peer_host in host_by_role.items():
+            values[f"peer:{role_id}"] = peer_host
+        for role_id, peer_ip in ip_by_role.items():
+            values[f"peer_ip:{role_id}"] = peer_ip
+
+        def subst(text: str, _values: dict[str, str] = values, _host: str = host) -> str:
+            rendered = render_template(text, _values)
+            for leftover in re.findall(r"\{peer(?:_ip)?:([a-z0-9-]+)\}", rendered):
+                warnings.append(f"{_host} expects a node with role '{leftover}' but the topology has none")
+                rendered = re.sub(r"\{peer(?:_ip)?:" + leftover + r"\}", leftover, rendered)
+            return rendered
+
+        if primary is not None:
+            if primary.build_dir:
+                built = _read_build_dir(primary.build_dir)
+                extra_files.update(built)
+                service["build"] = {"context": f"./build/{primary.build_dir}"}
+                # Tag by content so an unchanged role is never rebuilt (works
+                # offline, no registry lookups) and a changed one always is.
+                service["image"] = f"labforge/{primary.build_dir}:{_content_tag(built)}"
+            else:
+                service["image"] = primary.image
+            if primary.command:
+                service["command"] = [subst(part) for part in primary.command]
+            role_env = {key: subst(val) for key, val in primary.environment.items()}
+            if primary.healthcheck:
+                service["healthcheck"] = dict(primary.healthcheck)
+            for vol in primary.volumes:
+                service.setdefault("volumes", []).append(subst(vol))  # type: ignore[union-attr]
+                source = vol.split(":", 1)[0]
+                if source and source[0] not in "./~":
+                    named_volumes.add(source)
+            if primary.cap_add:
+                service["cap_add"] = list(primary.cap_add)
+            if primary.security_opt:
+                service["security_opt"] = list(primary.security_opt)
+            if primary.tty:
+                service["tty"] = True
+                service["stdin_open"] = True
+            if primary.isolate_network:
+                isolated = True
+            if primary.dns_from:
+                dns_ip = ip_by_role.get(primary.dns_from)
+                if dns_ip:
+                    service["dns"] = [dns_ip]
+                else:
+                    warnings.append(
+                        f"{host} ({primary.role_id}) works best with a '{primary.dns_from}' node "
+                        "as its DNS resolver; none is in the topology"
+                    )
+            deps: dict[str, dict[str, str]] = {}
+            for dep_role in primary.depends_on:
+                dep_host = host_by_role.get(dep_role)
+                if dep_host is None or dep_host == host:
+                    if dep_host is None:
+                        warnings.append(f"{host} ({primary.role_id}) needs a '{dep_role}' node")
+                    continue
+                dep_primary = primary_by_host.get(dep_host)
+                healthy = bool(dep_primary and dep_primary.healthcheck)
+                deps[dep_host] = {"condition": "service_healthy" if healthy else "service_started"}
+            if deps:
+                service["depends_on"] = deps
+            if primary.note and not primary.verified:
+                warnings.append(f"{host} ({primary.role_id}): {primary.note}")
+            elif not primary.verified:
+                warnings.append(f"{host} ({primary.role_id}): preset is not covered by the integration tests")
+        else:
+            image = node.config.compose_image or OS_FALLBACK_IMAGE.get(node.config.os.value)
+            if image is None:
+                notes[host] = (
+                    f"{host} ({node.config.os.value}) has no container image and no role that "
+                    "provides one. Set compose_image on the node or give it a role.\n"
+                )
+                continue
+            service["image"] = image
+            # Bare OS images exit at once without a long-running process.
+            service["command"] = ["sleep", "infinity"]
+            service["tty"] = True
+            service["stdin_open"] = True
+
+        # An explicit image on the node always wins over the role preset.
+        if node.config.compose_image:
+            service["image"] = node.config.compose_image
+            service.pop("build", None)
+
+        service.setdefault("hostname", host)
+        service["init"] = True
+        service["restart"] = "on-failure:3"
+        service["mem_limit"] = f"{node.config.memory_mb}m"
+        service["env_file"] = [f"env/{host}.env"]
+        service["networks"] = {"labforge": {"ipv4_address": node.config.ip}}
+        service["labels"] = {
+            "labforge.managed": "true",
+            "labforge.project": proj,
+            "labforge.node": node.id,
+        }
+
+        if node.config.ip == gateway:
+            warnings.append(
+                f"{host} uses {gateway}, which Docker reserves as the network gateway; pick another address"
+            )
+
+        if publish == "loopback" and primary is not None and primary.ports:
+            mappings: list[tuple[int, int]] = []
+            rendered_ports: list[str] = []
+            for container_port in primary.ports:
+                host_port = _pick_host_port(container_port, taken_ports)
+                mappings.append((host_port, container_port))
+                rendered_ports.append(f"127.0.0.1:{host_port}:{container_port}")
+            service["ports"] = rendered_ports
+            published[host] = mappings
+
+        services[host] = service
+        env_files[f"env/{host}.env"] = _env_text(
+            node, role_env, ", ".join(node.config.roles)
+        )
+
+    network: dict[str, object] = {
+        "driver": "bridge",
+        "ipam": {"config": [{"subnet": topology.network_cidr}]},
+        "labels": {"labforge.managed": "true", "labforge.project": proj},
     }
+    if isolated:
+        network["internal"] = True
+        warnings.append(
+            "This lab includes an analysis role, so its network is internal-only: containers "
+            "cannot reach the internet and host ports are not published."
+        )
+        for host in list(published):
+            services[host].pop("ports", None)
+        published.clear()
+
+    document: dict[str, object] = {"name": proj, "services": services, "networks": {"labforge": network}}
+    if named_volumes:
+        document["volumes"] = {name: {} for name in sorted(named_volumes)}
+
     return ComposeArtifacts(
-        compose_yaml=yaml.safe_dump(document, sort_keys=False),
+        compose_yaml=yaml.safe_dump(document, sort_keys=False, default_flow_style=False, width=120),
         env_files=env_files,
-        fallback_notes=fallback_notes,
+        fallback_notes=notes,
+        extra_files=extra_files,
+        warnings=list(dict.fromkeys(warnings)),
+        published_ports=published,
+        project=proj,
+        isolated=isolated,
     )
+
+
+# Role id -> (path, label) for the URL list in the README.
+_WEB_ROLES: dict[str, tuple[str, str]] = {
+    "kibana": ("/", "Kibana"),
+    "elastic": ("/", "Elasticsearch API"),
+    "grafana": ("/", "Grafana"),
+    "apache": ("/", "Apache"),
+    "nginx": ("/", "nginx"),
+    "keycloak": ("/", "Keycloak"),
+    "prometheus": ("/", "Prometheus"),
+    "vault": ("/ui", "Vault"),
+    "openplc": ("/", "OpenPLC"),
+}
+
+
+def render_readme(topology: LabConfig, artifacts: ComposeArtifacts) -> str:
+    proj = artifacts.project
+    lines = [
+        f"# {topology.name}",
+        "",
+        topology.description or "_(no description)_",
+        "",
+        "Runtime: **Docker** (generated by LabForge).",
+        "",
+        "## Commands",
+        "",
+        "```bash",
+        f"docker compose -p {proj} up -d --build --wait   # start and wait until healthy",
+        f"docker compose -p {proj} ps                      # status",
+        f"docker compose -p {proj} logs -f <service>       # logs",
+        f"docker compose -p {proj} exec <service> bash     # shell in a node",
+        f"docker compose -p {proj} down -v --remove-orphans   # destroy everything",
+        "```",
+        "",
+        f"Lab network: `{topology.network_cidr}` "
+        + ("(internal only, no internet access)." if artifacts.isolated else "."),
+        "",
+        "## Services",
+        "",
+    ]
+    by_host = {n.config.hostname: n for n in topology.nodes}
+    for host in by_host:
+        if host in artifacts.fallback_notes:
+            continue
+        node = by_host[host]
+        roles = ", ".join(node.config.roles) or "bare OS"
+        lines.append(f"- **{host}** ({node.config.ip}): {roles}")
+    if artifacts.published_ports:
+        lines += ["", "## Reachable from this machine", ""]
+        for host, mappings in artifacts.published_ports.items():
+            node = by_host[host]
+            for host_port, container_port in mappings:
+                role_name = next((parse_role(r)[0] for r in node.config.roles if parse_role(r)[0] in _WEB_ROLES), None)
+                if role_name and container_port in DOCKER_ROLES[role_name].ports[:1]:
+                    path, label = _WEB_ROLES[role_name]
+                    lines.append(f"- {label} ({host}): http://127.0.0.1:{host_port}{path}")
+                else:
+                    lines.append(f"- {host}: 127.0.0.1:{host_port} -> container port {container_port}")
+    if artifacts.fallback_notes:
+        lines += ["", "## Not started in Docker", ""]
+        lines += [f"- {note.strip()}" for note in artifacts.fallback_notes.values()]
+    if artifacts.warnings:
+        lines += ["", "## Warnings", ""]
+        lines += [f"- {w}" for w in artifacts.warnings]
+    lines.append("")
+    return "\n".join(lines)
+
+
+def build_bundle(
+    topology: LabConfig,
+    *,
+    publish: str = "loopback",
+    project: str | None = None,
+    include_readme: bool = True,
+    include_hosts_file: bool = True,
+) -> tuple[dict[str, str | bytes], ComposeArtifacts]:
+    """Everything that goes in the project directory, ready to write or zip."""
+    artifacts = render(topology, publish=publish, project=project)
+    files: dict[str, str | bytes] = {"docker-compose.yml": artifacts.compose_yaml}
+    files.update(artifacts.env_files)
+    for hostname, note in artifacts.fallback_notes.items():
+        files[f"notes/{hostname}.txt"] = note
+    files.update(artifacts.extra_files)
+    if include_hosts_file:
+        files["hosts"] = "\n".join(
+            f"{n.config.ip}\t{n.config.hostname}"
+            for n in topology.nodes
+            if f"env/{n.config.hostname}.env" in artifacts.env_files
+        ) + "\n"
+    if include_readme:
+        files["README.md"] = render_readme(topology, artifacts)
+    files["topology.json"] = topology.model_dump_json(indent=2)
+    files[".labforge-project"] = artifacts.project + "\n"
+    return files, artifacts
