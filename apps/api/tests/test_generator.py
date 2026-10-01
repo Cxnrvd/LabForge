@@ -72,8 +72,13 @@ def test_each_template_generates(all_template_paths, load_template):
     assert all_template_paths, "no templates discovered"
     for path in all_template_paths:
         topology = load_template(path)
-        data = generate_zip(topology)
+        docker = topology.provider.value == "docker"
+        data = generate_zip(topology, target="docker-compose" if docker else "vagrant")
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
             names = set(zf.namelist())
+        if docker:
+            assert "docker-compose.yml" in names, f"{path.name} missing compose file"
+            assert ".labforge-project" in names
+            continue
         assert "Vagrantfile" in names, f"{path.name} missing Vagrantfile"
         assert "manifest.json" in names, f"{path.name} missing manifest"
