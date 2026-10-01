@@ -92,6 +92,9 @@ class Provider(str, Enum):
     VIRTUALBOX = "virtualbox"
     VMWARE = "vmware"
     LIBVIRT = "libvirt"
+    # Container runtime: the lab is rendered to a docker-compose project and
+    # started with ``docker compose up`` instead of ``vagrant up``.
+    DOCKER = "docker"
 
 
 class AttackTactic(str, Enum):

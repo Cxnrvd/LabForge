@@ -87,7 +87,7 @@ export const Protocol = z.enum([
 ]);
 export type Protocol = z.infer<typeof Protocol>;
 
-export const Provider = z.enum(["virtualbox", "vmware", "libvirt"]);
+export const Provider = z.enum(["virtualbox", "vmware", "libvirt", "docker"]);
 export type Provider = z.infer<typeof Provider>;
 
 /**
