@@ -1,0 +1,140 @@
+{
+  "id": "ransomware-intrusion-lab",
+  "name": "Ransomware Intrusion Hunt (Docker)",
+  "description": "Elasticsearch + Kibana preloaded with ~24k synthetic Harborline Logistics events containing a full double-extortion ransomware intrusion (VPN to encryption). 17 saved searches, an answer key, and an analyst shell. Runs in Docker; all data is fictional.",
+  "network_cidr": "10.250.10.0/24",
+  "provider": "docker",
+  "version": "1.0",
+  "nodes": [
+    {
+      "id": "elastic",
+      "type": "server",
+      "label": "Elasticsearch",
+      "position": {
+        "x": -450,
+        "y": 0
+      },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "10.250.10.10",
+        "hostname": "elastic",
+        "cves": [],
+        "roles": [
+          "elastic"
+        ],
+        "memory_mb": 1536,
+        "cpus": 1,
+        "credentials": {
+          "username": "analyst",
+          "password": "LabForge!2026"
+        },
+        "vlan": null,
+        "gateway": "10.250.10.1"
+      }
+    },
+    {
+      "id": "kibana",
+      "type": "server",
+      "label": "Kibana (hunt UI)",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "10.250.10.11",
+        "hostname": "kibana",
+        "cves": [],
+        "roles": [
+          "kibana"
+        ],
+        "memory_mb": 1024,
+        "cpus": 1,
+        "credentials": {
+          "username": "analyst",
+          "password": "LabForge!2026"
+        },
+        "vlan": null,
+        "gateway": "10.250.10.1"
+      }
+    },
+    {
+      "id": "replay",
+      "type": "server",
+      "label": "Log replay",
+      "position": {
+        "x": 450,
+        "y": -120
+      },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "10.250.10.12",
+        "hostname": "replay",
+        "cves": [],
+        "roles": [
+          "log-replay@ransomware-intrusion"
+        ],
+        "memory_mb": 256,
+        "cpus": 1,
+        "credentials": {
+          "username": "analyst",
+          "password": "LabForge!2026"
+        },
+        "vlan": null,
+        "gateway": "10.250.10.1"
+      }
+    },
+    {
+      "id": "analyst",
+      "type": "workstation",
+      "label": "Analyst shell",
+      "position": {
+        "x": 450,
+        "y": 120
+      },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "10.250.10.20",
+        "hostname": "analyst",
+        "cves": [],
+        "roles": [
+          "analyst-workstation"
+        ],
+        "memory_mb": 256,
+        "cpus": 1,
+        "credentials": {
+          "username": "analyst",
+          "password": "LabForge!2026"
+        },
+        "vlan": null,
+        "gateway": "10.250.10.1"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "source": "replay",
+      "target": "elastic",
+      "protocol": "tcp",
+      "port": 9200,
+      "label": "bulk load"
+    },
+    {
+      "id": "e2",
+      "source": "kibana",
+      "target": "elastic",
+      "protocol": "tcp",
+      "port": 9200,
+      "label": "queries"
+    },
+    {
+      "id": "e3",
+      "source": "analyst",
+      "target": "elastic",
+      "protocol": "tcp",
+      "port": 9200,
+      "label": "esq"
+    }
+  ]
+}

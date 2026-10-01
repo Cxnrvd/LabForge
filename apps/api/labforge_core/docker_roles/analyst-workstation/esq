@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""esq: tiny Elasticsearch search helper for the analyst workstation.
+
+    esq [-n SIZE] [-f f1,f2] [--sort asc|desc] [--count] [--by FIELD] QUERY
+
+QUERY is a Lucene query string, which matches what you type in Kibana's KQL bar
+for simple field:value, AND/OR/NOT and wildcard searches.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.request
+
+ES = os.environ.get("ES_URL", "http://elastic:9200").rstrip("/")
+INDEX = os.environ.get("INDEX", "labforge-ransomware")
+DEFAULT_FIELDS = ["@timestamp", "host.name", "event.code", "user.name", "process.command_line", "file.path", "source.ip", "destination.ip"]
+
+
+def post(path: str, body: dict) -> dict:
+    req = urllib.request.Request(
+        f"{ES}/{INDEX}/{path}", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return json.load(resp)
+    except urllib.error.HTTPError as exc:
+        sys.exit(f"esq: Elasticsearch said {exc.code}: {exc.read().decode()[:400]}")
+    except urllib.error.URLError as exc:
+        sys.exit(f"esq: cannot reach {ES}: {exc.reason}")
+
+
+def kql_ops(text: str) -> str:
+    """Let people type KQL-style lowercase and/or/not; Lucene needs uppercase."""
+    out, quoted = [], False
+    for chunk in text.split('"'):
+        if not quoted:
+            chunk = re.sub(r"(?<![\w.])(and|or|not)(?![\w.])", lambda m: m.group(1).upper(), chunk)
+        out.append(chunk)
+        quoted = not quoted
+    return '"'.join(out)
+
+
+def dig(doc: dict, dotted: str):
+    node = doc
+    for part in dotted.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(prog="esq", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("query", nargs="?", default="*")
+    ap.add_argument("-n", "--size", type=int, default=30)
+    ap.add_argument("-f", "--fields", default=",".join(DEFAULT_FIELDS))
+    ap.add_argument("--sort", choices=["asc", "desc"], default="asc")
+    ap.add_argument("--count", action="store_true")
+    ap.add_argument("--by", metavar="FIELD", help="count matching events per value of FIELD")
+    args = ap.parse_args()
+
+    query = {"query_string": {"query": kql_ops(args.query), "default_operator": "AND", "analyze_wildcard": True}}
+
+    if args.count:
+        print(post("_count", {"query": query})["count"])
+        return
+    if args.by:
+        res = post("_search", {"size": 0, "query": query, "aggs": {"by": {"terms": {"field": args.by, "size": 50}}}})
+        total = res["hits"]["total"]["value"]
+        print(f"{total} matching events")
+        for bucket in res["aggregations"]["by"]["buckets"]:
+            print(f"{bucket['doc_count']:>8}  {bucket['key']}")
+        return
+
+    fields = [f for f in args.fields.split(",") if f]
+    res = post("_search", {"size": args.size, "query": query, "sort": [{"@timestamp": args.sort}], "_source": fields})
+    total = res["hits"]["total"]["value"]
+    for hit in res["hits"]["hits"]:
+        row = [dig(hit["_source"], f) for f in fields]
+        print("\t".join("" if v is None else str(v) for v in row))
+    shown = len(res["hits"]["hits"])
+    if total > shown:
+        print(f"-- showing {shown} of {total} (use -n to see more)", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()
