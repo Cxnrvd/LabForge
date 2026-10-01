@@ -172,18 +172,31 @@ export const api = {
     request<void>(`/labs/${labId}${options.force ? "?force=true" : ""}`, {
       method: "DELETE",
     }),
-  buildPreflight: () =>
+  buildPreflight: (provider?: string) =>
     request<{
       vagrant_available: boolean;
       vagrant_version?: string | null;
       default_provider?: string | null;
+      virtualbox_version?: string | null;
+      vmware_available?: boolean;
+      vmware_plugin?: boolean;
+      hypervisor_present?: boolean | null;
+      host_os?: string;
+      host_arch?: string;
+      host_memory_mb?: number | null;
+      provider_problem?: { code: string; message: string } | null;
+      provider_warnings?: string[];
       docker_available?: boolean;
       docker_daemon?: boolean;
       docker_version?: string | null;
       compose_version?: string | null;
       compose_supported?: boolean;
       detail?: string | null;
-    }>("/labs/build/preflight"),
+    }>(
+      provider
+        ? `/labs/build/preflight?provider=${encodeURIComponent(provider)}`
+        : "/labs/build/preflight",
+    ),
   buildLog: (labId: number, since: number) =>
     request<{ lines: string[]; next_offset: number; bytes_total: number }>(
       `/labs/${labId}/build/log?since=${since}`,

@@ -20,7 +20,7 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
-from labforge_schema import LabConfig
+from labforge_schema import LabConfig, Provider
 from sqlmodel import Session, select
 
 from labforge_core.api.rate_limit import limit
@@ -37,7 +37,7 @@ from labforge_core.schemas.api import (
     LabCreateRequest,
     LabSummary,
 )
-from labforge_core.services import docker_runtime
+from labforge_core.services import docker_runtime, hostenv
 from labforge_core.services.build_runner import (
     BuildPrereqError,
     DestroyFailed,
@@ -49,7 +49,6 @@ from labforge_core.services.build_runner import (
     read_log_chunk,
     start_build,
     stop_build,
-    vagrant_available,
 )
 from labforge_core.services.live_bus import bus
 
@@ -475,34 +474,43 @@ def stop_lab_build(
 
 
 @router.get("/build/preflight")
-def build_preflight() -> dict[str, object]:
+def build_preflight(
+    provider: Annotated[str | None, Query(description="Topology provider to check, e.g. virtualbox")] = None,
+) -> dict[str, object]:
     """Cheap probe so the UI can disable / warn on the Build button.
 
     ``vagrant_available`` / ``vagrant_version`` / ``default_provider`` describe
     the VM providers; the ``docker_*`` and ``compose_*`` keys describe the
-    docker runtime. Docker keys are always present so the UI can pick the
-    check that matches the topology's provider.
+    docker runtime. Both sets are always present so the UI can pick the check
+    that matches the topology's provider. Pass ``provider`` to also get
+    ``provider_problem`` (blocks a build) and ``provider_warnings`` (advice)
+    for that provider on this host.
     """
-    import subprocess
-
-    payload: dict[str, object] = {"vagrant_available": vagrant_available()}
-    if payload["vagrant_available"]:
-        try:
-            out = subprocess.run(
-                ["vagrant", "--version"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=False,
-            )
-            version = (out.stdout or "").strip().split()[-1] if out.stdout else None
-            payload["vagrant_version"] = version
-        except Exception:
-            payload["vagrant_version"] = None
+    status = hostenv.vm_runtime_status()
+    payload: dict[str, object] = {
+        "vagrant_available": bool(status["vagrant_version"]),
+        "vagrant_version": status["vagrant_version"],
+        "virtualbox_version": status["virtualbox_version"],
+        "vmware_available": bool(status["vmware_vmrun"]),
+        "vmware_plugin": status["vmware_plugin"],
+        "hypervisor_present": status["hypervisor_present"],
+        "host_os": status["host_os"],
+        "host_arch": status["host_arch"],
+        "host_memory_mb": status["memory_mb"],
+    }
     default_provider = os.environ.get("VAGRANT_DEFAULT_PROVIDER")
     if default_provider:
         payload["default_provider"] = default_provider
     payload.update(docker_runtime.runtime_status())
+    if provider:
+        try:
+            prov = Provider(provider)
+        except ValueError:
+            prov = None
+        if prov is not None:
+            problem = hostenv.provider_problem(prov, status) if prov is not Provider.DOCKER else None
+            payload["provider_problem"] = {"code": problem[0], "message": problem[1]} if problem else None
+            payload["provider_warnings"] = hostenv.provider_warnings(prov, status)
     return payload
 
 

@@ -89,6 +89,8 @@ pnpm dev                  # → API on :8000, web on :3000
 ```
 
 > No `concurrently`? Run `pnpm dev:api` and `pnpm dev:web` in two terminals.
+>
+> On Windows (VirtualBox/VMware VMs and Docker labs), follow [docs/windows-host.md](docs/windows-host.md).
 
 Open <http://127.0.0.1:3000>, pick a template, hit **Generate Lab**.
 

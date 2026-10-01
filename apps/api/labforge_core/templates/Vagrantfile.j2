@@ -22,17 +22,30 @@ Vagrant.configure("2") do |config|
   config.vm.define {{ n.hostname | tojson }} do |m|
     m.vm.box = {{ n.box | tojson }}
     m.vm.hostname = {{ n.hostname | tojson }}
+    # Provisioners are uploaded over SSH/WinRM, so the shared folder is not
+    # needed. Disabling it avoids SMB (needs admin on Windows hosts) and
+    # guest-additions failures, and speeds up boot.
+    m.vm.synced_folder ".", "/vagrant", disabled: true
     m.vm.network "private_network", ip: {{ n.ip | tojson }}
 
     m.vm.provider :{{ vagrant_provider }} do |v|
       v.memory = {{ n.memory_mb }}
       v.cpus = {{ n.cpus }}
 {% if vagrant_provider == "virtualbox" %}
+      # Linked clones share the box's base disk, so a second VM from the same
+      # box costs seconds and megabytes instead of a full copy.
+      v.linked_clone = true
       v.name = {{ ("labforge-" ~ (topology.name | replace(' ', '-') | lower) ~ "-" ~ n.hostname) | tojson }}
 {% endif %}
     end
 
 {% if n.is_windows %}
+    # Windows boxes spend a long time on first boot (sysprep, updates); the
+    # 5 minute default fails with "Timed out while waiting for the machine to boot".
+    m.vm.boot_timeout = 900
+    m.vm.graceful_halt_timeout = 180
+    m.winrm.timeout = 1800
+    m.winrm.retry_limit = 30
     m.vm.communicator = "winrm"
     m.winrm.transport = :plaintext
     m.winrm.basic_auth_only = true

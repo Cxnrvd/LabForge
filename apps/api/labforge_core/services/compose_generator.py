@@ -37,6 +37,7 @@ from pathlib import Path
 import yaml  # provided indirectly by uvicorn[standard] -> pyyaml
 from labforge_schema import LabConfig, NodeType, TopologyNode
 
+from labforge_core.services import hostenv
 from labforge_core.services.docker_roles import (
     DOCKER_ROLES,
     OS_FALLBACK_IMAGE,
@@ -119,7 +120,12 @@ def _read_build_dir(build_dir: str) -> dict[str, bytes]:
     out: dict[str, bytes] = {}
     for path in sorted(root.rglob("*")):
         if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc":
-            out[f"build/{build_dir}/{path.relative_to(root).as_posix()}"] = path.read_bytes()
+            rel = f"build/{build_dir}/{path.relative_to(root).as_posix()}"
+            data = path.read_bytes()
+            # A Windows checkout with core.autocrlf turns these into CRLF, which
+            # breaks shebangs inside the Linux image. Normalising here also keeps
+            # the content-hash image tag identical on every OS.
+            out[rel] = hostenv.normalize_eol(data) if hostenv.looks_like_text(rel, data) else data
     return out
 
 

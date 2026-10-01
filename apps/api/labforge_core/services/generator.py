@@ -298,12 +298,14 @@ def generate_artifacts(
     *,
     include_readme: bool = True,
     include_hosts_file: bool = True,
+    box_overrides: dict[OsType, str] | None = None,
 ) -> GeneratedArtifacts:
     if topology.provider is Provider.DOCKER:
         raise ValueError(
             "topology.provider is 'docker': use the docker-compose target, not the Vagrant generator"
         )
     env = _jinja_env()
+    boxes = {**BOX_MAP, **(box_overrides or {})}
 
     provisionable_nodes = [n for n in topology.nodes if _is_provisionable(n)]
     external_nodes = [n for n in topology.nodes if not _is_provisionable(n)]
@@ -322,7 +324,7 @@ def generate_artifacts(
             {
                 "id": node.id,
                 "hostname": node.config.hostname,
-                "box": BOX_MAP.get(node.config.os, SAFE_FALLBACK_BOX),
+                "box": boxes.get(node.config.os, SAFE_FALLBACK_BOX),
                 "is_windows": is_windows(node),
                 "is_emulated": is_emulated_os(node.config.os),
                 "os_label": node.config.os.value,
@@ -353,7 +355,7 @@ def generate_artifacts(
         readme = env.get_template("README.md.j2").render(
             topology=topology,
             vagrant_nodes=vagrant_nodes,
-            box_map=BOX_MAP,
+            box_map=boxes,
             external_nodes=external_nodes,
         )
 

@@ -40,16 +40,16 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from labforge_schema import LabConfig, Provider
 from sqlmodel import Session, select
 
 from labforge_core.models import Lab
-from labforge_core.services import docker_runtime
+from labforge_core.services import boxes, docker_runtime, hostenv
 from labforge_core.services.compose_generator import build_bundle, project_name
-from labforge_core.services.generator import generate_artifacts, vagrant_provider_name
+from labforge_core.services.generator import BOX_MAP, generate_artifacts, vagrant_provider_name
 from labforge_core.settings import get_settings
 
 BUILD_LOG = "build.log"
@@ -102,6 +102,11 @@ class DestroyFailed(RuntimeError):
     """Teardown could not be verified; the lab was left in place."""
 
 
+def _utcnow() -> datetime:
+    """Naive UTC now (what the DB and sentinel files already use), without the deprecated call."""
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
 def _slug(name: str) -> str:
     return re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-") or "lab"
 
@@ -115,21 +120,23 @@ def runtime_of(workspace: Path) -> str:
     return "docker" if docker_runtime.is_docker_workspace(workspace) else "vagrant"
 
 
-def _write_artifacts(topology: LabConfig, workspace: Path) -> None:
-    artifacts = generate_artifacts(topology)
+def _write_artifacts(
+    topology: LabConfig, workspace: Path, box_overrides: dict | None = None
+) -> None:
+    artifacts = generate_artifacts(topology, box_overrides=box_overrides)
     workspace.mkdir(parents=True, exist_ok=True)
-    (workspace / "Vagrantfile").write_text(artifacts.vagrantfile, encoding="utf-8")
+    # LF endings everywhere: these scripts run inside Linux guests, where a
+    # CRLF shebang fails with "bad interpreter", even if the API runs on Windows.
+    hostenv.write_guest_file(workspace / "Vagrantfile", artifacts.vagrantfile)
     provision_dir = workspace / "provision"
     provision_dir.mkdir(exist_ok=True)
     for filename, body in artifacts.provisioner_scripts.items():
-        (provision_dir / filename).write_text(body, encoding="utf-8")
+        hostenv.write_guest_file(provision_dir / filename, body)
     if artifacts.hosts_file:
-        (workspace / "hosts").write_text(artifacts.hosts_file, encoding="utf-8")
+        hostenv.write_guest_file(workspace / "hosts", artifacts.hosts_file)
     if artifacts.readme:
-        (workspace / "README.md").write_text(artifacts.readme, encoding="utf-8")
-    (workspace / "topology.json").write_text(
-        topology.model_dump_json(indent=2), encoding="utf-8"
-    )
+        hostenv.write_guest_file(workspace / "README.md", artifacts.readme)
+    hostenv.write_guest_file(workspace / "topology.json", topology.model_dump_json(indent=2))
 
 
 def _write_docker_bundle(
@@ -141,10 +148,7 @@ def _write_docker_bundle(
     for rel, content in files.items():
         target = workspace / rel
         target.parent.mkdir(parents=True, exist_ok=True)
-        if isinstance(content, bytes):
-            target.write_bytes(content)
-        else:
-            target.write_text(content, encoding="utf-8")
+        hostenv.write_guest_file(target, content, rel)
     return artifacts.warnings
 
 
@@ -169,17 +173,18 @@ def _spawn_build(workspace: Path, argv: list[str], *, banner: str, env_extra: di
     """
     log_path = workspace / BUILD_LOG
     log_path.write_text(
-        f"--- build start {datetime.utcnow().isoformat()} ---\n{banner}\n",
+        f"--- build start {_utcnow().isoformat()} ---\n{banner}\n",
         encoding="utf-8",
     )
     fh = log_path.open("a", encoding="utf-8", buffering=1)  # line-buffered
 
-    # On POSIX `start_new_session=True` detaches; on Windows we use the
-    # CREATE_NEW_PROCESS_GROUP flag for the same effect.
+    # On POSIX `start_new_session=True` detaches. On Windows use a new process
+    # group plus a hidden console (CREATE_NO_WINDOW): unlike DETACHED_PROCESS,
+    # the console children (vagrant, VBoxManage, docker) then inherit it instead
+    # of each opening a visible window.
     creationflags = 0
-    if os.name == "nt":
-        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
-        creationflags |= 0x00000008  # DETACHED_PROCESS
+    if hostenv.is_windows():
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | 0x08000000  # type: ignore[attr-defined]
 
     shim_name = f"build_shim_{_slug(workspace.name)}_{int(time.time())}.py"
     shim = _shim_dir() / shim_name
@@ -193,7 +198,7 @@ def _spawn_build(workspace: Path, argv: list[str], *, banner: str, env_extra: di
         stdout=fh,
         stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL,
-        start_new_session=os.name != "nt",
+        start_new_session=not hostenv.is_windows(),
         creationflags=creationflags,
         env=env,
     )
@@ -284,11 +289,10 @@ def start_build_detailed(
         problem = docker_runtime.prereq_problem()
         if problem:
             raise BuildPrereqError(problem[1], problem[0])
-    elif not vagrant_available():
-        raise BuildPrereqError(
-            "vagrant is not on PATH on the API host — install Vagrant 2.4+ first",
-            "vagrant_missing",
-        )
+    else:
+        vm_problem = hostenv.provider_problem(topology.provider)
+        if vm_problem:
+            raise BuildPrereqError(vm_problem[1], vm_problem[0])
 
     settings = get_settings()
     root = workspace_root or settings.workspace_root
@@ -310,8 +314,8 @@ def start_build_detailed(
             provider=topology.provider.value,
             status="building",
             workspace_path=None,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=_utcnow(),
+            updated_at=_utcnow(),
         )
         session.add(lab)
         session.commit()
@@ -338,8 +342,23 @@ def start_build_detailed(
             banner = f"--- runtime=docker project={project} ---"
             env_extra = None
         else:
-            _write_artifacts(topology, workspace)
             provider = vagrant_provider_name(topology.provider)
+            try:
+                resolved = boxes.resolve_boxes(topology, provider, BOX_MAP)
+            except boxes.BoxUnavailable as exc:
+                raise BuildPrereqError(str(exc), "box_unavailable") from exc
+            warnings = [
+                *resolved.warnings,
+                *hostenv.provider_warnings(topology.provider),
+                *hostenv.resource_warnings(topology, root),
+            ]
+            clash = hostenv.host_ip_conflicts(topology.network_cidr)
+            if clash:
+                warnings.append(
+                    f"This computer already has address(es) {', '.join(clash)} inside the lab network "
+                    f"{topology.network_cidr}. Pick a different network CIDR if VMs are unreachable."
+                )
+            _write_artifacts(topology, workspace, resolved.overrides)
             argv = ["vagrant", "up", "--provider", provider]
             banner = f"--- runtime=vagrant provider={provider} ---"
             env_extra = {"VAGRANT_DEFAULT_PROVIDER": provider}
@@ -422,7 +441,7 @@ def destroy_lab(lab: Lab, session: Session, *, force: bool = False) -> None:
                 error = _vagrant_teardown(workspace)
             if error and not force:
                 lab.status = "destroy_failed"
-                lab.updated_at = datetime.utcnow()
+                lab.updated_at = _utcnow()
                 session.add(lab)
                 session.commit()
                 raise DestroyFailed(error)
@@ -547,15 +566,7 @@ def _provider_vms_running(workspace: Path) -> int:
 
 
 def _vboxmanage_command() -> list[str]:
-    """Locate VBoxManage on PATH or at the Windows default install dir."""
-    found = shutil.which("VBoxManage") or shutil.which("vboxmanage")
-    if found:
-        return [found]
-    if os.name == "nt":
-        default = Path(r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe")
-        if default.exists():
-            return [str(default)]
-    return ["VBoxManage"]
+    return hostenv.vboxmanage_command()
 
 
 def read_build_status(workspace: Path) -> dict:
@@ -840,11 +851,15 @@ def stop_build(workspace: Path, *, kill_timeout_s: float = 5.0) -> dict:
     force_killed = False
     if pid and is_pid_alive(pid):
         try:
-            if os.name == "nt":
-                # CTRL_BREAK only works because we spawn with
-                # CREATE_NEW_PROCESS_GROUP. SIGTERM doesn't exist on
-                # Windows in the POSIX sense.
-                os.kill(pid, signal.CTRL_BREAK_EVENT)  # type: ignore[attr-defined]
+            if hostenv.is_windows():
+                # The shim is detached from any console, so CTRL_BREAK cannot
+                # reach it. taskkill /T ends the whole tree (shim, vagrant,
+                # ruby, VBoxManage) in one go.
+                subprocess.call(
+                    ["taskkill", "/T", "/PID", str(pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
             else:
                 # The shim leads its own session; signal the whole group so
                 # the vagrant / docker child dies with it.
@@ -862,8 +877,12 @@ def stop_build(workspace: Path, *, kill_timeout_s: float = 5.0) -> dict:
             time.sleep(0.2)
         else:
             try:
-                if os.name == "nt":
-                    subprocess.call(["taskkill", "/F", "/T", "/PID", str(pid)])
+                if hostenv.is_windows():
+                    subprocess.call(
+                        ["taskkill", "/F", "/T", "/PID", str(pid)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
                 else:
                     try:
                         os.killpg(pid, signal.SIGKILL)  # type: ignore[attr-defined]
@@ -875,7 +894,7 @@ def stop_build(workspace: Path, *, kill_timeout_s: float = 5.0) -> dict:
 
     # Mark aborted regardless of whether we actually had to kill anything.
     (workspace / BUILD_ABORTED).write_text(
-        datetime.utcnow().isoformat(), encoding="utf-8"
+        _utcnow().isoformat(), encoding="utf-8"
     )
     if not exit_file.exists():
         exit_file.write_text(f"-1\n{int(time.time())}\n", encoding="utf-8")
@@ -900,14 +919,14 @@ def reconcile_orphan_builds(session: Session) -> int:
     for lab in rows:
         if not lab.workspace_path:
             lab.status = "failed"
-            lab.updated_at = datetime.utcnow()
+            lab.updated_at = _utcnow()
             session.add(lab)
             reconciled += 1
             continue
         ws = Path(lab.workspace_path)
         if not ws.exists():
             lab.status = "failed"
-            lab.updated_at = datetime.utcnow()
+            lab.updated_at = _utcnow()
             session.add(lab)
             reconciled += 1
             continue
@@ -933,7 +952,7 @@ def reconcile_orphan_builds(session: Session) -> int:
             with contextlib.suppress(OSError):
                 pid_file.unlink()
         lab.status = "failed"
-        lab.updated_at = datetime.utcnow()
+        lab.updated_at = _utcnow()
         session.add(lab)
         reconciled += 1
     if reconciled:

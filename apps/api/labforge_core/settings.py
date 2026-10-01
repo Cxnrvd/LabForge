@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     # show up consistently regardless of who triggered the build.
     workspace_root: Path = Path.home() / ".labforge" / "workspaces"
 
+    # Vagrant box handling. ``box_overrides`` maps an OS id to a box name, e.g.
+    # LABFORGE_BOX_OVERRIDES='{"windows_10": "myorg/win10-lab"}'. With
+    # ``verify_boxes`` on, a build checks the box exists for the provider
+    # (already downloaded, or listed on Vagrant Cloud) before it starts.
+    box_overrides: dict[str, str] = {}
+    verify_boxes: bool = True
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

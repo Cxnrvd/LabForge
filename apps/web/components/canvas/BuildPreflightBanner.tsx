@@ -23,8 +23,8 @@ export function BuildPreflightBanner(): React.ReactElement | null {
   const topologyProvider = useTopologyStore((s) => s.meta.provider);
 
   const preflightQ = useQuery({
-    queryKey: ["build-preflight"],
-    queryFn: () => api.buildPreflight(),
+    queryKey: ["build-preflight", topologyProvider],
+    queryFn: () => api.buildPreflight(topologyProvider),
     // Cheap probe; re-poll on a coarse interval so installing Vagrant
     // mid-session clears the banner without a manual refresh.
     refetchInterval: 15_000,
@@ -50,6 +50,27 @@ export function BuildPreflightBanner(): React.ReactElement | null {
     return <PreflightBar tone="destructive" message={dockerMessage} onRecheck={() => preflightQ.refetch()} busy={preflightQ.isFetching} />;
   }
 
+  if (data.provider_problem) {
+    return (
+      <PreflightBar
+        tone="destructive"
+        message={data.provider_problem.message}
+        onRecheck={() => preflightQ.refetch()}
+        busy={preflightQ.isFetching}
+      />
+    );
+  }
+  const advice = data.provider_warnings?.[0];
+  if (advice) {
+    return (
+      <PreflightBar
+        tone="warning"
+        message={advice}
+        onRecheck={() => preflightQ.refetch()}
+        busy={preflightQ.isFetching}
+      />
+    );
+  }
   const missingVagrant = !data.vagrant_available;
   const providerMismatch = Boolean(
     data.vagrant_available &&

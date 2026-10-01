@@ -429,14 +429,23 @@ def spawn_detached(
     env = {**os.environ}
     if api_token:
         env["LABFORGE_API_TOKEN"] = api_token
+    popen_kwargs: dict = {}
+    if os.name == "nt":
+        # Hidden console shared by the daemon's own vagrant/docker calls, so no
+        # window flashes on every poll. New process group so it outlives the API.
+        popen_kwargs["creationflags"] = (
+            subprocess.CREATE_NEW_PROCESS_GROUP | 0x08000000  # CREATE_NO_WINDOW
+        )
+    else:
+        popen_kwargs["start_new_session"] = True
     proc = subprocess.Popen(
         cmd,
         cwd=str(workspace),
         stdout=fh,
         stderr=fh,
         stdin=subprocess.DEVNULL,
-        start_new_session=True,
         env=env,
+        **popen_kwargs,
     )
     pid_file = workspace / ".labforge-daemon.pid"
     pid_file.write_text(str(proc.pid), encoding="utf-8")
