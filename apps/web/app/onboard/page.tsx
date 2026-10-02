@@ -10,7 +10,7 @@
 import * as React from "react";
 import Link from "next/link";
 
-import { api, getStoredToken } from "@/lib/api/client";
+import { api, getStoredToken, type PreflightReport } from "@/lib/api/client";
 
 type CheckStatus = "ok" | "warn" | "err" | "info";
 
@@ -110,13 +110,18 @@ export default function OnboardPage() {
   const [loading, setLoading] = React.useState<boolean>(true);
   const [error, setError] = React.useState<string | null>(null);
   const [tokenPresent, setTokenPresent] = React.useState<boolean>(false);
+  const [report, setReport] = React.useState<PreflightReport | null>(null);
 
   const runChecks = React.useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await api.buildPreflight();
+      const [data, docker] = await Promise.all([
+        api.buildPreflight(),
+        api.preflight({ windowsGuests: 1, memoryMb: 4096, recheck: true }).catch(() => null),
+      ]);
       setPreflight(data);
+      setReport(docker);
     } catch (err) {
       const detail =
         err && typeof err === "object" && "detail" in err
@@ -139,10 +144,25 @@ export default function OnboardPage() {
     const provider = preflight?.default_provider ?? null;
     const vboxOk = vagrantOk && provider === "virtualbox";
 
+    // Docker is the main path. Every problem comes with the exact fix from the preflight API.
+    const dockerRows: CheckRow[] = (report?.checks ?? [])
+      .filter((c) => c.id !== "ports")
+      .map((c) => ({
+        key: `docker-${c.id}`,
+        name: c.title,
+        status: c.status === "ok" ? "ok" : c.status === "warn" ? "warn" : "err",
+        result: (
+          <span>
+            <b>{c.title}</b>
+          </span>
+        ),
+        detail: c.status === "ok" ? c.detail : `${c.detail} Fix: ${c.fix ?? "see docs/windows-host.md"}`,
+      }));
+
     const vagrantRow: CheckRow = {
       key: "vagrant",
-      name: "Vagrant",
-      status: loading ? "info" : vagrantOk ? "ok" : "err",
+      name: "Vagrant (optional)",
+      status: loading ? "info" : vagrantOk ? "ok" : "info",
       result: loading ? (
         <span>Checking Vagrant…</span>
       ) : vagrantOk ? (
@@ -151,20 +171,20 @@ export default function OnboardPage() {
         </span>
       ) : (
         <span>
-          <b>Vagrant</b> not detected
+          <b>Vagrant</b> not installed (only needed for VM labs)
         </span>
       ),
       detail: loading
         ? "GET /api/v1/labs/build/preflight"
         : vagrantOk
         ? `default provider: ${provider ?? "unknown"}`
-        : (error ?? "install Vagrant to provision labs locally"),
+        : (error ?? "optional: install Vagrant and VirtualBox to run VM based labs"),
     };
 
     const vboxRow: CheckRow = {
       key: "virtualbox",
-      name: "VirtualBox",
-      status: loading ? "info" : vboxOk ? "ok" : "warn",
+      name: "VirtualBox (optional)",
+      status: loading ? "info" : vboxOk ? "ok" : "info",
       result: loading ? (
         <span>Inferring provider…</span>
       ) : vboxOk ? (
@@ -201,24 +221,8 @@ export default function OnboardPage() {
         : "leave empty to run open on loopback for local dev",
     };
 
-    const diskRow: CheckRow = {
-      key: "disk",
-      name: "Disk space",
-      status: "info",
-      result: (
-        <span>
-          <b>Disk space</b> — browser can&apos;t measure
-        </span>
-      ),
-      detail: (
-        <span>
-          run <span className="mono">labforge doctor</span> to verify free space on workspace disk
-        </span>
-      ),
-    };
-
-    return [vagrantRow, vboxRow, tokenRow, diskRow];
-  }, [preflight, loading, error, tokenPresent]);
+    return [...dockerRows, vagrantRow, vboxRow, tokenRow];
+  }, [preflight, report, loading, error, tokenPresent]);
 
   return (
     <div
@@ -311,7 +315,7 @@ export default function OnboardPage() {
           }}
         >
           Diagram-driven virtual lab builder for cybersecurity professionals. Drag
-          nodes, pin CVEs, click generate, run on Vagrant.
+          nodes, pin CVEs, click build, run in Docker.
         </p>
 
         {/* Setup card */}

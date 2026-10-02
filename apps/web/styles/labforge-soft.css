@@ -480,3 +480,14 @@
   .lf .home-grid { grid-template-columns: minmax(0, 1fr); }
   .lf .sidebar { display: none; }
 }
+
+/* Event log rows: long log lines wrap and clamp instead of running off the card. */
+.lf .ev { grid-template-columns: 78px 76px minmax(0, 1fr); }
+.lf .ev .m {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
