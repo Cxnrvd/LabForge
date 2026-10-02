@@ -11,7 +11,22 @@ import pytest
 from labforge_core.services import generator
 from labforge_core.services.template_loader import get_template
 
-BASH = shutil.which("bash")
+
+def _working_bash() -> str | None:
+    # On Windows `bash` can be the WSL launcher stub, which exists but cannot run anything.
+    for candidate in (shutil.which("bash"), r"C:/Program Files/Git/bin/bash.exe"):
+        if not candidate:
+            continue
+        try:
+            probe = subprocess.run([candidate, "-c", "echo ok"], capture_output=True, text=True, timeout=20)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if probe.returncode == 0 and probe.stdout.strip() == "ok":
+            return candidate
+    return None
+
+
+BASH = _working_bash()
 
 
 def _render(blocks, cves=()):
