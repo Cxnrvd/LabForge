@@ -96,7 +96,7 @@ const BUILD_NAV: NavEntry[] = [
 const SYSTEM_NAV: NavEntry[] = [
   { href: "/settings", label: "Settings", icon: "settings" },
   { href: "/onboard", label: "CLI Agent", icon: "agent" },
-  { href: "/doctor", label: "API Docs", icon: "docs" },
+  { href: "/doctor", label: "System check", icon: "docs" },
 ];
 
 /* ============================================================
@@ -424,7 +424,7 @@ function breadcrumbFor(pathname: string): string[] {
     case "settings":
       return ["System", "Settings"];
     case "doctor":
-      return ["System", "Doctor"];
+      return ["System", "System check"];
     case "onboard":
       return ["System", "Onboarding"];
     case "design-system":

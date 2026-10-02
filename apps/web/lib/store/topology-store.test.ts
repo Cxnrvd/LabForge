@@ -40,3 +40,13 @@ describe("undo and redo", () => {
     expect(useTopologyStore.getState().past.length).toBe(before + 1);
   });
 });
+
+describe("adding nodes", () => {
+  it("does not stack a second node on top of the first", () => {
+    useTopologyStore.getState().reset();
+    useTopologyStore.getState().addNode("workstation", { x: 100, y: 100 });
+    useTopologyStore.getState().addNode("attacker", { x: 100, y: 100 });
+    const [a, b] = useTopologyStore.getState().nodes.map((n) => n.position);
+    expect(Math.abs(a!.x - b!.x) >= 150 || Math.abs(a!.y - b!.y) >= 130).toBe(true);
+  });
+});

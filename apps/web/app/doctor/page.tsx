@@ -4,7 +4,7 @@ import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 
-import { api, getStoredToken } from "@/lib/api/client";
+import { api, getStoredToken, type PreflightReport } from "@/lib/api/client";
 
 interface HealthResponse {
   status: string;
@@ -147,6 +147,14 @@ export default function DoctorPage(): React.JSX.Element {
     retry: 1,
   });
 
+  // Docker readiness comes from the API, which can see the engine, memory, disk and ports that a
+  // browser cannot.
+  const dockerQ = useQuery<PreflightReport>({
+    queryKey: ["doctor-docker"],
+    queryFn: () => api.preflight({ windowsGuests: 1, memoryMb: 4096 }),
+    retry: 1,
+  });
+
   const token = React.useMemo(() => getStoredToken(), []);
 
   React.useEffect(() => {
@@ -174,6 +182,7 @@ export default function DoctorPage(): React.JSX.Element {
   ]);
 
   const rerun = (): void => {
+    void api.preflight({ recheck: true }).finally(() => void dockerQ.refetch());
     void healthQ.refetch();
     void preflightQ.refetch();
   };
@@ -183,23 +192,35 @@ export default function DoctorPage(): React.JSX.Element {
   const vagrantVersion = preflightQ.data?.vagrant_version || null;
   const provider = preflightQ.data?.default_provider || null;
 
+  const dockerRows: CheckRow[] = dockerQ.isLoading
+    ? [{ title: "Docker", meta: "asking the API", state: "unknown", resultLabel: "checking…", detail: "" }]
+    : dockerQ.isError || !dockerQ.data
+      ? [{ title: "Docker", meta: "the API did not answer", state: "err", resultLabel: "unreachable", detail: "Start it with pnpm dev" }]
+      : dockerQ.data.checks.map((c) => ({
+          title: c.title,
+          meta: c.detail,
+          state: (c.status === "ok" ? "ok" : c.status === "warn" ? "warn" : "err") as CheckState,
+          resultLabel: c.status === "ok" ? "ok" : c.status === "warn" ? "heads up" : "fix needed",
+          detail: c.fix ?? "",
+        }));
+
   const hypervisorRows: CheckRow[] = [
     {
       title: "Vagrant binary",
-      meta: "labforge requires Vagrant ≥ 2.4",
+      meta: "only needed for VM labs (VirtualBox or VMware)",
       state: preflightQ.isLoading
         ? "unknown"
         : vagrantOk
           ? "ok"
-          : "err",
+          : "unknown",
       resultLabel: preflightQ.isLoading
         ? "checking…"
         : vagrantOk
           ? (vagrantVersion ?? "available")
-          : "not found",
+          : "not installed (optional)",
       detail: vagrantOk
         ? `default provider: ${provider ?? "—"}`
-        : "install Vagrant to build labs",
+        : "only install it if you want VM labs",
     },
     {
       title: "VirtualBox provider",
@@ -288,7 +309,8 @@ export default function DoctorPage(): React.JSX.Element {
   ];
 
   // ---- Summary counts --------------------------------------------------
-  const allRows = [...hypervisorRows, ...apiRows];
+  // VM tools are optional, so they never count as failures.
+  const allRows = [...dockerRows, ...apiRows];
   const total = allRows.length;
   const okCount = allRows.filter((r) => r.state === "ok").length;
   const warnCount = allRows.filter((r) => r.state === "warn").length;
@@ -424,7 +446,7 @@ export default function DoctorPage(): React.JSX.Element {
   const copyReport = async (): Promise<void> => {
     try {
       await navigator.clipboard.writeText(rawReport);
-      toast.success("Doctor report copied");
+      toast.success("System check report copied");
     } catch {
       toast.error("Copy failed");
     }
@@ -441,9 +463,9 @@ export default function DoctorPage(): React.JSX.Element {
     <main className="page" style={{ maxWidth: 1100 }}>
       <div className="pagehead">
         <div className="grow">
-          <h1 className="h1">Doctor</h1>
-          <div className="meta mono">
-            labforge doctor · pre-flight checks for your host · last run {timeStr}
+          <h1 className="h1">System check</h1>
+          <div className="meta">
+            Is this computer ready to run labs? Last run {timeStr}
             {lastRunMs ? ` · ${lastRunMs}ms` : ""}
           </div>
         </div>
@@ -468,11 +490,35 @@ export default function DoctorPage(): React.JSX.Element {
         {bannerNode}
       </div>
 
-      {/* Hypervisor checks */}
+      {/* Docker checks (the main path) */}
       <div className="card" style={{ marginBottom: 18 }}>
         <div className="card-h">
-          <h3>Hypervisor</h3>
-          <div className="sub">Vagrant binary &amp; providers</div>
+          <h3>Docker</h3>
+          <div className="sub">Engine, memory, disk, Windows guests and ports</div>
+        </div>
+        <table className="t">
+          <thead>
+            <tr>
+              <th style={{ width: 32 }}></th>
+              <th>Check</th>
+              <th>Result</th>
+              <th>What to do</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {dockerRows.map((row) => (
+              <CheckRowView key={row.title} row={row} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* VM tools (optional) */}
+      <div className="card" style={{ marginBottom: 18 }}>
+        <div className="card-h">
+          <h3>VM tools</h3>
+          <div className="sub">Optional. Only for VM labs on VirtualBox or VMware.</div>
         </div>
         <table className="t">
           <thead>
@@ -490,61 +536,6 @@ export default function DoctorPage(): React.JSX.Element {
             ))}
           </tbody>
         </table>
-      </div>
-
-      {/* Host resources */}
-      <div className="card" style={{ marginBottom: 18 }}>
-        <div className="card-h">
-          <h3>Host resources</h3>
-          <div className="sub">browser cannot read host disk/RAM/CPU — run agent doctor</div>
-        </div>
-        <div
-          className="card-b"
-          style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 18 }}
-        >
-          <div>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-              <span style={{ color: "var(--ink-mute)", fontSize: 12 }}>Workspace disk</span>
-              <span className="mono" style={{ fontSize: 13, color: "var(--ink-mute)" }}>
-                unknown
-              </span>
-            </div>
-            <div className="prog">
-              <i style={{ width: "0%" }} />
-            </div>
-            <div className="help">
-              ~/.labforge/workspaces · run <span className="mono">labforge doctor</span> for free-space data
-            </div>
-          </div>
-          <div>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-              <span style={{ color: "var(--ink-mute)", fontSize: 12 }}>Host RAM</span>
-              <span className="mono" style={{ fontSize: 13, color: "var(--ink-mute)" }}>
-                unknown
-              </span>
-            </div>
-            <div className="prog">
-              <i style={{ width: "0%" }} />
-            </div>
-            <div className="help">browsers cannot inspect host memory</div>
-          </div>
-          <div>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-              <span style={{ color: "var(--ink-mute)", fontSize: 12 }}>CPU cores</span>
-              <span className="mono" style={{ fontSize: 13, color: "var(--ink-mute)" }}>
-                {mounted && navigator.hardwareConcurrency
-                  ? `${navigator.hardwareConcurrency} logical`
-                  : "unknown"}
-              </span>
-            </div>
-            <div className="prog">
-              <i style={{ width: "0%" }} />
-            </div>
-            <div className="help">
-              navigator.hardwareConcurrency is an approximation · agent reports actual cores
-            </div>
-          </div>
-        </div>
       </div>
 
       {/* API + agent */}

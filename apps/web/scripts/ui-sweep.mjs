@@ -31,7 +31,7 @@ const SIDEBAR = [
   ["/build/generate", "Launch"],
   ["/settings", "Settings"],
   ["/onboard", "CLI Agent"],
-  ["/doctor", "API Docs"],
+  ["/doctor", "System check"],
 ];
 const EXTRA = ["/learn", "/design-system", "/states", "/this-page-does-not-exist"];
 

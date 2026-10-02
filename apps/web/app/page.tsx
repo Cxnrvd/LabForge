@@ -572,7 +572,7 @@ function MiniTopology({ topo }: { topo: import("@labforge/schema").LabConfig | u
   const ys = topo.nodes.map((n) => n.position.y);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
   const minY = Math.min(...ys), maxY = Math.max(...ys);
-  const px = (x: number): number => 12 + ((x - minX) / Math.max(1, maxX - minX)) * 76;
+  const px = (x: number): number => 20 + ((x - minX) / Math.max(1, maxX - minX)) * 60;
   const py = (y: number): number => 16 + ((y - minY) / Math.max(1, maxY - minY)) * 68;
   const pos = new Map(topo.nodes.map((n) => [n.id, { x: px(n.position.x), y: py(n.position.y) }]));
   return (
@@ -588,7 +588,7 @@ function MiniTopology({ topo }: { topo: import("@labforge/schema").LabConfig | u
       </svg>
       {topo.nodes.slice(0, 8).map((n) => {
         const p = pos.get(n.id)!;
-        return <div key={n.id} className="n" style={{ left: `${p.x}%`, top: `${p.y}%` }}>{n.label}</div>;
+        return <div key={n.id} className="n" style={{ left: `${p.x}%`, top: `${p.y}%` }} title={n.label}>{n.config.hostname}</div>;
       })}
     </div>
   );

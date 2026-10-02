@@ -345,7 +345,16 @@ export const useTopologyStore = create<TopologyState>()(
           .filter((n): n is FlowNode => !isZone(n))
           .map((n) => n.data.topologyNode.config.hostname.toLowerCase()),
       );
-      const topNode = defaultNodeFor(type, position, state.meta.network_cidr, usedIps, usedHostnames);
+      // Two nodes added from the palette used to land on the same spot. Step sideways, then down,
+      // until the place is free.
+      const taken = state.nodes.filter((n) => !isZone(n)).map((n) => n.position);
+      const free = (pt: { x: number; y: number }): boolean =>
+        !taken.some((q) => Math.abs(q.x - pt.x) < 150 && Math.abs(q.y - pt.y) < 130);
+      let placed = { ...position };
+      for (let i = 1; !free(placed) && i < 40; i += 1) {
+        placed = { x: position.x + (i % 5) * 200, y: position.y + Math.floor(i / 5) * 170 };
+      }
+      const topNode = defaultNodeFor(type, placed, state.meta.network_cidr, usedIps, usedHostnames);
       return {
         ...pushHistory(state),
         nodes: [...state.nodes, toFlowNode(topNode)],

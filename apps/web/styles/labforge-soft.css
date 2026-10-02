@@ -568,3 +568,5 @@ html.dark ::selection { background: rgba(90, 169, 224, 0.32); }
 .lf .tb2 { overflow-x: auto; scrollbar-width: none; }
 .lf .tb2 .tab { white-space: nowrap; flex-shrink: 0; }
 .lf .tb3 { flex-wrap: wrap; row-gap: 8px; }
+.lf .topo-mini .n { max-width: 44%; overflow: hidden; text-overflow: ellipsis; padding: 5px 8px; }
+.lf .role-chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; }
