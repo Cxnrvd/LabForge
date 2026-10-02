@@ -283,3 +283,85 @@ def test_generated_vagrantfile_parses_with_vagrant_validate(tmp_path):
         timeout=30,
     )
     assert rc.returncode == 0, f"vagrant validate failed:\nstdout={rc.stdout}\nstderr={rc.stderr}"
+
+
+# ---------------------------------------------------------------- roles (schema + template)
+#
+# Unlike password/topology.name, `roles` originally had no format validator at all, even though a
+# role's bare name and its free-text "@version" suffix are spliced into the provisioner's
+# begin/end role echo and Write-Host lines (block.label). A role such as
+# 'apache@"; touch /tmp/pwned; echo "' broke out of the surrounding double-quoted bash string and
+# ran as a real command during `vagrant up` — confirmed by actually executing the generated
+# script. Fixed at both layers, same as password: a schema regex (_ROLE_RE) and bash_q/ps_q
+# escaping of block.label/block.description in the templates.
+
+
+@pytest.mark.parametrize("meta", SHELL_METAS)
+def test_role_rejects_shell_metacharacter(meta):
+    bad = _topology(nodes=[_minimal_node(roles=[f"apache@a{meta}b"])])
+    with pytest.raises(ValidationError):
+        LabConfig.model_validate(bad)
+
+
+@pytest.mark.parametrize(
+    "role",
+    [
+        "apache",
+        "apache@2.4.49",
+        "log-replay@ransomware-intrusion",
+        "siemens-simatic@TIA Portal V19",
+        "schneider-modicon@EcoStruxure 15.x",
+        "AD-Domain-Services",
+    ],
+)
+def test_role_accepts_every_real_bundled_role_shape(role):
+    """These exact strings are used by bundled templates — the regex must never reject them."""
+    tpl = LabConfig.model_validate(_topology(nodes=[_minimal_node(roles=[role])]))
+    assert tpl.nodes[0].config.roles == [role]
+
+
+def test_malicious_role_is_rejected_before_it_reaches_the_generator():
+    payload = 'apache@"; touch /tmp/labforge-test-pwned-schema; echo "'
+    with pytest.raises(ValidationError):
+        LabConfig.model_validate(_topology(nodes=[_minimal_node(roles=[payload])]))
+
+
+def test_role_injection_is_neutralized_even_if_the_schema_is_bypassed(tmp_path):
+    """Defense in depth: render the real on-disk template directly with a hand-built block that
+    skips NodeConfig's own validator (as a future internal caller, a plugin, or a bug might), then
+    actually execute the generated script and prove the injected command never runs — not just
+    that the string looks escaped."""
+    if BASH is None:
+        pytest.skip("usable bash not available")
+    from labforge_schema import Credentials, NodeConfig, NodeType, OsType, Position, TopologyNode
+
+    from labforge_core.services.generator import _jinja_env
+
+    marker = tmp_path / "PWNED"
+    node = TopologyNode(
+        id="n1",
+        type=NodeType.SERVER,
+        label="n1",
+        position=Position(x=0, y=0),
+        config=NodeConfig(
+            os=OsType.UBUNTU_2204,
+            ip="192.168.55.10",
+            hostname="n1",
+            roles=[],
+            credentials=Credentials(username="vagrant", password="vagrant"),
+        ),
+    )
+    evil_block = {
+        "label": f'apache@"; touch {marker}; echo "',
+        "version": "",
+        "description": "x",
+        "body": "true",
+    }
+    rendered = _jinja_env().get_template("provision_linux.sh.j2").render(
+        node=node, is_dc=False, cve_blocks=[], install_blocks=[evil_block], endpoints={},
+    )
+    assert subprocess.run([BASH, "-n"], input=rendered, capture_output=True, text=True).returncode == 0
+    subprocess.run([BASH], input=rendered, capture_output=True, text=True, timeout=10)
+    assert not marker.exists(), "injected command ran — the role escaping regressed"
+    # And the attempted payload is still visible, verbatim, in the log output for review.
+    assert 'touch' in rendered and str(marker) in rendered

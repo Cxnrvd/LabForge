@@ -181,6 +181,13 @@ const passwordRegex = /^[^"'`$;\\\r\n]+$/;
 // every downstream consumer.
 const topologyNameRegex = /^[A-Za-z0-9 \-_.,!?():]+$/;
 
+// Defence-in-depth, same reasoning as passwordRegex: a role string reaches a provisioner
+// script's shell/PowerShell text (the bare role name and a free-text "@version" suffix, e.g.
+// "siemens-simatic@TIA Portal V19") and must not be able to break out of the double-quoted lines
+// it's spliced into. Version suffixes in the bundled templates use spaces (vendor/product
+// names), so those stay allowed; shell and PowerShell metacharacters do not.
+const roleRegex = /^[A-Za-z0-9][A-Za-z0-9._-]*(@[A-Za-z0-9][A-Za-z0-9._ -]*)?$/;
+
 export const Credentials = z.object({
   username: z.string().min(1).max(64),
   password: z
@@ -200,7 +207,7 @@ export const NodeConfig = z.object({
     .max(63)
     .regex(hostnameRegex, "Invalid hostname"),
   cves: z.array(z.string().regex(cveRegex, "Must be CVE-YYYY-NNNN")).default([]),
-  roles: z.array(z.string()).default([]),
+  roles: z.array(z.string().regex(roleRegex, "Invalid role: use letters, digits, '.', '_', '-', and an optional '@version'")).default([]),
   memory_mb: z.number().int().min(256).max(65536).default(2048),
   cpus: z.number().int().min(1).max(32).default(2),
   credentials: Credentials,

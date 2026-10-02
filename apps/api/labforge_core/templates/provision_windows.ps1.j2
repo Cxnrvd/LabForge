@@ -32,14 +32,14 @@ try {
 {% if install_blocks %}
 Write-Host "[+] Applying {{ install_blocks | length }} role install block(s)..."
 {% for block in install_blocks %}
-Write-Host "----- begin role: {{ block.label }} ({{ block.description }}) -----"
+Write-Host ("----- begin role: " + {{ block.label | ps_q }} + " (" + {{ block.description | ps_q }} + ") -----")
 try {
 {{ block.body | indent(4, True) }}
 } catch {
-    Write-Host "[!] Role '{{ block.label }}' failed: $_"
-    $failed += "role {{ block.label }}"
+    Write-Host ("[!] Role '" + {{ block.label | ps_q }} + "' failed: $_")
+    $failed += ("role " + {{ block.label | ps_q }})
 }
-Write-Host "----- end role: {{ block.label }} -----"
+Write-Host ("----- end role: " + {{ block.label | ps_q }} + " -----")
 {% endfor %}
 {% else %}
 Write-Host "[i] No roles attached."
@@ -48,7 +48,7 @@ Write-Host "[i] No roles attached."
 {% if cve_blocks %}
 Write-Host "[i] CVE notes (Windows curated provisioners not bundled):"
 {% for block in cve_blocks %}
-Write-Host "  - {{ block.cve_id }}: {{ block.description }}"
+Write-Host ("  - " + {{ block.cve_id | ps_q }} + ": " + {{ block.description | ps_q }})
 {% endfor %}
 {% endif %}
 

@@ -64,11 +64,26 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     let extra: Record<string, unknown> | undefined;
     try {
       const body = (await response.json()) as {
-        detail?: string | { detail?: string; code?: string };
+        detail?: string | { detail?: string; code?: string } | Array<{ loc?: unknown[]; msg?: string }>;
         code?: string;
       };
-      if (typeof body.detail === "string") detail = body.detail;
-      else if (body.detail && typeof body.detail === "object") {
+      if (typeof body.detail === "string") {
+        detail = body.detail;
+      } else if (Array.isArray(body.detail)) {
+        // FastAPI's own request-validation 422s, not LabForge's structured error shape — one
+        // entry per invalid field (bad IP, bad hostname, a role or CVE id that fails the schema
+        // regex, ...). Each entry's msg is usually "Value error, <our message>"; strip that
+        // prefix and name the field so a field_validator's message is readable rather than a
+        // raw JSON blob.
+        detail = body.detail
+          .map((e) => {
+            const field = Array.isArray(e.loc) ? e.loc.filter((p) => typeof p !== "number").join(".") : "";
+            const msg = (e.msg ?? "Invalid value").replace(/^Value error,\s*/, "");
+            return field ? `${field}: ${msg}` : msg;
+          })
+          .join("; ") || detail;
+        code = "validation_error";
+      } else if (body.detail && typeof body.detail === "object") {
         // The API nests structured errors: {"detail": {"detail": "...", "code": "lab_exists"}}
         if (typeof body.detail.detail === "string") detail = body.detail.detail;
         else detail = JSON.stringify(body.detail);

@@ -155,6 +155,13 @@ _PASSWORD_RE = re.compile(r"^[^\"'`$;\\\r\n]+$")
 # quoting and Ruby-interpolation metas so the value is safe across
 # every downstream consumer.
 _TOPOLOGY_NAME_RE = re.compile(r"^[A-Za-z0-9 \-_.,!?():]+$")
+# Defence-in-depth alongside the bash_q / ps_q escaping in the generator, same reasoning as
+# _PASSWORD_RE: a role string reaches a provisioner script's shell/PowerShell text (both the
+# bare role name and the free-text "@version" suffix, e.g. "siemens-simatic@TIA Portal V19") and
+# must not be able to break out of the double-quoted lines it's spliced into. Version suffixes in
+# the bundled templates use spaces (vendor/product names), so those stay allowed; shell and
+# PowerShell metacharacters do not.
+_ROLE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(@[A-Za-z0-9][A-Za-z0-9._ -]*)?$")
 
 
 class Credentials(BaseModel):
@@ -231,6 +238,17 @@ class NodeConfig(BaseModel):
                 raise ValueError(f"Invalid CVE id (expected CVE-YYYY-NNNN): {cve}")
             normalized.append(cve.upper())
         return normalized
+
+    @field_validator("roles")
+    @classmethod
+    def _validate_roles(cls, v: list[str]) -> list[str]:
+        for role in v:
+            if not _ROLE_RE.match(role):
+                raise ValueError(
+                    f"Invalid role {role!r}: use letters, digits, '.', '_', '-', and an "
+                    "optional '@version' (spaces allowed in the version only)"
+                )
+        return v
 
 
 class AttackTag(BaseModel):

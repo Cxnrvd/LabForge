@@ -197,8 +197,12 @@ def test_role_install_echo_line_shows_the_description_not_just_the_label():
     )
     topology = LabConfig(name="echo-test", network_cidr="192.168.56.0/24", nodes=[real, stub])
     artifacts = generate_artifacts(topology)
-    assert "begin role: apache (" in artifacts.provisioner_scripts["provision_web.sh"]
-    assert "begin role: not-a-real-role (no curated installer)" in artifacts.provisioner_scripts["provision_bad.sh"]
+    # block.label/description are shell-quoted (see test_injection_fixtures.py), so check for the
+    # content rather than an exact literal substring of the quoting.
+    web_sh = artifacts.provisioner_scripts["provision_web.sh"]
+    assert "begin role:" in web_sh and "apache" in web_sh
+    bad_sh = artifacts.provisioner_scripts["provision_bad.sh"]
+    assert "begin role:" in bad_sh and "not-a-real-role" in bad_sh and "no curated installer" in bad_sh
 
 
 def test_dfir_lab_splunk_and_telecom_ad_rts_firewall_now_have_real_installers():
