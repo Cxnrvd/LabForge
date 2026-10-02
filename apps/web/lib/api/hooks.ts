@@ -47,6 +47,19 @@ export function useRoleCves(role: string, enabled: boolean) {
   });
 }
 
+/**
+ * CVEs LabForge actually has a provisioner for, keyed by id. Rarely changes (it's the set of
+ * .sh files in the repo), so cache it for the session.
+ */
+export function useCuratedCves() {
+  return useQuery({
+    queryKey: ["cves-curated"],
+    queryFn: () => api.curatedCves(),
+    staleTime: Infinity,
+    retry: 1,
+  });
+}
+
 export function useValidateTopology() {
   return useMutation<
     Awaited<ReturnType<typeof api.validateTopology>>,

@@ -473,9 +473,9 @@ export default function BuildMonitorPage() {
           className="btn sm"
           type="button"
           onClick={() => setSshOpen(true)}
-          aria-label="Show SSH commands"
+          aria-label={lab?.provider === "docker" ? "Show container shell commands" : "Show SSH commands"}
         >
-          SSH
+          {lab?.provider === "docker" ? "Shell" : "SSH"}
         </button>
         <button
           className="btn"
@@ -527,6 +527,7 @@ export default function BuildMonitorPage() {
 
       {sshOpen && (
         <SshModal
+          provider={lab?.provider ?? "virtualbox"}
           vms={vms}
           topologyHostnames={
             topologyQ.data?.nodes.map((n) => n.config.hostname) ?? []
@@ -864,7 +865,11 @@ export default function BuildMonitorPage() {
             >
               {lines.length === 0 ? (
                 <span style={{ color: "var(--ink-faint)" }}>
-                  {logQ.isLoading ? "Connecting…" : "Waiting for vagrant up to start…"}
+                  {logQ.isLoading
+                    ? "Connecting…"
+                    : lab?.provider === "docker"
+                      ? "Waiting for docker compose up to start…"
+                      : "Waiting for vagrant up to start…"}
                 </span>
               ) : (
                 lines.map((ln, idx) => {
@@ -1023,10 +1028,12 @@ function SidePanel({
 }
 
 function SshModal({
+  provider,
   vms,
   topologyHostnames,
   onClose,
 }: {
+  provider: string;
   vms: HeartbeatVm[];
   topologyHostnames: string[];
   onClose: () => void;
@@ -1036,6 +1043,7 @@ function SshModal({
   const upHosts = vms.filter((v) => v.state === "running").map((v) => v.hostname);
   const hosts = upHosts.length > 0 ? upHosts : topologyHostnames;
   const stillBuilding = upHosts.length === 0;
+  const isDocker = provider === "docker";
 
   const copy = React.useCallback((cmd: string) => {
     if (typeof navigator !== "undefined" && navigator.clipboard) {
@@ -1085,14 +1093,18 @@ function SshModal({
         }}
       >
         <div className="card-h" style={{ borderBottom: "1px solid var(--line)" }}>
-          <h3>SSH commands</h3>
-          <div className="sub mono">{hosts.length} VM(s)</div>
+          <h3>{isDocker ? "Container shell commands" : "SSH commands"}</h3>
+          <div className="sub mono">{hosts.length} {isDocker ? "container(s)" : "VM(s)"}</div>
           <div className="grow" />
           <button className="btn sm" type="button" onClick={onClose}>
             Close
           </button>
         </div>
         <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ color: "var(--ink-mute)", fontSize: 12 }}>
+            Run from this lab&apos;s workspace folder (shown on this page), the folder holding{" "}
+            <code className="mono">{isDocker ? "docker-compose.yml" : "Vagrantfile"}</code>.
+          </div>
           {stillBuilding && (
             <div className="banner warn">
               <span>Lab is still building.</span>
@@ -1104,7 +1116,9 @@ function SshModal({
             </div>
           ) : (
             hosts.map((h) => {
-              const cmd = `vagrant ssh ${h}`;
+              const cmd = isDocker
+                ? `docker compose exec ${h} bash || docker compose exec ${h} sh`
+                : `vagrant ssh ${h}`;
               return (
                 <div
                   key={h}

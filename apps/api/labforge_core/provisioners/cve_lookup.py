@@ -18,24 +18,36 @@ class CVEProvisioner:
     description: str
     script: str
     known: bool
+    # True only when running the script leaves something actually exploitable reachable on the
+    # lab network (a real vulnerable service, listening). False for a script that exists but only
+    # installs attacker-side tooling, prints setup notes, or needs a manual step LabForge cannot
+    # automate (Windows CVEs: there is no Windows-side curated provisioner, see
+    # templates/provision_windows.ps1.j2, which only echoes these descriptions as notes).
+    fully_provisioned: bool
 
 
 _DESCRIPTIONS: dict[str, str] = {
-    # Web / app server
+    # Web / app server — fully provisioned: a real vulnerable service is stood up.
     "CVE-2021-44228": "Apache Log4j 2 JNDI lookup remote code execution (Log4Shell)",
     "CVE-2017-5638": "Apache Struts 2 Jakarta multipart parser RCE",
     "CVE-2022-22965": "Spring Framework data-binding RCE (Spring4Shell)",
-    # OS / protocol
-    "CVE-2019-0708": "Microsoft RDP pre-authentication RCE (BlueKeep). Notes only: LabForge does not provision a vulnerable host",
-    "CVE-2020-1472": "Netlogon elevation of privilege (Zerologon). Notes only: the unsafe DC setting is not applied by LabForge",
     "CVE-2014-0160": "OpenSSL heartbeat memory disclosure (Heartbleed)",
     "CVE-2014-6271": "GNU bash environment variable RCE (Shellshock)",
+    # Windows CVEs — notes only. LabForge has no Windows-side curated provisioner, so none of
+    # these actually configure a vulnerable or exploitable target; the node just gets a comment
+    # block in its log explaining what a real exercise would need.
+    "CVE-2019-0708": "Microsoft RDP pre-authentication RCE (BlueKeep). Notes only: LabForge does not provision a vulnerable host",
+    "CVE-2020-1472": "Netlogon elevation of privilege (Zerologon). Notes only: the unsafe DC setting is not applied by LabForge",
+    "CVE-2023-23397": "Outlook NTLM relay via PidLidReminderFileParameter. Notes only: installs Responder and Impacket on the attacker, but Outlook/Office on the Windows victim must be set up by hand",
+    # Not bundled at all (no provisioner script on disk) — picking these attaches a stub comment.
     "CVE-2017-0144": "Windows SMBv1 EternalBlue RCE",
     "CVE-2021-34527": "Windows Print Spooler RCE (PrintNightmare)",
     "CVE-2023-4966": "Citrix NetScaler ADC / Gateway buffer overflow (CitrixBleed)",
-    # Mail / desktop
-    "CVE-2023-23397": "Outlook NTLM relay via PidLidReminderFileParameter. Installs Responder and Impacket on the attacker only",
 }
+
+# Curated scripts that exist on disk but, by design, do not themselves leave a vulnerable service
+# reachable on the lab network (see the comments in these scripts and the descriptions above).
+_NOTES_ONLY: frozenset[str] = frozenset({"CVE-2019-0708", "CVE-2020-1472", "CVE-2023-23397"})
 
 
 def _curated_script(cve_id: str) -> str | None:
@@ -56,6 +68,7 @@ def resolve_cve_payload(cve_id: str) -> CVEProvisioner:
             description=description,
             script=script,
             known=True,
+            fully_provisioned=normalized not in _NOTES_ONLY,
         )
     stub = (
         f"# {normalized}: no curated provisioner is bundled.\n"
@@ -68,6 +81,7 @@ def resolve_cve_payload(cve_id: str) -> CVEProvisioner:
         description=description,
         script=stub,
         known=False,
+        fully_provisioned=False,
     )
 
 
@@ -80,6 +94,13 @@ def list_known_cves() -> list[str]:
 
 def known_cve_descriptions() -> dict[str, str]:
     return dict(_DESCRIPTIONS)
+
+
+def is_fully_provisioned(cve_id: str) -> bool:
+    """True when the curated script for this CVE leaves a real vulnerable service reachable,
+    rather than just notes or attacker-side tooling. False for a CVE with no curated script."""
+    normalized = cve_id.upper()
+    return normalized in set(list_known_cves()) and normalized not in _NOTES_ONLY
 
 
 _ = Path  # keep import for type checkers if pruned later

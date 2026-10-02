@@ -4,9 +4,14 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from labforge_schema import CVEEntry
+from pydantic import BaseModel
 
 from labforge_core.api.rate_limit import limit
-from labforge_core.provisioners.cve_lookup import known_cve_descriptions, list_known_cves
+from labforge_core.provisioners.cve_lookup import (
+    is_fully_provisioned,
+    known_cve_descriptions,
+    list_known_cves,
+)
 from labforge_core.services.cve_client import CVEClientError, CVENotFound, get_cve, search_cves
 
 router = APIRouter(prefix="/cves", tags=["cves"])
@@ -28,12 +33,29 @@ async def search(
         ) from exc
 
 
-@router.get("/curated", response_model=dict[str, str])
-def curated() -> dict[str, str]:
-    """Known CVEs with bundled curated provisioner scripts."""
+class CuratedCve(BaseModel):
+    cve_id: str
+    description: str
+    # True when the provisioner actually leaves a vulnerable service reachable on the lab network,
+    # not just notes or attacker-side tooling (see provisioners/cve_lookup.py).
+    fully_provisioned: bool
+
+
+@router.get("/curated", response_model=list[CuratedCve])
+def curated() -> list[CuratedCve]:
+    """Every CVE with a bundled provisioner script, and whether it actually stands up a vulnerable
+    target or only leaves notes (a Windows CVE, which LabForge has no curated Windows provisioner
+    for). Pin one of these to a node to get the real thing, not a guess."""
     descriptions = known_cve_descriptions()
-    known = set(list_known_cves())
-    return {cve: descriptions.get(cve, "") for cve in sorted(known)}
+    known = sorted(set(list_known_cves()))
+    return [
+        CuratedCve(
+            cve_id=cve,
+            description=descriptions.get(cve, ""),
+            fully_provisioned=is_fully_provisioned(cve),
+        )
+        for cve in known
+    ]
 
 
 @router.get("/{cve_id}", response_model=CVEEntry)

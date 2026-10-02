@@ -1,66 +1,34 @@
 "use client";
 
+/**
+ * Every CVE LabForge actually has a provisioner script for, read live from the API
+ * (GET /cves/curated) rather than a fixed list in this file — the previous version of this
+ * component hardcoded claims ("Pre-configured Win7 target", "Includes Metasploit module") that
+ * did not match what the bundled scripts do, for CVEs that did not even have a script.
+ */
+
 import * as React from "react";
+import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 
-interface CuratedCve {
-  cveId: string;
-  cvss: string;
-  severity: "crit" | "high" | "med" | "low";
-  title: string;
-  description: string;
+import { api, type CuratedCve } from "@/lib/api/client";
+
+function severityGuess(cveId: string): "crit" | "high" {
+  // The curated endpoint doesn't carry a CVSS score (that's NVD's job, see /cves/search); these
+  // are all well-known critical/high RCEs, so this is cosmetic only, not a claim about exploitability.
+  return cveId.startsWith("CVE-2014") || cveId.startsWith("CVE-2021-44228") ? "crit" : "high";
 }
 
-const CURATED: CuratedCve[] = [
-  {
-    cveId: "CVE-2021-44228",
-    cvss: "10.0",
-    severity: "crit",
-    title: "Log4Shell",
-    description:
-      "Apache log4j2 ${jndi:} JNDI injection. Bundled with vulnerable Tomcat app.",
-  },
-  {
-    cveId: "CVE-2017-0144",
-    cvss: "9.8",
-    severity: "crit",
-    title: "EternalBlue · MS17-010",
-    description: "SMBv1 RCE. Pre-configured Win7 target.",
-  },
-  {
-    cveId: "CVE-2019-0708",
-    cvss: "9.8",
-    severity: "crit",
-    title: "BlueKeep",
-    description: "RDP pre-auth RCE in Win7. Includes Metasploit module.",
-  },
-  {
-    cveId: "CVE-2024-3400",
-    cvss: "8.8",
-    severity: "high",
-    title: "PAN-OS GlobalProtect",
-    description: "Command injection in GlobalProtect feature.",
-  },
-  {
-    cveId: "CVE-2024-21887",
-    cvss: "7.5",
-    severity: "high",
-    title: "Ivanti Connect Secure",
-    description: "Command injection on VPN appliances.",
-  },
-  {
-    cveId: "CVE-2014-6271",
-    cvss: "10.0",
-    severity: "crit",
-    title: "Shellshock",
-    description: "Bash environment variable injection. Pre-fitted CGI demo.",
-  },
-];
-
 export function CuratedCveGrid(): React.ReactElement {
-  const handleSpin = (cveId: string): void => {
-    toast.info("Feature coming", {
-      description: `Spinning a curated lab for ${cveId} is on the roadmap.`,
+  const q = useQuery({
+    queryKey: ["cves-curated"],
+    queryFn: () => api.curatedCves(),
+    staleTime: Infinity,
+  });
+
+  const handlePin = (cveId: string): void => {
+    toast.info("Attach this from the canvas", {
+      description: `Open a node's CVE panel on the Canvas and pin ${cveId} there. This card is reference only.`,
     });
   };
 
@@ -70,72 +38,79 @@ export function CuratedCveGrid(): React.ReactElement {
         <div className="card-h">
           <h3>Curated CVE labs</h3>
           <div className="sub">
-            CVEs with bundled provisioner scripts · ready to spin up
+            CVEs with a bundled provisioner script, read from the API
           </div>
           <div className="grow" />
-          <span className="badge">{CURATED.length} curated</span>
+          <span className="badge">{q.data?.length ?? 0} curated</span>
         </div>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(3, 1fr)",
-            gap: "1px",
-            background: "var(--line)",
-          }}
-        >
-          {CURATED.map((c) => (
-            <div
-              key={c.cveId}
-              style={{ background: "var(--bg)", padding: "16px" }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "8px",
-                  marginBottom: "6px",
-                }}
-              >
-                <span className={`sev ${c.severity}`}>
-                  <span className="d" />
-                  {c.cvss}
-                </span>
-                <span
-                  className="mono"
-                  style={{ fontSize: "12.5px", color: "var(--blue)" }}
+
+        {q.isLoading && (
+          <div style={{ padding: 16, fontSize: 12.5, color: "var(--ink-mute)" }}>Loading…</div>
+        )}
+        {q.isError && (
+          <div style={{ padding: 16, fontSize: 12.5, color: "var(--ink-mute)" }}>
+            Could not reach the API.
+          </div>
+        )}
+
+        {q.data && (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(3, 1fr)",
+              gap: "1px",
+              background: "var(--line)",
+            }}
+          >
+            {q.data.map((c: CuratedCve) => (
+              <div key={c.cve_id} style={{ background: "var(--bg)", padding: "16px" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    marginBottom: "6px",
+                  }}
                 >
-                  {c.cveId}
-                </span>
+                  <span className={`sev ${severityGuess(c.cve_id)}`}>
+                    <span className="d" />
+                  </span>
+                  <span className="mono" style={{ fontSize: "12.5px", color: "var(--blue)" }}>
+                    {c.cve_id}
+                  </span>
+                </div>
+                <div
+                  style={{
+                    fontWeight: 600,
+                    fontSize: "12px",
+                    marginBottom: "4px",
+                    color: c.fully_provisioned ? "var(--green, #22c55e)" : "var(--amber, #f59e0b)",
+                  }}
+                >
+                  {c.fully_provisioned ? "Runs a real vulnerable target" : "Notes only, nothing is set up"}
+                </div>
+                <p
+                  style={{
+                    margin: "0 0 10px",
+                    color: "var(--ink-mute)",
+                    fontSize: "12.5px",
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {c.description}
+                </p>
+                <button type="button" className="btn sm" onClick={() => handlePin(c.cve_id)}>
+                  Pin to lab →
+                </button>
               </div>
-              <div
-                style={{
-                  fontWeight: 600,
-                  fontSize: "14px",
-                  marginBottom: "4px",
-                }}
-              >
-                {c.title}
-              </div>
-              <p
-                style={{
-                  margin: "0 0 10px",
-                  color: "var(--ink-mute)",
-                  fontSize: "12.5px",
-                  lineHeight: 1.5,
-                }}
-              >
-                {c.description}
-              </p>
-              <button
-                type="button"
-                className="btn sm"
-                onClick={() => handleSpin(c.cveId)}
-              >
-                Pin to lab →
-              </button>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
+
+        <p style={{ padding: "10px 16px", margin: 0, fontSize: "11px", color: "var(--ink-faint)" }}>
+          Applies to the Vagrant/VirtualBox build only — a Docker build does not read a node&apos;s
+          CVE list.
+        </p>
       </div>
     </div>
   );

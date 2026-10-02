@@ -52,7 +52,7 @@
         "ip": "10.10.10.10",
         "hostname": "web01",
         "cves": ["CVE-2017-5638"],
-        "roles": ["apache"],
+        "roles": [],
         "memory_mb": 1536,
         "cpus": 2,
         "credentials": { "username": "vagrant", "password": "vagrant" },

@@ -4,6 +4,12 @@ import type {
   ValidationResult,
 } from "@labforge/schema";
 
+export interface CuratedCve {
+  cve_id: string;
+  description: string;
+  fully_provisioned: boolean;
+}
+
 export interface TemplateSummary {
   id: string;
   name: string;
@@ -217,6 +223,14 @@ export const api = {
       `/cves/search?q=${encodeURIComponent(query)}&limit=${limit}`,
     ),
   getCve: (id: string) => request<CVEEntry>(`/cves/${encodeURIComponent(id)}`),
+  /**
+   * CVEs LabForge actually has a provisioner script for, and whether running it leaves a real
+   * vulnerable service reachable on the lab network ("fully_provisioned") or only notes / attacker
+   * tooling (today: every Windows CVE, since there is no curated Windows-side provisioner). Any
+   * other CVE pinned to a node gets a stub comment, not a working target. This only applies to the
+   * Vagrant/VirtualBox build — the Docker build does not read a node's CVE list at all.
+   */
+  curatedCves: () => request<CuratedCve[]>("/cves/curated"),
   generateZip: (
     topology: LabConfig,
     options: { target?: "vagrant" | "docker-compose" } = {},
