@@ -129,6 +129,18 @@ def _docker(args: list[str], timeout: float = 60) -> subprocess.CompletedProcess
     return docker_runtime._run(["docker", *args], timeout=timeout)
 
 
+def engine_up() -> bool:
+    """True when the Docker daemon answers. Without it nothing can be said about what is local."""
+
+    def probe() -> bool:
+        try:
+            return _docker(["info", "--format", "{{.ID}}"], timeout=10).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+
+    return bool(_cached("engine_up", 10, probe))
+
+
 def _slug(text: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     if not slug:
@@ -157,19 +169,25 @@ def _split_ref(ref: str) -> tuple[str, str | None]:
     return ref, None
 
 
-def _vm_box_requirements(topology: LabConfig) -> list[dict[str, Any]]:
-    """Vagrant boxes a VM topology needs, one entry per box."""
+def _box_for_os(os_id: str) -> str | None:
     from labforge_core.services.generator import BOX_MAP
     from labforge_core.settings import get_settings
 
-    overrides = get_settings().box_overrides
+    return get_settings().box_overrides.get(os_id) or next((v for k, v in BOX_MAP.items() if k.value == os_id), None)
+
+
+def _vm_box_requirements(topology: LabConfig) -> list[dict[str, Any]]:
+    """Vagrant boxes a VM topology needs, one entry per box."""
+    from labforge_core.services.generator import vagrant_provider_name
+
+    provider = vagrant_provider_name(topology.provider)
     reqs: dict[str, dict[str, Any]] = {}
     for node in topology.nodes:
-        os_id = node.config.os.value
-        box = overrides.get(os_id) or next((v for k, v in BOX_MAP.items() if k.value == os_id), None)
+        box = _box_for_os(node.config.os.value)
         if not box:
             continue
-        item = reqs.setdefault(box, {"key": "box:" + box, "label": box, "kind": "vagrant-box", "nodes": [], "ids": ["box:" + box]})
+        item = reqs.setdefault(box, {"key": "box:" + box, "label": box, "kind": "vagrant-box", "provider": provider,
+                                     "nodes": [], "ids": ["box:" + box]})
         item["nodes"].append(node.config.hostname)
     return list(reqs.values())
 
@@ -241,6 +259,19 @@ def _docker_images() -> dict[str, dict[str, Any]]:
     return found
 
 
+def _local_repos(local: dict[str, dict[str, Any]]) -> set[str]:
+    return {str(row.get("Repository")) for row in local.values()}
+
+
+def _docker_state(ref: str, local: dict[str, dict[str, Any]]) -> str:
+    """``ready`` when exactly this reference is local, ``outdated`` when the repository is local but at
+    another tag (a pull is needed for the tag the lab asks for), else ``missing``."""
+    if ref in local:
+        return "ready"
+    repo, _tag = _split_ref(ref)
+    return "outdated" if repo in _local_repos(local) else "missing"
+
+
 def _parse_size_mb(text: str | None) -> float:
     if not text:
         return 0.0
@@ -305,15 +336,19 @@ def _entry(spec_id: str, kind: str, name: str, tag: str | None, size_mb: float, 
 
 
 def list_images() -> dict[str, Any]:
-    local = _docker_images()
-    volumes = _volumes()
+    up = engine_up()
+    local = _docker_images() if up else {}
+    volumes = _volumes() if up else {}
     entries: list[dict[str, Any]] = []
     for spec in catalog().values():
         if spec.kind == "docker":
             row = local.get(spec.id)
+            state = _docker_state(spec.id, local)
             size = _parse_size_mb(row.get("Size")) if row else KNOWN_ESTIMATE_MB.get(spec.name, ESTIMATE_MB["docker"])
             note = "Built by LabForge on the first build." if spec.custom else None
-            entries.append(_entry(spec.id, "docker", spec.name, spec.tag, size, "ready" if row else "missing",
+            if state == "outdated":
+                note = f"Another tag of {spec.name} is here, {spec.tag or 'latest'} still has to be pulled."
+            entries.append(_entry(spec.id, "docker", spec.name, spec.tag, size, state,
                                   list(spec.used_by), row.get("CreatedAt") if row else None, note))
         else:
             vol = volumes.get(BASE_PREFIX + spec.id)
@@ -336,13 +371,19 @@ def list_images() -> dict[str, Any]:
             entries.append(_entry(job.id, "golden", job.id[len("golden-"):], "golden", 0,
                                   "missing", [], None, "Local only. Windows images must not be shared."))
     boxes = _vagrant_boxes()
-    for tid_box, used in _box_requirements().items():
-        have = boxes.get(tid_box)
-        entries.append(_entry("box:" + tid_box, "vagrant-box", tid_box, None, 1500, "ready" if have else "missing",
-                              list(used), None, None))
-    total = sum(e["size_mb"] for e in entries if e["status"] != "missing")
+    needed = _box_requirements()
+    for name in sorted(set(needed) | set(boxes)):
+        used, providers = needed.get(name, (set(), set()))
+        have = boxes.get(name)
+        state = _box_state(have, providers)
+        size = _box_size_mb(name) if have else ESTIMATE_MB["vagrant-box"]
+        note = None
+        if state == "outdated":
+            note = f"Installed for {have}, this lab needs {', '.join(sorted(providers))}."
+        entries.append(_entry("box:" + name, "vagrant-box", name, have or None, size, state, list(used), None, note))
+    total = sum(e["size_mb"] for e in entries if e["status"] == "ready")
     free = preflight.docker_disk().get("free_gb")
-    return {"images": entries, "total_mb": total, "disk_free_gb": free}
+    return {"images": entries, "total_mb": total, "disk_free_gb": free, "engine": up}
 
 
 # ------------------------------------------------------------------ vagrant boxes
@@ -352,32 +393,89 @@ def _vagrant_boxes() -> dict[str, str]:
     return _cached("boxes", 120, _read_vagrant_boxes)
 
 
-def _read_vagrant_boxes() -> dict[str, str]:
-    if not shutil.which("vagrant"):
+def _box_state(have: str | None, providers: set[str]) -> str:
+    """``ready`` when the box is installed for a provider the lab uses (or any, when unknown)."""
+    if not have:
+        return "missing"
+    if providers and not providers & set(have.split(",")):
+        return "outdated"
+    return "ready"
+
+
+def vagrant_home() -> Path:
+    import os
+
+    return Path(os.environ.get("VAGRANT_HOME") or Path.home() / ".vagrant.d")
+
+
+def _boxes_from_dir() -> dict[str, str]:
+    """Installed boxes read from ``$VAGRANT_HOME/boxes`` (name/version/provider), used when the
+    ``vagrant`` command is not on PATH or fails."""
+    root = vagrant_home() / "boxes"
+    found: dict[str, set[str]] = {}
+    if not root.is_dir():
         return {}
+    for box_dir in root.iterdir():
+        name = box_dir.name.replace("-VAGRANTSLASH-", "/")
+        for version in box_dir.iterdir() if box_dir.is_dir() else []:
+            for provider in version.iterdir() if version.is_dir() else []:
+                if provider.is_dir():
+                    found.setdefault(name, set()).add(provider.name)
+    return {name: ",".join(sorted(p)) for name, p in found.items()}
+
+
+def _read_vagrant_boxes() -> dict[str, str]:
+    """``{box name: "provider[,provider]"}`` from ``vagrant box list``, else from the boxes folder."""
+    if not shutil.which("vagrant"):
+        return _boxes_from_dir()
     try:
         proc = subprocess.run(["vagrant", "box", "list"], capture_output=True, text=True, errors="replace", timeout=30)
     except (OSError, subprocess.TimeoutExpired):
-        return {}
-    boxes: dict[str, str] = {}
+        return _boxes_from_dir()
+    if proc.returncode != 0:
+        return _boxes_from_dir()
+    found: dict[str, set[str]] = {}
     for line in proc.stdout.splitlines():
         m = re.match(r"^(\S+)\s+\((\w+),", line.strip())
         if m:
-            boxes[m.group(1)] = m.group(2)
-    return boxes
+            found.setdefault(m.group(1), set()).add(m.group(2))
+    return {name: ",".join(sorted(p)) for name, p in found.items()}
 
 
-def _box_requirements() -> dict[str, set[str]]:
-    from labforge_core.services.generator import BOX_MAP
+def _box_size_mb(name: str) -> float:
+    folder = vagrant_home() / "boxes" / name.replace("/", "-VAGRANTSLASH-")
+    if not folder.is_dir():
+        return float(ESTIMATE_MB["vagrant-box"])
+    return float(_cached("boxsize:" + name, 300, lambda: _dir_mb(folder)))
 
-    out: dict[str, set[str]] = {}
+
+def _dir_mb(path: Path) -> int:
+    import os
+
+    total = 0
+    for dirpath, _dirs, files in os.walk(path):
+        for f in files:
+            try:
+                total += (Path(dirpath) / f).lstat().st_size
+            except OSError:
+                continue
+    return round(total / (1024 * 1024))
+
+
+def _box_requirements() -> dict[str, tuple[set[str], set[str]]]:
+    """``{box: (templates using it, providers they use)}`` for the bundled VM templates."""
+    from labforge_core.services.generator import vagrant_provider_name
+
+    out: dict[str, tuple[set[str], set[str]]] = {}
     for template in list_templates():
         if template.provider.value == "docker":
             continue
         for node in template.nodes:
-            box = BOX_MAP.get(node.config.os.value)
+            box = _box_for_os(node.config.os.value)
             if box:
-                out.setdefault(box if isinstance(box, str) else str(box), set()).add(template.id)
+                used, providers = out.setdefault(box, (set(), set()))
+                used.add(template.id)
+                providers.add(vagrant_provider_name(template.provider))
     return out
 
 
@@ -486,9 +584,11 @@ def _build_custom(job: Job, spec: Spec) -> None:
 
 
 def _box_add(box: str) -> None:
-    if box in _vagrant_boxes():
-        return
-    proc = subprocess.run(["vagrant", "box", "add", "--provider", "virtualbox", "--force", box],
+    providers = _box_requirements().get(box, (set(), set()))[1]
+    provider = sorted(providers)[0] if providers else "virtualbox"
+    if _box_state(_vagrant_boxes().get(box), {provider}) == "ready":
+        return  # already installed for this provider, never download it again
+    proc = subprocess.run(["vagrant", "box", "add", "--provider", provider, "--force", box],
                           capture_output=True, text=True, errors="replace", timeout=3600)
     if proc.returncode != 0:
         raise ImageError("vagrant box add failed: " + (proc.stderr or proc.stdout).strip()[-200:])
@@ -672,7 +772,10 @@ def golden_volume(name: str) -> str:
 
 def prepare(template_id: str) -> list[str]:
     """Download only the difference between what a template needs and what is already local."""
-    return [i for i in plan(get_template(template_id))["missing_ids"] if _queue(i)]
+    topology = get_template(template_id)
+    if topology.provider.value == "docker" and not engine_up():
+        raise ImageError("Docker is not running, so nothing can be checked or downloaded yet.", "docker_unavailable", 503)
+    return [i for i in plan(topology)["missing_ids"] if _queue(i)]
 
 
 def _queue(image_id: str) -> bool:
@@ -682,16 +785,24 @@ def _queue(image_id: str) -> bool:
 
 def requirements(topology: LabConfig) -> list[dict[str, Any]]:
     """Requirements of a topology with their readiness, for the Launch dialog and the build."""
+    reqs = topology_images(topology)
+    if topology.provider.value == "docker" and not engine_up():
+        # Nothing can be said about what is local, so do not claim anything is missing either.
+        return [{**r, "status": "unknown", "size_mb": 0, "present": [], "missing_ids": []} for r in reqs]
     status = {e["id"]: e for e in list_images()["images"]}
     goldens = _golden_oses()
     boxes = _vagrant_boxes()
     out = []
-    for req in topology_images(topology):
-        if req["kind"] == "vagrant-box":
+    for req in reqs:
+        if req["kind"] == "vagrant-box" and req["ids"] and req["ids"][0].startswith("box:"):
             name = req["ids"][0][4:]
-            have = name in boxes
-            out.append({**req, "status": "ready" if have else "missing", "size_mb": 0 if have else ESTIMATE_MB["vagrant-box"],
+            state = _box_state(boxes.get(name), {req["provider"]} if req.get("provider") else set())
+            have = state == "ready"
+            out.append({**req, "status": state, "size_mb": 0 if have else ESTIMATE_MB["vagrant-box"],
                         "present": [req["ids"][0]] if have else [], "missing_ids": [] if have else list(req["ids"])})
+            continue
+        if req["kind"] == "vagrant-box":  # a Docker lab node that needs a VM: nothing to fetch here
+            out.append({**req, "status": "ready", "size_mb": 0, "present": [], "missing_ids": []})
             continue
         present, missing, size = [], [], 0
         pulling = False
@@ -704,7 +815,10 @@ def requirements(topology: LabConfig) -> list[dict[str, Any]]:
             else:
                 missing.append(image_id)
                 size += entry["size_mb"] if entry else 0
-        state = "ready" if not missing else "pulling" if pulling else "missing"
+        outdated = bool(missing) and all(
+            (status.get(i) or {}).get("status") == "outdated" for i in missing
+        )
+        state = "ready" if not missing else "pulling" if pulling else "outdated" if outdated else "missing"
         out.append({**req, "status": state, "size_mb": size, "present": present, "missing_ids": missing})
     return out
 
@@ -715,9 +829,10 @@ def plan(topology: LabConfig) -> dict[str, Any]:
     present = [i for r in reqs for i in r["present"]]
     missing = [i for r in reqs for i in r["missing_ids"]]
     return {
+        "engine": all(r["status"] != "unknown" for r in reqs),
         "present_ids": present,
         "missing_ids": missing,
-        "download_mb": sum(r["size_mb"] for r in reqs if r["status"] != "ready"),
+        "download_mb": sum(r["size_mb"] for r in reqs if r["status"] not in ("ready", "unknown")),
         "requirements": reqs,
     }
 

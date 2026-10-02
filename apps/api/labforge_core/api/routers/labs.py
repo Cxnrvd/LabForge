@@ -38,7 +38,8 @@ from labforge_core.schemas.api import (
     LabCreateRequest,
     LabSummary,
 )
-from labforge_core.services import docker_runtime, hostenv
+from labforge_core.services import docker_runtime, hostenv, images
+from labforge_core.services import workspace as workspace_store
 from labforge_core.services.build_runner import (
     BuildPrereqError,
     DestroyFailed,
@@ -56,6 +57,7 @@ from labforge_core.services.build_runner import (
 )
 from labforge_core.services.compose_generator import endpoints_from_workspace
 from labforge_core.services.live_bus import bus
+from labforge_core.services.template_loader import TemplateNotFound, get_template
 
 _LOGGER = logging.getLogger("labforge.labs")
 
@@ -554,6 +556,9 @@ def lab_endpoints(
 @router.get("/build/preflight")
 def build_preflight(
     provider: Annotated[str | None, Query(description="Topology provider to check, e.g. virtualbox")] = None,
+    template_id: Annotated[
+        str | None, Query(description="Bundled template to report per-image readiness for")
+    ] = None,
 ) -> dict[str, object]:
     """Cheap probe so the UI can disable / warn on the Build button.
 
@@ -580,6 +585,15 @@ def build_preflight(
     if default_provider:
         payload["default_provider"] = default_provider
     payload.update(docker_runtime.runtime_status())
+    payload["workspace"] = workspace_store.status()
+    if template_id:
+        try:
+            payload["images"] = images.plan(get_template(template_id))
+        except TemplateNotFound:
+            raise HTTPException(
+                status_code=404,
+                detail={"detail": "Unknown template", "code": "not_found"},
+            ) from None
     if provider:
         try:
             prov = Provider(provider)
