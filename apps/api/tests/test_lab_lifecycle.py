@@ -35,6 +35,8 @@ def fake(monkeypatch) -> FakeDocker:
     monkeypatch.setattr(docker_runtime, "prereq_problem", lambda: None)
     monkeypatch.setattr(docker_runtime, "subnet_conflicts", lambda *a, **k: [])
     monkeypatch.setattr(docker_runtime, "running_count", lambda ws: f.running)
+    monkeypatch.setattr(build_runner.preflight, "blocking_problem", lambda topology: None)
+    monkeypatch.setattr(build_runner, "host_port_free", lambda port: True)
 
     def spawn(workspace: Path, argv: list[str], **kw) -> int:
         f.spawned.append(argv)
@@ -272,3 +274,22 @@ def test_endpoints_route(fake, session, tmp_path):
     urls = {ep["label"]: ep["url"] for ep in client.get(f"/api/v1/labs/{lab.id}/endpoints").json()}
     assert urls["Kibana"].startswith("http://127.0.0.1:")
     assert client.get("/api/v1/labs/404/endpoints").status_code == 404
+
+
+def test_lifecycle_routes_are_rate_limited(fake, session, tmp_path):
+    from labforge_core.api import rate_limit
+
+    rate_limit.reset_for_tests()
+    app = FastAPI()
+    app.include_router(labs_router.router, prefix="/api/v1")
+    app.dependency_overrides[get_session] = lambda: session
+    client = TestClient(app)
+    codes = [client.post("/api/v1/labs/999/halt").status_code for _ in range(22)]
+    assert codes[:20] == [404] * 20
+    assert codes[20:] == [429, 429]
+    body = client.post("/api/v1/labs/999/halt").json()
+    assert body["detail"]["code"] == "rate_limited"
+    # The build trigger has its own, tighter bucket.
+    builds = [client.post("/api/v1/labs/build", json={}).status_code for _ in range(8)]
+    assert builds[-1] == 429
+    rate_limit.reset_for_tests()

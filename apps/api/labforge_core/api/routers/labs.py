@@ -23,7 +23,7 @@ from fastapi import (
 from labforge_schema import LabConfig, Provider
 from sqlmodel import Session, select
 
-from labforge_core.api.rate_limit import limit
+from labforge_core.api.rate_limit import limit, rate_limited
 from labforge_core.api.security import require_agent_token
 from labforge_core.models import Lab, LabHeartbeat, get_session
 from labforge_core.schemas.api import (
@@ -60,6 +60,9 @@ _LOGGER = logging.getLogger("labforge.labs")
 
 router = APIRouter(prefix="/labs", tags=["labs"])
 _AUTH = [Depends(require_agent_token)]
+# Lifecycle calls shell out to Docker or Vagrant, so a loop of them can pin the machine.
+_BUILD_LIMIT = [*_AUTH, rate_limited("lab_build", capacity=6, per_seconds=60.0)]
+_LIFECYCLE_LIMIT = [*_AUTH, rate_limited("lab_lifecycle", capacity=20, per_seconds=60.0)]
 
 
 @router.get("", response_model=list[LabSummary])
@@ -135,7 +138,7 @@ def update_status(
     return LabSummary.model_validate(row, from_attributes=True)
 
 
-@router.delete("/{lab_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=_AUTH)
+@router.delete("/{lab_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=_LIFECYCLE_LIMIT)
 def delete_lab(
     lab_id: int,
     session: Annotated[Session, Depends(get_session)],
@@ -271,7 +274,7 @@ def lab_log(
     "/build",
     response_model=BuildResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=_AUTH,
+    dependencies=_BUILD_LIMIT,
 )
 def trigger_build(
     payload: BuildRequest,
@@ -450,7 +453,7 @@ def get_lab_topology(
 @router.post(
     "/{lab_id}/build/stop",
     response_model=BuildStatus,
-    dependencies=_AUTH,
+    dependencies=_LIFECYCLE_LIMIT,
 )
 def stop_lab_build(
     lab_id: int,
@@ -477,7 +480,7 @@ def stop_lab_build(
     return BuildStatus(**read_build_status(workspace))
 
 
-@router.post("/{lab_id}/halt", response_model=LabSummary, dependencies=_AUTH)
+@router.post("/{lab_id}/halt", response_model=LabSummary, dependencies=_LIFECYCLE_LIMIT)
 def halt_lab_route(
     lab_id: int,
     session: Annotated[Session, Depends(get_session)],
@@ -500,7 +503,7 @@ def halt_lab_route(
     return LabSummary.model_validate(lab, from_attributes=True)
 
 
-@router.post("/{lab_id}/resume", response_model=LabSummary, dependencies=_AUTH)
+@router.post("/{lab_id}/resume", response_model=LabSummary, dependencies=_BUILD_LIMIT)
 def resume_lab_route(
     lab_id: int,
     session: Annotated[Session, Depends(get_session)],
