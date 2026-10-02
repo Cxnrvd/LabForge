@@ -23,9 +23,9 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
 }
 Run "uv" { uv --version }
 
-# 2. Python env and packages
-Run "uv venv" { uv venv }
-Run "install api and agent" { uv pip install -e apps/api; uv pip install -e packages/agent }
+# 2. Python env and packages (one environment, appspi\.venv, with the test tools)
+Run "install api, agent and dev tools" { uv sync --project apps/api --extra dev --link-mode copy }
+Run "pnpm install" { if (Get-Command pnpm -ErrorAction SilentlyContinue) { pnpm install } else { "pnpm is missing: npm install -g pnpm" } }
 
 # 3. Tool versions
 Run "docker" { docker version --format "client {{.Client.Version}} server {{.Server.Version}}" }
@@ -35,7 +35,7 @@ Run "vagrant plugins" { vagrant plugin list }
 Run "vagrant boxes" { vagrant box list }
 $vb = Get-Command VBoxManage -ErrorAction SilentlyContinue
 if (-not $vb -and (Test-Path "C:\Program Files\Oracle\VirtualBox\VBoxManage.exe")) { $vb = "C:\Program Files\Oracle\VirtualBox\VBoxManage.exe" }
-if ($vb) { Run "virtualbox" { & $vb --version } } else { Log "`n== virtualbox`nNOT INSTALLED (winget install Oracle.VirtualBox)" }
+if ($vb) { Run "virtualbox" { & $vb --version } } else { Log "`n== virtualbox`nNOT INSTALLED (optional, only for VM labs: winget install Oracle.VirtualBox)" }
 Run "hypervisor present" { (Get-CimInstance Win32_ComputerSystem).HypervisorPresent }
 Run "memory GB / free disk GB on F" {
   [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,1)
@@ -46,6 +46,8 @@ Run "memory GB / free disk GB on F" {
 Push-Location apps\api
 Run "hostenv virtualbox" { uv run python -m labforge_core.services.hostenv virtualbox }
 Run "api tests" { uv run pytest -q -x 2>&1 | Select-Object -Last 25 }
+Run "docker preflight (Linux labs)" { uv run python -m labforge_core.services.preflight }
+Run "docker preflight (Windows guests)" { uv run python -m labforge_core.services.preflight --windows }
 Pop-Location
 
 Log "`nDone. Report saved to $report"

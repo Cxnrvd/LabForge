@@ -321,3 +321,15 @@ def blocking_problem(topology: Any) -> tuple[str, str] | None:
         if check["status"] == "fail" and check["id"] in {"docker_memory", "kvm", "disk", "workspace_disk"}:
             return f"preflight_{check['id']}", f"{check['title']}. {check['detail']} {check['fix'] or ''}".strip()
     return None
+
+
+if __name__ == "__main__":  # python -m labforge_core.services.preflight [--windows]
+    import sys
+
+    report = run(windows_guests=1 if "--windows" in sys.argv else 0)
+    for c in report["checks"]:
+        print(f"[{c['status'].upper():4}] {c['title']}: {c['detail']}")
+        if c["fix"] and c["status"] != "ok":
+            print(f"       fix: {c['fix']}")
+    print("READY" if report["ready"] else "NOT READY")
+    raise SystemExit(0 if report["ready"] else 1)

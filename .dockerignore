@@ -1,0 +1,15 @@
+**/node_modules
+**/.next
+**/.venv
+.venv
+.git
+.pnpm-store
+.audit-shots
+.lf-run
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+apps/api/labforge.db
+.labforge
+*.log

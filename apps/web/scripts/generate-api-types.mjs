@@ -33,7 +33,10 @@ async function main() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     spec = await res.text();
     // Something else may be listening on the port (other dev servers do).
-    if (!JSON.parse(spec).openapi) throw new Error("not an OpenAPI document");
+    const doc = JSON.parse(spec);
+    if (!doc.openapi) throw new Error("not an OpenAPI document");
+    // Port 8000 is often taken by an unrelated service that also serves /openapi.json.
+    if (doc.info?.title !== "LabForge API") throw new Error(`not the LabForge API (${doc.info?.title})`);
   } catch (err) {
     console.warn(
       `[generate-api-types] skipped — could not fetch ${specUrl}: ${err.message}`,
