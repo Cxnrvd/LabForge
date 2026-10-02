@@ -6,7 +6,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Query
 
-from labforge_core.services import hostmetrics, preflight
+from labforge_core.services import docker_runtime, hostmetrics, preflight
 
 router = APIRouter(prefix="/host", tags=["host"])
 
@@ -33,4 +33,5 @@ def host_preflight(
     if recheck:
         preflight.reset_cache()
         hostmetrics._reset_cache()
+        docker_runtime.reset_cache()
     return preflight.run(windows_guests=windows_guests, memory_needed_mb=memory_mb)

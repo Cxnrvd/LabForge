@@ -26,6 +26,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import time
 from collections.abc import Iterable
 from ipaddress import ip_address, ip_network
 from pathlib import Path
@@ -254,8 +255,33 @@ def hypervisor_present() -> bool | None:
     return proc.stdout.strip().lower() == "true"
 
 
+# GET /labs/build/preflight is polled every 10s while the Launch dialog is open. Uncached, that
+# call is `vagrant --version` (up to 15s timeout) + `vagrant plugin list` (up to 30s, a second
+# Ruby process start) + `VBoxManage --version` (10s) every single poll — on a host where any of
+# those are genuinely slow to start, that reads as "the app is slow" exactly when someone is
+# looking at it deciding whether to build. None of this changes second to second.
+_VM_STATUS_TTL = 20.0
+_vm_status_cache: tuple[float, dict[str, object]] | None = None
+
+
+def reset_vm_status_cache() -> None:
+    """Force the next vm_runtime_status() call to probe again (the Launch dialog's Re-check)."""
+    global _vm_status_cache
+    _vm_status_cache = None
+
+
 def vm_runtime_status() -> dict[str, object]:
-    """Everything the preflight reports about VM support. Never raises."""
+    """Everything the preflight reports about VM support, cached for a few seconds. Never raises."""
+    global _vm_status_cache
+    now = time.monotonic()
+    if _vm_status_cache is not None and now - _vm_status_cache[0] < _VM_STATUS_TTL:
+        return dict(_vm_status_cache[1])
+    result = _vm_runtime_status_uncached()
+    _vm_status_cache = (now, result)
+    return dict(result)
+
+
+def _vm_runtime_status_uncached() -> dict[str, object]:
     plugins = vagrant_plugins() if shutil.which("vagrant") else []
     return {
         "host_os": "windows" if is_windows() else ("macos" if is_macos() else "linux"),

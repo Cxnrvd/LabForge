@@ -1,6 +1,10 @@
+/* This remote url() import must stay first: @import "tailwindcss" below expands into real rules
+   (not further @import statements), and CSS requires every @import to precede any other rule in
+   the final stylesheet. webpack's CSS loader tolerated this import coming after the expansion;
+   Turbopack correctly rejects it per spec, which is what this ordering fixes. */
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap");
 @import "tailwindcss";
 @import "@xyflow/react/dist/style.css";
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap");
 @import "../styles/labforge-ds.css";
 @import "../styles/labforge-d10.css";
 @import "../styles/labforge-soft.css";

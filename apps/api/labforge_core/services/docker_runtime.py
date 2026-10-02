@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -49,8 +50,34 @@ def _parse_version(text: str) -> tuple[int, ...] | None:
     return tuple(int(part) for part in match.groups(default="0"))
 
 
+# The Launch dialog polls whatever calls this every 10s while it's open. Each probe is two real
+# subprocess calls (`docker version`, `docker compose version`), 10s timeout apiece — on a slow or
+# loaded host that is real, felt latency, repeated for as long as the dialog stays open. Docker's
+# own version/daemon state does not change second to second, so a short cache removes the repeat
+# cost without making a genuine state change (Docker just started) take more than a few seconds to
+# be noticed.
+_STATUS_TTL = 15.0
+_status_cache: tuple[float, dict[str, object]] | None = None
+
+
+def reset_cache() -> None:
+    """Force the next runtime_status() call to probe again (the Launch dialog's Re-check)."""
+    global _status_cache
+    _status_cache = None
+
+
 def runtime_status() -> dict[str, object]:
-    """Probe the docker CLI, the daemon and Compose. Never raises."""
+    """Probe the docker CLI, the daemon and Compose, cached for a few seconds. Never raises."""
+    global _status_cache
+    now = time.monotonic()
+    if _status_cache is not None and now - _status_cache[0] < _STATUS_TTL:
+        return dict(_status_cache[1])
+    result = _runtime_status_uncached()
+    _status_cache = (now, result)
+    return dict(result)
+
+
+def _runtime_status_uncached() -> dict[str, object]:
     info: dict[str, object] = {
         "docker_available": docker_available(),
         "docker_daemon": False,
