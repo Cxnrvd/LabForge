@@ -221,7 +221,7 @@ function InnerCanvas({ hideToolbar = false }: InnerCanvasProps) {
         Left-rail palette is collapsible via a chevron on its header so the
         user can claim back the left edge of the canvas when needed.
       */}
-      <NodePalette className="absolute left-4 top-4 bottom-4 z-20" />
+      <NodePalette className="absolute left-4 top-4 bottom-16 z-20" />
 
       {/* Live RAM/CPU/time budget; pinned bottom-left, hides when empty. */}
       <LabBudgetBar />

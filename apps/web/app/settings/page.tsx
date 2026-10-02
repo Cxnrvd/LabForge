@@ -88,13 +88,13 @@ const SECTIONS: { id: SectionId; label: string }[] = [
 ];
 
 const KEYBINDS: { action: string; combo: string }[] = [
-  { action: "Command palette", combo: "⌘K" },
+  { action: "Command palette", combo: "Ctrl K" },
   { action: "Help / keybinds", combo: "?" },
-  { action: "Switch tab 1…9", combo: "⌥+1 … ⌥+9" },
-  { action: "Undo", combo: "⌘Z" },
-  { action: "Redo", combo: "⇧⌘Z" },
-  { action: "Save canvas", combo: "⌘S" },
-  { action: "Build / generate", combo: "⌘↵" },
+  { action: "Switch tab 1…9", combo: "Alt 1 to Alt 9" },
+  { action: "Undo", combo: "Ctrl Z" },
+  { action: "Redo", combo: "Ctrl Shift Z" },
+  { action: "Save canvas", combo: "Ctrl S" },
+  { action: "Build / generate", combo: "Ctrl Enter" },
 ];
 
 const THEME_SWATCHES: {
@@ -105,34 +105,18 @@ const THEME_SWATCHES: {
   gradient: string;
 }[] = [
   {
+    slug: "light",
+    variant: "dark-pro",
+    name: "Light",
+    sub: "Soft Cards on a pale grey frame",
+    gradient: "linear-gradient(135deg, #f1f1f1, #e8e8e8)",
+  },
+  {
     slug: "dark",
     variant: "dark-pro",
-    name: "Dark Pro (default)",
-    sub: "d10 reference",
-    gradient: "linear-gradient(135deg, #131418, #21232a)",
-  },
-  {
-    slug: "light",
-    variant: "light",
-    name: "Light",
-    sub: "edges use foreground/65",
-    gradient: "linear-gradient(135deg, #f7f5f0, #e3e0d8)",
-  },
-  // OLED Black / Phosphor are dark-base variants persisted in localStorage;
-  // next-themes still resolves to "dark" so the existing tokens hold.
-  {
-    slug: "dark",
-    variant: "oled",
-    name: "OLED Black",
-    sub: "true black bg",
-    gradient: "linear-gradient(135deg, #0a0b0d, #000)",
-  },
-  {
-    slug: "dark",
-    variant: "phosphor",
-    name: "Phosphor",
-    sub: "terminal green",
-    gradient: "linear-gradient(135deg, #001100, #003300)",
+    name: "Dark",
+    sub: "Soft Cards on near black",
+    gradient: "linear-gradient(135deg, #121212, #1c1c1c)",
   },
 ];
 
@@ -500,7 +484,7 @@ export default function SettingsPage(): React.ReactElement {
             <div className="card-h">
               <span className="title">NVD feed</span>
               <div className="actions">
-                <span className="muted">local-only · TODO backend</span>
+                <span className="muted">Saved in this browser only. The API does not use it yet.</span>
               </div>
             </div>
             <div className="card-b">
@@ -556,8 +540,7 @@ export default function SettingsPage(): React.ReactElement {
               <span className="title">Catalog overrides</span>
               <div className="actions">
                 <span className="muted">
-                  {overrides.length} override{overrides.length === 1 ? "" : "s"} ·
-                  TODO backend
+                  {overrides.length} override{overrides.length === 1 ? "" : "s"} · saved in this browser only, the API ignores them
                 </span>
               </div>
             </div>
@@ -643,7 +626,7 @@ export default function SettingsPage(): React.ReactElement {
               <span className="title">Theme</span>
               <div className="actions">
                 <span className="muted">
-                  {mounted ? `${theme ?? "system"} · ${themeVariant}` : "…"}
+                  {mounted ? `${theme ?? "system"}` : "…"}
                 </span>
               </div>
             </div>
