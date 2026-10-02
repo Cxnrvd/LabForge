@@ -12,6 +12,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from labforge_core.api.browser_guard import BrowserGuardMiddleware
 from labforge_core.api.routers import cves, generate, host, labs, templates, topologies
 from labforge_core.logging_setup import configure_logging
 from labforge_core.models import create_db_and_tables, get_session
@@ -126,6 +127,14 @@ app.add_middleware(
     # under spec, and surfaces accidentally-exposed methods.
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept", "Origin"],
+)
+
+
+# Added last so it runs first, before CORS and routing.
+app.add_middleware(
+    BrowserGuardMiddleware,
+    allowed_hosts=settings.allowed_hosts,
+    allowed_origins=settings.cors_origins,
 )
 
 

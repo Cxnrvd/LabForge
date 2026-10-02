@@ -17,6 +17,11 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3000",
     ]
 
+    # Host names the API answers to. Anything else (for example a hostile web page that
+    # re-points its own domain at 127.0.0.1, "DNS rebinding") gets a 400.
+    # Set LABFORGE_ALLOWED_HOSTS='["api","localhost"]' when the API is reached by another name.
+    allowed_hosts: list[str] = ["127.0.0.1", "localhost", "::1", "testserver"]
+
     nvd_api_base: str = "https://services.nvd.nist.gov/rest/json/cves/2.0"
     nvd_api_key: str | None = None
     nvd_timeout_seconds: float = 10.0
