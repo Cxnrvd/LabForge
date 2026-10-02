@@ -237,6 +237,11 @@ def _windows_service(
         "RAM_SIZE": f"{ram}M",
         "CPU_CORES": str(node.config.cpus),
         "DISK_SIZE": WINDOWS_DISK,
+        # dockurr/windows measures free memory as the cgroup limit minus memory.current, and
+        # memory.current includes the page cache of the 6 GB installer ISO it just downloaded.
+        # With a limit of RAM_SIZE + 1 GB that left 828 MB "available", so the guest refused to
+        # start with "requires at least 2.0 GB of RAM". The limit below still protects the engine.
+        "RAM_CHECK": "N",
     }
     service: dict[str, object] = {
         "image": node.config.compose_image or WINDOWS_IMAGE,
@@ -245,7 +250,7 @@ def _windows_service(
         "cap_add": ["NET_ADMIN"],
         "stop_grace_period": "2m",
         "restart": "on-failure:3",
-        "mem_limit": f"{ram + 1024}m",
+        "mem_limit": f"{ram + 2048}m",
         "volumes": [f"{host}-storage:/storage"],
         # Injected by Compose (not a bind mount), so it also works when the API itself runs in a
         # container and the workspace path means nothing to the Docker engine.

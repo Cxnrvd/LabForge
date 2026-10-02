@@ -42,6 +42,10 @@ def test_windows_workstation_becomes_a_kvm_backed_service():
     assert "VERSION=10" in env
     assert f"USERNAME={win.config.credentials.username}" in env
     assert "RAM_SIZE=" in env and "DISK_SIZE=64G" in env
+    # The installer ISO fills the page cache; dockurr counts that against the cgroup limit, so it
+    # must not run its own free-memory check, and the limit leaves room beyond RAM_SIZE.
+    assert "RAM_CHECK=N" in env
+    assert int(svc["mem_limit"].rstrip("m")) >= win.config.memory_mb + 2048
     assert f"oem/{host}/install.bat" in files
     assert b"fictional" in files[f"oem/{host}/install.bat"]
     # No bind mount: the first-boot script is injected as a Compose config.

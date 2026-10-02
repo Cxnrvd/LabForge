@@ -386,6 +386,9 @@ export default function BuildMonitorPage() {
   }
 
   const lab = labQ.data;
+  // A Docker lab that is stopped, or whose build failed or only half came up, can be started again.
+  const canResume =
+    lab?.provider === "docker" && ["stopped", "failed", "partial"].includes(lab.status) && phase !== "running";
   const vms = latestHb?.vms ?? [];
   const runningVms = vms.filter((v) => v.state === "running").length;
   const totalVms = vms.length;
@@ -456,7 +459,7 @@ export default function BuildMonitorPage() {
         >
           Reload
         </button>
-        {lab?.status === "stopped" ? (
+        {canResume && (
           <button
             className="btn primary"
             type="button"
@@ -464,9 +467,10 @@ export default function BuildMonitorPage() {
             disabled={resumeMut.isPending}
             aria-label="Start lab"
           >
-            {resumeMut.isPending ? "Starting�" : "Start"}
+            {resumeMut.isPending ? "Starting…" : lab?.status === "stopped" ? "Start" : "Retry start"}
           </button>
-        ) : (
+        )}
+        {lab?.status !== "stopped" && (
           <button
             className="btn"
             type="button"
@@ -475,8 +479,8 @@ export default function BuildMonitorPage() {
             aria-label={phase === "running" ? "Cancel build" : "Stop lab"}
           >
             {phase === "running"
-              ? stopMut.isPending ? "Cancelling�" : "Cancel build"
-              : haltMut.isPending || stopMut.isPending ? "Stopping�" : "Stop"}
+              ? stopMut.isPending ? "Cancelling…" : "Cancel build"
+              : haltMut.isPending || stopMut.isPending ? "Stopping…" : "Stop"}
           </button>
         )}
         <button
