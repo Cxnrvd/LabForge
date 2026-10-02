@@ -48,7 +48,7 @@ from sqlmodel import Session, select
 
 from labforge_core.models import Lab
 from labforge_core.services import boxes, docker_runtime, hostenv
-from labforge_core.services.compose_generator import build_bundle, project_name
+from labforge_core.services.compose_generator import build_bundle, has_windows_guests, project_name
 from labforge_core.services.generator import BOX_MAP, generate_artifacts, vagrant_provider_name
 from labforge_core.settings import get_settings
 
@@ -96,6 +96,10 @@ class LabExistsError(RuntimeError):
 
 class SubnetConflictError(RuntimeError):
     """The lab network overlaps one that already exists on the Docker host."""
+
+
+class HaltFailed(RuntimeError):
+    """Stopping or resuming a lab failed; the message says why."""
 
 
 class DestroyFailed(RuntimeError):
@@ -209,13 +213,26 @@ def _spawn_build(workspace: Path, argv: list[str], *, banner: str, env_extra: di
 # Shim that runs the build command, captures the exit code, and writes the
 # sentinel file regardless of how the command terminates. Lives in a temp dir
 # so the workspace stays free of build scaffolding.
-_BUILD_SHIM = '''\
-import json, os, subprocess, sys, time
+_BUILD_SHIM = '''import json, os, re, subprocess, sys, time
 ws = sys.argv[1]
 argv = json.loads(sys.argv[2])
 exit_path = os.path.join(ws, ".build.exit")
+# docker pull prints one progress line per layer every few hundred ms, which buries the
+# useful lines in tens of KB of noise. Keep one of them every 10 seconds.
+progress = re.compile(r"^[ \t]*[0-9a-f]{12}[ \t]+(Downloading|Extracting|Pulling fs layer|Waiting|Download complete|Verifying Checksum)")
 try:
-    rc = subprocess.call(argv, cwd=ws)
+    proc = subprocess.Popen(argv, cwd=ws, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, encoding="utf-8", errors="replace", bufsize=1)
+    last = 0.0
+    for line in proc.stdout:
+        if progress.match(line):
+            now = time.time()
+            if now - last < 10:
+                continue
+            last = now
+        sys.stdout.write(line)
+        sys.stdout.flush()
+    rc = proc.wait()
 except FileNotFoundError:
     rc = 127
 except Exception as exc:
@@ -234,7 +251,7 @@ def _spawn_daemon(lab: Lab, workspace: Path) -> None:
         _daemon.spawn_detached(
             lab_id=lab.id or 0,
             workspace=workspace,
-            api_base="http://127.0.0.1:8000",
+            api_base=f"http://127.0.0.1:{os.environ.get('LABFORGE_API_PORT', '8000')}",
             api_token=get_settings().agent_token,
         )
     except Exception:
@@ -243,7 +260,8 @@ def _spawn_daemon(lab: Lab, workspace: Path) -> None:
 
 def _live_labs_named(session: Session, slug: str) -> list[Lab]:
     rows = session.exec(select(Lab).where(Lab.topology_slug == slug)).all()
-    return [row for row in rows if row.status in ACTIVE_STATUSES]
+    # A stopped lab still owns its network, volumes and subnet.
+    return [row for row in rows if row.status in (*ACTIVE_STATUSES, "stopped")]
 
 
 @dataclass
@@ -338,7 +356,9 @@ def start_build_detailed(
                     + ". Change the network CIDR or destroy the other lab."
                 )
             warnings = _write_docker_bundle(topology, workspace, project=project, publish=publish)
-            argv = docker_runtime.up_command(project)
+            # A Windows guest downloads and installs Windows on its first start.
+            wait = 5400 if has_windows_guests(topology) else 900
+            argv = docker_runtime.up_command(project, wait_timeout=wait)
             banner = f"--- runtime=docker project={project} ---"
             env_extra = None
         else:
@@ -432,7 +452,7 @@ def destroy_lab(lab: Lab, session: Session, *, force: bool = False) -> None:
         workspace = Path(lab.workspace_path) if lab.workspace_path else None
         if workspace is not None and workspace.exists():
             if read_build_status(workspace)["phase"] == "running":
-                stop_build(workspace)
+                stop_build(workspace, halt_containers=False)
             _stop_daemon(workspace)
             if runtime_of(workspace) == "docker":
                 result = docker_runtime.teardown(workspace)
@@ -450,6 +470,61 @@ def destroy_lab(lab: Lab, session: Session, *, force: bool = False) -> None:
         session.commit()
     with _LAB_LOCKS_GUARD:
         _LAB_LOCKS.pop(lab_id, None)
+
+
+def halt_lab(lab: Lab, session: Session) -> None:
+    """Stop a Docker lab's containers and keep its data. ``resume_lab`` brings it back."""
+    lab_id = lab.id or 0
+    with _lab_lock(lab_id):
+        workspace = Path(lab.workspace_path) if lab.workspace_path else None
+        if workspace is None or not workspace.exists():
+            raise HaltFailed("The lab workspace is gone, so there is nothing to stop. Destroy the lab instead.")
+        if runtime_of(workspace) != "docker":
+            raise HaltFailed("Stop and resume are available for Docker labs only.")
+        if read_build_status(workspace)["phase"] == "running":
+            stop_build(workspace)
+        _stop_daemon(workspace)
+        result = docker_runtime.halt(workspace)
+        if not result.ok:
+            raise HaltFailed(result.error or "docker compose stop failed")
+        lab.status = "stopped"
+        lab.updated_at = _utcnow()
+        session.add(lab)
+        session.commit()
+
+
+def resume_lab(lab: Lab, session: Session) -> int:
+    """Start a stopped Docker lab again with ``compose up``. Returns the build pid."""
+    lab_id = lab.id or 0
+    with _lab_lock(lab_id):
+        workspace = Path(lab.workspace_path) if lab.workspace_path else None
+        if workspace is None or not (workspace / docker_runtime.COMPOSE_FILE).exists():
+            raise HaltFailed("The lab workspace is gone. Build the lab again.")
+        if runtime_of(workspace) != "docker":
+            raise HaltFailed("Stop and resume are available for Docker labs only.")
+        if lab.status not in ("stopped", "failed", "partial"):
+            raise HaltFailed(f"The lab is {lab.status}, only a stopped lab can be started.")
+        problem = docker_runtime.prereq_problem()
+        if problem:
+            raise BuildPrereqError(problem[1], problem[0])
+        project = docker_runtime.read_project(workspace)
+        if not project:
+            raise HaltFailed("The lab has no .labforge-project file, build it again.")
+        for sentinel in (BUILD_EXIT, BUILD_ABORTED, BUILD_PID, ".labforge-daemon-stop"):
+            (workspace / sentinel).unlink(missing_ok=True)
+        topology = json.loads((workspace / "topology.json").read_text(encoding="utf-8"))
+        wait = 5400 if any(str(n.get("config", {}).get("os", "")).startswith("windows") for n in topology.get("nodes", [])) else 900
+        pid = _spawn_build(
+            workspace,
+            docker_runtime.up_command(project, wait_timeout=wait),
+            banner=f"--- resume runtime=docker project={project} ---",
+        )
+        lab.status = "building"
+        lab.updated_at = _utcnow()
+        session.add(lab)
+        session.commit()
+    _spawn_daemon(lab, workspace)
+    return pid
 
 
 def read_log_chunk(workspace: Path, since: int = 0, max_bytes: int = 64 * 1024) -> dict:
@@ -821,7 +896,7 @@ def is_pid_alive(pid: int) -> bool:
         return False
 
 
-def stop_build(workspace: Path, *, kill_timeout_s: float = 5.0) -> dict:
+def stop_build(workspace: Path, *, kill_timeout_s: float = 5.0, halt_containers: bool = True) -> dict:
     """User-initiated abort of an in-flight build.
 
     Sends SIGTERM to the shim, waits up to ``kill_timeout_s`` for a
@@ -899,7 +974,37 @@ def stop_build(workspace: Path, *, kill_timeout_s: float = 5.0) -> dict:
     if not exit_file.exists():
         exit_file.write_text(f"-1\n{int(time.time())}\n", encoding="utf-8")
 
+    if halt_containers and runtime_of(workspace) == "docker":
+        # Killing ``compose up`` leaves the containers it already created running.
+        docker_runtime.halt(workspace)
+
     return {"phase": "aborted", "killed_pid": pid, "force_killed": force_killed}
+
+
+def reattach_daemons(session: Session) -> int:
+    """API-startup sweep: restart the heartbeat daemon of every live lab that lost it.
+
+    The daemon is a child of the API run, so a restart of the API (or a reboot) leaves
+    running labs with no heartbeat and a blank monitor. Returns how many were restarted.
+    """
+    restarted = 0
+    rows = session.exec(select(Lab).where(Lab.status.in_(("running", "partial")))).all()  # type: ignore[attr-defined]
+    for lab in rows:
+        if not lab.workspace_path:
+            continue
+        ws = Path(lab.workspace_path)
+        if not ws.exists():
+            continue
+        pid_file = ws / DAEMON_PID
+        alive = False
+        if pid_file.exists():
+            with contextlib.suppress(ValueError, OSError):
+                alive = is_pid_alive(int(pid_file.read_text().strip()))
+        if not alive:
+            (ws / ".labforge-daemon-stop").unlink(missing_ok=True)
+            _spawn_daemon(lab, ws)
+            restarted += 1
+    return restarted
 
 
 def reconcile_orphan_builds(session: Session) -> int:

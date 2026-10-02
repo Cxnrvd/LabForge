@@ -12,11 +12,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from labforge_core.api.routers import cves, generate, labs, templates, topologies
+from labforge_core.api.routers import cves, generate, host, labs, templates, topologies
 from labforge_core.logging_setup import configure_logging
 from labforge_core.models import create_db_and_tables, get_session
 from labforge_core.provisioners.role_registry import load_plugins as _load_role_plugins
-from labforge_core.services.build_runner import reconcile_orphan_builds
+from labforge_core.services.build_runner import reattach_daemons, reconcile_orphan_builds
 from labforge_core.settings import get_settings
 
 configure_logging()
@@ -99,6 +99,7 @@ async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
         session = next(session_gen)
         try:
             reconcile_orphan_builds(session)
+            reattach_daemons(session)
         finally:
             with suppress(StopIteration):
                 next(session_gen)
@@ -170,3 +171,4 @@ app.include_router(templates.router, prefix=API_PREFIX)
 app.include_router(generate.router, prefix=API_PREFIX)
 app.include_router(cves.router, prefix=API_PREFIX)
 app.include_router(labs.router, prefix=API_PREFIX)
+app.include_router(host.router, prefix=API_PREFIX)

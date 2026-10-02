@@ -61,3 +61,12 @@ labforge-designs.html
 
 # Tool caches that occasionally end up tracked.
 *.tsbuildinfo
+
+# local command runner and reports
+.lf-run/
+.labforge-report.txt
+apps/web/lib/api/generated.ts
+
+# audit output
+.labforge-audit.txt
+.audit-shots/

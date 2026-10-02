@@ -331,3 +331,40 @@ def teardown(workspace: Path, project: str | None = None, *, timeout: float = 18
         return result
     result.ok = True
     return result
+
+
+def halt(workspace: Path, project: str | None = None, *, timeout: float = 240) -> TeardownResult:
+    """Stop the containers but keep the network, volumes and workspace.
+
+    Windows guests get a minute to shut down cleanly so their disk survives.
+    ``resume`` (``up_command``) brings the same lab back with its data.
+    """
+    project = project or read_project(workspace)
+    result = TeardownResult(ok=False)
+    if not project:
+        result.error = "no .labforge-project file in the workspace, cannot tell which Compose project to stop"
+        return result
+    if not docker_available():
+        result.error = "docker is not on PATH on the API host"
+        return result
+    try:
+        proc = _run(
+            ["docker", "compose", "-p", project, "stop", "-t", "60"],
+            cwd=workspace,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        result.error = "docker compose stop timed out"
+        return result
+    except OSError as exc:
+        result.error = f"could not run docker: {exc}"
+        return result
+    result.steps.append(f"compose stop exit {proc.returncode}")
+    if proc.returncode != 0:
+        result.error = (proc.stderr or proc.stdout).strip()[-300:] or "docker compose stop failed"
+        return result
+    if running_count(workspace) > 0:
+        result.error = "some containers are still running after docker compose stop"
+        return result
+    result.ok = True
+    return result

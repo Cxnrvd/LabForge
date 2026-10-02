@@ -262,19 +262,47 @@ export default function BuildMonitorPage() {
     stopMut.mutate();
   };
 
-  // ----- Halt action: maps to the existing /build/stop endpoint.
-  // (There is no dedicated /labs/{id}/halt route on the backend, so we
-  // reuse buildStop which already SIGTERMs vagrant and leaves the
-  // workspace in place.)
+  // ----- Stop / Start: Docker labs stop their containers and keep the data,
+  // then start again from the same workspace. Other providers keep the old
+  // behaviour (signal the build process).
+  const haltMut = useMutation<unknown, ApiError>({
+    mutationFn: () => api.haltLab(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["lab", id] });
+      qc.invalidateQueries({ queryKey: ["labs"] });
+      toast.success("Lab stopped", { description: "Containers are stopped. Data is kept; press Start to run it again." });
+    },
+    onError: (err) => {
+      toast.error("Could not stop the lab", { description: err.detail });
+    },
+  });
+  const resumeMut = useMutation<unknown, ApiError>({
+    mutationFn: () => api.resumeLab(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["lab", id] });
+      qc.invalidateQueries({ queryKey: ["labs"] });
+      qc.invalidateQueries({ queryKey: ["build-status", id] });
+      toast.success("Starting the lab", { description: "Containers are coming back up." });
+    },
+    onError: (err) => {
+      toast.error("Could not start the lab", { description: err.detail });
+    },
+  });
+
   const handleHalt = (): void => {
-    if (stopMut.isPending) return;
+    if (haltMut.isPending || stopMut.isPending) return;
+    const isDocker = labQ.data?.provider === "docker";
     const ok = window.confirm(
-      "Halt this lab?\n\nThe vagrant subprocess will be signalled. " +
-        "Running VMs and the workspace will be left intact so you can " +
-        "resume or destroy later.",
+      isDocker
+        ? "Stop this lab?\n\nThe containers are stopped. Your data and the workspace are kept, " +
+            "and you can start it again later."
+        : "Halt this lab?\n\nThe vagrant subprocess will be signalled. " +
+            "Running VMs and the workspace will be left intact so you can " +
+            "resume or destroy later.",
     );
     if (!ok) return;
-    stopMut.mutate();
+    if (isDocker) haltMut.mutate();
+    else stopMut.mutate();
   };
 
   // ----- Destroy action: DELETE /labs/{id} (the only backend route
@@ -401,15 +429,29 @@ export default function BuildMonitorPage() {
         >
           Reload
         </button>
-        <button
-          className="btn"
-          type="button"
-          onClick={phase === "running" ? handleStop : handleHalt}
-          disabled={stopMut.isPending}
-          aria-label="Halt lab"
-        >
-          {stopMut.isPending ? "Halting…" : "Halt"}
-        </button>
+        {lab?.status === "stopped" ? (
+          <button
+            className="btn primary"
+            type="button"
+            onClick={() => resumeMut.mutate()}
+            disabled={resumeMut.isPending}
+            aria-label="Start lab"
+          >
+            {resumeMut.isPending ? "Starting�" : "Start"}
+          </button>
+        ) : (
+          <button
+            className="btn"
+            type="button"
+            onClick={phase === "running" ? handleStop : handleHalt}
+            disabled={stopMut.isPending || haltMut.isPending}
+            aria-label={phase === "running" ? "Cancel build" : "Stop lab"}
+          >
+            {phase === "running"
+              ? stopMut.isPending ? "Cancelling�" : "Cancel build"
+              : haltMut.isPending || stopMut.isPending ? "Stopping�" : "Stop"}
+          </button>
+        )}
         <button
           className="btn danger"
           type="button"

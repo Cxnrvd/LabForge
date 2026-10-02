@@ -89,7 +89,23 @@ async function requestZip(path: string, body: unknown): Promise<Blob> {
   return await response.blob();
 }
 
+export interface HostMetrics {
+  memory: { total_mb: number | null; used_mb: number | null; percent: number | null };
+  cpu: { percent: number | null; cores: number | null };
+  disk: { path: string | null; total_gb: number | null; used_gb: number | null; free_gb: number | null };
+  sampled_at: string;
+  engine: {
+    docker_daemon: boolean;
+    docker_version: string | null;
+    compose_version: string | null;
+    vagrant_version: string | null;
+    virtualbox_version: string | null;
+    hypervisor_present: boolean | null;
+  };
+}
+
 export const api = {
+  hostMetrics: () => request<HostMetrics>("/host/metrics"),
   listTemplates: () => request<TemplateSummary[]>("/templates"),
   getTemplate: (id: string) => request<LabConfig>(`/templates/${id}`),
   validateTopology: (topology: LabConfig) =>
@@ -205,6 +221,10 @@ export const api = {
     request<BuildStatusPayload>(`/labs/${labId}/build/status`),
   buildStop: (labId: number) =>
     request<BuildStatusPayload>(`/labs/${labId}/build/stop`, { method: "POST" }),
+  haltLab: (labId: number) =>
+    request<{ id: number; status: string; provider: string }>(`/labs/${labId}/halt`, { method: "POST" }),
+  resumeLab: (labId: number) =>
+    request<{ id: number; status: string; provider: string }>(`/labs/${labId}/resume`, { method: "POST" }),
   buildPhases: (labId: number) =>
     request<BuildPhasesPayload>(`/labs/${labId}/build/phases`),
   getLabTopology: (labId: number) =>

@@ -41,12 +41,15 @@ from labforge_core.services import docker_runtime, hostenv
 from labforge_core.services.build_runner import (
     BuildPrereqError,
     DestroyFailed,
+    HaltFailed,
     LabExistsError,
     SubnetConflictError,
     destroy_lab,
+    halt_lab,
     parse_per_vm_phases,
     read_build_status,
     read_log_chunk,
+    resume_lab,
     start_build,
     stop_build,
 )
@@ -471,6 +474,57 @@ def stop_lab_build(
         session.add(lab)
         session.commit()
     return BuildStatus(**read_build_status(workspace))
+
+
+@router.post("/{lab_id}/halt", response_model=LabSummary, dependencies=_AUTH)
+def halt_lab_route(
+    lab_id: int,
+    session: Annotated[Session, Depends(get_session)],
+) -> LabSummary:
+    """Stop a Docker lab's containers and keep its data, network and workspace."""
+    lab = session.get(Lab, lab_id)
+    if lab is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": f"Lab {lab_id} not found", "code": "not_found"},
+        )
+    try:
+        halt_lab(lab, session)
+    except HaltFailed as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"detail": str(exc), "code": "halt_failed"},
+        ) from exc
+    session.refresh(lab)
+    return LabSummary.model_validate(lab, from_attributes=True)
+
+
+@router.post("/{lab_id}/resume", response_model=LabSummary, dependencies=_AUTH)
+def resume_lab_route(
+    lab_id: int,
+    session: Annotated[Session, Depends(get_session)],
+) -> LabSummary:
+    """Start a stopped Docker lab again. Progress shows up in /build/status and /build/log."""
+    lab = session.get(Lab, lab_id)
+    if lab is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": f"Lab {lab_id} not found", "code": "not_found"},
+        )
+    try:
+        resume_lab(lab, session)
+    except BuildPrereqError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail={"detail": str(exc), "code": exc.code},
+        ) from exc
+    except HaltFailed as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"detail": str(exc), "code": "resume_failed"},
+        ) from exc
+    session.refresh(lab)
+    return LabSummary.model_validate(lab, from_attributes=True)
 
 
 @router.get("/build/preflight")
