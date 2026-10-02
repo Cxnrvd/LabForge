@@ -7,6 +7,8 @@ On a Windows host LabForge can build two kinds of labs from the same canvas:
 | **VM labs** (provider `virtualbox` or `vmware`) | Vagrant plus VirtualBox or VMware Workstation | Windows and Linux guests together: workstations, servers, a domain controller, Kali, routers emulated on Ubuntu |
 | **Docker labs** (provider `docker`) | Docker Desktop (WSL2) | SIEM, Linux services, the bundled ransomware-hunt and malware-triage labs |
 
+**Docker is the main path.** New labs default to Docker, and the Home page has a Preflight card that tells you, in plain words and with the exact fix, whether Docker, its memory, KVM (for Windows guests), disk and ports are ready. Vagrant, VirtualBox and VMware are optional and only needed for VM labs.
+
 A topology uses one provider, so a single lab is either all VMs or all containers.
 Assumes an x86-64 PC. (Windows on ARM cannot run these x86 boxes.)
 
@@ -44,9 +46,19 @@ Docker Desktop and WSL2 turn on the Windows hypervisor. VirtualBox can still run
 
 LabForge detects this and shows a warning above the canvas.
 
-## 2. Run LabForge natively
+## 2. Run LabForge
 
-Run it directly on Windows, not with the repo's `docker compose up`. A containerised API cannot start Vagrant or reach your Docker engine.
+### Option A: everything in Docker (one command)
+
+```powershell
+docker compose up --build        # then open http://127.0.0.1:3000
+```
+
+The API container carries the Docker CLI and the Docker socket, so the Build button starts labs as sibling containers on your own engine, Windows guests included (their first-boot script is injected by Compose, not bind-mounted). Both ports are published on 127.0.0.1 only. Set `LABFORGE_AGENT_TOKEN` before sharing the machine; the web container adds the token itself, so the browser never holds it. Use `LABFORGE_WEB_PORT` / `LABFORGE_API_PORT` if 3000 or 8000 are taken.
+
+What it cannot do, and why: the Docker socket gives the API full control of your engine (that is how it builds labs, so keep the ports on loopback), and Vagrant/VirtualBox/VMware need your real hypervisor, which a container cannot reach. For VM labs use Option B. The Preflight card's port and disk numbers describe the container, not Windows.
+
+### Option B: natively on the host (needed for VM labs, handy for development)
 
 ```powershell
 git clone https://github.com/Cxnrvd/LabForge.git C:\LabForge
@@ -75,7 +87,9 @@ Requirements: `/dev/kvm` must exist inside Docker. Check with
 docker run --rm --privileged alpine sh -c "ls -l /dev/kvm"
 ```
 
-* First start downloads Windows and installs it: 30 to 60 minutes and several GB. LabForge waits up to 90 minutes for it. Do this the day before.
+* First start downloads Windows and installs it: about FIRSTBOOT. LabForge waits up to 90 minutes for it. Do this the day before. The build reports done as soon as the container is up, long before Windows is usable; watch the web console (port 8006) for the real state.
+* LabForge turns off dockurr's own free-memory check (`RAM_CHECK=N`) and gives the container 2 GB above the guest's RAM. Without that, the 6 GB installer ISO fills the container's page cache, dockurr counts it as used memory and stops with "requires at least 2.0 GB of RAM, but only 828 MB can be allocated".
+* Give Docker enough memory first. Docker Desktop's limit (not your PC's RAM) is what counts: `%UserProfile%\.wslconfig` with `[wsl2]` and `memory=12GB`, then `wsl --shutdown`.
 * The disk is kept in a Docker volume named `<host>-storage`, so `docker compose stop` / `start` is fast. LabForge's Destroy removes the volume, so the next build installs Windows again.
 * Open the machine in a browser at the console link in the lab README (http://127.0.0.1:8006) or with Remote Desktop on the published 3389 port. Ports bind to 127.0.0.1 only.
 * Domain controllers, routers and firewalls are still VM-only. Roles on a Windows node (Sysmon, agents) are not applied in Docker, so the first-boot script only creates fictional documents to attack.
