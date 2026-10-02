@@ -523,6 +523,12 @@ def render(
                     f"so it is published on 127.0.0.1:{host_port} instead."
                 )
 
+    # Never fetch an image that is already on this computer (this is also Compose's default;
+    # stating it keeps a second build from re-downloading anything, whatever the defaults are).
+    for service in services.values():
+        if "image" in service and "build" not in service:
+            service.setdefault("pull_policy", "missing")
+
     document: dict[str, object] = {"name": proj, "services": services, "networks": {"labforge": network}}
     if named_volumes:
         document["volumes"] = {name: {} for name in sorted(named_volumes)}

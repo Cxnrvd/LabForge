@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -63,6 +64,77 @@ def _disk() -> dict[str, Any]:
         }
     except Exception:
         return {"path": None, "total_gb": None, "used_gb": None, "free_gb": None}
+
+
+_LOGGER = logging.getLogger("labforge.hostmetrics")
+_logged_paths: set[str] = set()
+
+
+_root_dir_cache: tuple[float, str | None] | None = None
+
+
+def _cached_root_dir() -> str | None:
+    """``docker info`` is slow enough that the Home page's 5 second poll should not run it."""
+    global _root_dir_cache
+    from labforge_core.services import preflight
+
+    now = time.monotonic()
+    if _root_dir_cache is None or now - _root_dir_cache[0] > 120:
+        _root_dir_cache = (now, preflight.docker_root_dir())
+    return _root_dir_cache[1]
+
+
+def storage() -> dict[str, Any]:
+    """Every disk that matters for a lab, with the exact path measured and why.
+
+    * ``workspace``: the folder lab bundles are written to (``workspace_root``) and the drive it is on.
+    * ``docker``: where Docker keeps images and volumes on this computer, and the drive it is on.
+      Image downloads and Windows disks land here, so this is the figure to watch.
+    """
+    import os
+
+    import psutil
+
+    from labforge_core.services import preflight
+
+    settings = get_settings()
+    configured = Path(settings.workspace_root)
+    measured = _nearest_existing(configured)
+    from_env = "workspace_root" in settings.model_fields_set or "LABFORGE_WORKSPACE_ROOT" in os.environ
+    gb = 1024**3
+    try:
+        usage = psutil.disk_usage(str(measured))
+        workspace_disk = {"total_gb": round(usage.total / gb, 2), "free_gb": round(usage.free / gb, 2)}
+    except Exception:
+        workspace_disk = {"total_gb": None, "free_gb": None}
+    workspace = {
+        "configured_path": str(configured),
+        "source": "LABFORGE_WORKSPACE_ROOT" if from_env else "default",
+        "measured_path": str(measured),
+        "exists": configured.exists(),
+        "drive": measured.anchor or str(measured),
+        **workspace_disk,
+    }
+    docker = dict(preflight.docker_disk())
+    docker["drive"] = (Path(docker["path"]).anchor or docker["path"]) if docker.get("path") else None
+    docker["root_dir_in_engine"] = _cached_root_dir()
+    key = f"{workspace['measured_path']}|{docker.get('path')}"
+    if key not in _logged_paths:
+        _logged_paths.add(key)
+        _LOGGER.info(
+            "storage_measured",
+            extra={
+                "workspace_configured": workspace["configured_path"],
+                "workspace_measured": workspace["measured_path"],
+                "workspace_source": workspace["source"],
+                "docker_data": docker.get("path"),
+            },
+        )
+    return {
+        "workspace": workspace,
+        "docker": docker,
+        "same_drive": bool(workspace["drive"] and workspace["drive"] == docker.get("drive")),
+    }
 
 
 def sample() -> dict[str, Any]:

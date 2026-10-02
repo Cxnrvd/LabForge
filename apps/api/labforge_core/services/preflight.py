@@ -116,6 +116,15 @@ def docker_data_dir() -> Path | None:
     return None
 
 
+def docker_root_dir() -> str | None:
+    """Docker's own data root as the engine sees it (a path inside the Docker Desktop VM on Windows)."""
+    try:
+        proc = docker_runtime._run(["docker", "info", "--format", "{{.DockerRootDir}}"], timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return proc.stdout.strip() or None if proc.returncode == 0 else None
+
+
 def docker_disk() -> dict[str, Any]:
     """Free space where Docker keeps images and volumes. This, not the workspace folder, fills up."""
     target = docker_data_dir()

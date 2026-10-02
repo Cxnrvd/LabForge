@@ -71,3 +71,10 @@ apps/web/lib/api/generated.ts
 .labforge-audit.txt
 .audit-shots/
 .labforge-ui-audit.txt
+
+# Claude Code working files, not part of the product
+.labforge-audit.txt
+.labforge-ui-audit.txt
+.audit-shots/
+docs/CLAUDE-QA-PROMPT.md
+.claude/

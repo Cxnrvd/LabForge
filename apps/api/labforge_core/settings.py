@@ -5,7 +5,22 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def default_workspace_root() -> Path:
+    """Where lab folders go when LABFORGE_WORKSPACE_ROOT is not set.
+
+    In a source checkout that is ``<repo>/.labforge/workspaces``, so labs are built on the same
+    drive as the code (and, usually, Docker). A plain install falls back to ``~/.labforge``.
+    The folders are small; the big consumers are Docker images and Windows disks, measured
+    separately (see services/hostmetrics.storage).
+    """
+    repo = Path(__file__).resolve().parents[3]
+    if (repo / ".git").exists() and (repo / "packages" / "schema").exists():
+        return repo / ".labforge" / "workspaces"
+    return Path.home() / ".labforge" / "workspaces"
 
 
 class Settings(BaseSettings):
@@ -38,7 +53,7 @@ class Settings(BaseSettings):
     # Where the API extracts lab bundles and runs `vagrant up` for the
     # in-app Build Lab flow. Same default as the agent CLI so workspaces
     # show up consistently regardless of who triggered the build.
-    workspace_root: Path = Path.home() / ".labforge" / "workspaces"
+    workspace_root: Path = Field(default_factory=lambda: default_workspace_root())
 
     # Vagrant box handling. ``box_overrides`` maps an OS id to a box name, e.g.
     # LABFORGE_BOX_OVERRIDES='{"windows_10": "myorg/win10-lab"}'. With

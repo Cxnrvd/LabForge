@@ -17,6 +17,12 @@ def host_metrics() -> dict[str, Any]:
     return {**hostmetrics.sample(), "engine": hostmetrics.engine()}
 
 
+@router.get("/storage")
+def host_storage() -> dict[str, Any]:
+    """The disks that matter: where lab folders go and where Docker keeps images and Windows disks."""
+    return hostmetrics.storage()
+
+
 @router.get("/preflight")
 def host_preflight(
     windows_guests: Annotated[int, Query(ge=0, le=20, description="Windows guests in the lab about to be built")] = 0,

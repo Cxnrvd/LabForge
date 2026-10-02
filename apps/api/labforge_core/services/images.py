@@ -157,8 +157,27 @@ def _split_ref(ref: str) -> tuple[str, str | None]:
     return ref, None
 
 
+def _vm_box_requirements(topology: LabConfig) -> list[dict[str, Any]]:
+    """Vagrant boxes a VM topology needs, one entry per box."""
+    from labforge_core.services.generator import BOX_MAP
+    from labforge_core.settings import get_settings
+
+    overrides = get_settings().box_overrides
+    reqs: dict[str, dict[str, Any]] = {}
+    for node in topology.nodes:
+        os_id = node.config.os.value
+        box = overrides.get(os_id) or next((v for k, v in BOX_MAP.items() if k.value == os_id), None)
+        if not box:
+            continue
+        item = reqs.setdefault(box, {"key": "box:" + box, "label": box, "kind": "vagrant-box", "nodes": [], "ids": ["box:" + box]})
+        item["nodes"].append(node.config.hostname)
+    return list(reqs.values())
+
+
 def topology_images(topology: LabConfig) -> list[dict[str, Any]]:
     """Requirements of one topology: ``[{key, label, kind, nodes, ids}]``. Pure, no Docker calls."""
+    if topology.provider.value != "docker":
+        return _vm_box_requirements(topology)
     files, artifacts = build_bundle(topology, project="lf-img", include_readme=False, include_hosts_file=False)
     compose = yaml.safe_load(files["docker-compose.yml"]) or {}
     by_host = {n.config.hostname: n for n in topology.nodes}
@@ -393,7 +412,26 @@ def get_entry(image_id: str) -> dict[str, Any]:
     raise ImageError(f"Unknown image {image_id!r}.", "not_found", 404)
 
 
-def pull(image_id: str) -> dict[str, Any]:
+def is_present(image_id: str) -> bool:
+    """True when this exact image, base, golden image or box is already on this computer."""
+    if image_id in WINDOWS_BASES:
+        return BASE_PREFIX + image_id in _volumes() or image_id in _golden_oses()
+    if image_id.startswith("box:"):
+        return image_id[4:] in _vagrant_boxes()
+    if image_id.startswith("golden-"):
+        return GOLDEN_PREFIX + image_id[len("golden-"):] in _volumes()
+    return image_id in _docker_images()
+
+
+def _golden_oses() -> set[str]:
+    """Windows versions for which a golden image exists (a full installed disk beats any download)."""
+    return {v["labels"].get("labforge.golden.os", "") for v in _volumes().values() if v["labels"].get(LABEL_GOLDEN) == "true"} - {""}
+
+
+def pull(image_id: str, *, force: bool = False) -> dict[str, Any]:
+    # Never fetch what is already here, unless the caller explicitly asks to refresh it.
+    if not force and not image_id.startswith("golden-") and is_present(image_id):
+        return get_entry(image_id)
     if image_id in WINDOWS_BASES:
         _start(image_id, "prepare-base", lambda job: _prepare_base(job, image_id))
     elif image_id.startswith("box:"):
@@ -448,6 +486,8 @@ def _build_custom(job: Job, spec: Spec) -> None:
 
 
 def _box_add(box: str) -> None:
+    if box in _vagrant_boxes():
+        return
     proc = subprocess.run(["vagrant", "box", "add", "--provider", "virtualbox", "--force", box],
                           capture_output=True, text=True, errors="replace", timeout=3600)
     if proc.returncode != 0:
@@ -580,6 +620,8 @@ def volume_for_source(source_id: str) -> tuple[str, str | None]:
 
 
 def create_golden(source_id: str, name: str, *, project_volume_lookup=None) -> dict[str, Any]:
+    """Save a Windows disk as a golden image. ``project_volume_lookup`` returns
+    ``(volume, container)`` or ``(volume, container, os_id)`` for ``lab:<id>:<machine>`` sources."""
     slug = _slug(name)
     target = GOLDEN_PREFIX + slug
     image_id = "golden-" + slug
@@ -587,10 +629,13 @@ def create_golden(source_id: str, name: str, *, project_volume_lookup=None) -> d
         raise ImageError(f"A golden image named {slug!r} already exists.", "exists")
     source, _ = volume_for_source(source_id)
     container = None
+    os_id = source_id if source_id in WINDOWS_BASES else ""
     if source.startswith("@lab:"):
         if project_volume_lookup is None:
             raise ImageError("Lab sources need the API lab lookup.", "bad_source", 422)
-        source, container = project_volume_lookup(source)
+        found = project_volume_lookup(source)
+        source, container = found[0], found[1]
+        os_id = found[2] if len(found) > 2 and found[2] else ""
 
     def work(job: Job) -> None:
         was_running = False
@@ -601,7 +646,7 @@ def create_golden(source_id: str, name: str, *, project_volume_lookup=None) -> d
         try:
             created = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             _docker(["volume", "create", "--label", f"{LABEL_GOLDEN}=true", "--label", f"labforge.golden.name={slug}",
-                     "--label", f"labforge.golden.created={created}", target])
+                     "--label", f"labforge.golden.created={created}", "--label", f"labforge.golden.os={os_id}", target])
             proc = _docker(["run", "--rm", "-v", f"{source}:/from:ro", "-v", f"{target}:/to", COPY_IMAGE,
                             "sh", "-c", "cp -a --sparse=always /from/. /to/"], timeout=7200)
             if proc.returncode != 0:
@@ -626,38 +671,55 @@ def golden_volume(name: str) -> str:
 
 
 def prepare(template_id: str) -> list[str]:
-    template = get_template(template_id)
-    local = _docker_images()
-    volumes = _volumes()
-    queued: list[str] = []
-    for req in topology_images(template):
-        for image_id in req["ids"]:
-            if image_id in WINDOWS_BASES:
-                if BASE_PREFIX + image_id in volumes:
-                    continue
-            elif image_id in local:
-                continue
-            pull(image_id)
-            queued.append(image_id)
-    return queued
+    """Download only the difference between what a template needs and what is already local."""
+    return [i for i in plan(get_template(template_id))["missing_ids"] if _queue(i)]
+
+
+def _queue(image_id: str) -> bool:
+    pull(image_id)
+    return True
 
 
 def requirements(topology: LabConfig) -> list[dict[str, Any]]:
-    """Requirements of a topology with their readiness, for the Launch dialog."""
+    """Requirements of a topology with their readiness, for the Launch dialog and the build."""
     status = {e["id"]: e for e in list_images()["images"]}
+    goldens = _golden_oses()
+    boxes = _vagrant_boxes()
     out = []
     for req in topology_images(topology):
-        entries = [status.get(i) for i in req["ids"] if i in status]
         if req["kind"] == "vagrant-box":
-            state = "missing"
-        elif entries and all(e["status"] == "ready" for e in entries):
-            state = "ready"
-        elif any(e and e["status"] == "pulling" for e in entries):
-            state = "pulling"
-        else:
-            state = "missing"
-        out.append({**req, "status": state, "size_mb": sum(e["size_mb"] for e in entries if e["status"] != "ready")})
+            name = req["ids"][0][4:]
+            have = name in boxes
+            out.append({**req, "status": "ready" if have else "missing", "size_mb": 0 if have else ESTIMATE_MB["vagrant-box"],
+                        "present": [req["ids"][0]] if have else [], "missing_ids": [] if have else list(req["ids"])})
+            continue
+        present, missing, size = [], [], 0
+        pulling = False
+        for image_id in req["ids"]:
+            entry = status.get(image_id)
+            if entry and entry["status"] == "pulling":
+                pulling = True
+            if (entry and entry["status"] == "ready") or (image_id in WINDOWS_BASES and image_id in goldens):
+                present.append(image_id)
+            else:
+                missing.append(image_id)
+                size += entry["size_mb"] if entry else 0
+        state = "ready" if not missing else "pulling" if pulling else "missing"
+        out.append({**req, "status": state, "size_mb": size, "present": present, "missing_ids": missing})
     return out
+
+
+def plan(topology: LabConfig) -> dict[str, Any]:
+    """What a build of ``topology`` can reuse and what it would still have to fetch."""
+    reqs = requirements(topology)
+    present = [i for r in reqs for i in r["present"]]
+    missing = [i for r in reqs for i in r["missing_ids"]]
+    return {
+        "present_ids": present,
+        "missing_ids": missing,
+        "download_mb": sum(r["size_mb"] for r in reqs if r["status"] != "ready"),
+        "requirements": reqs,
+    }
 
 
 def export_stream(image_id: str) -> tuple[str, Iterator[bytes]]:
@@ -755,12 +817,29 @@ def seed_base_volume(project: str, host: str, base_id: str) -> str:
 
 
 def base_seeds(topology: LabConfig, project: str, existing: list[dict[str, str]]) -> list[dict[str, str]]:
-    """Seeds for Windows nodes that have no golden image but whose Windows base is already downloaded."""
+    """Seeds for Windows nodes that were not given a golden image explicitly.
+
+    A golden image of the same Windows version (a full installed disk) is used when there is one,
+    otherwise the saved installer, otherwise nothing and the guest downloads Windows itself.
+    """
     taken = {seed["host"] for seed in existing}
     wanted = [(n.config.hostname, _OS_TO_BASE[n.config.os.value]) for n in topology.nodes
               if is_windows_guest(n) and n.config.hostname not in taken]
     if not wanted:
         return []
-    have = {b for b in {base for _, base in wanted} if _docker(["volume", "inspect", BASE_PREFIX + b]).returncode == 0}
-    return [{"host": host, "base": base, "project": project} for host, base in wanted if base in have]
-
+    volumes = _volumes()
+    newest: dict[str, tuple[str, str]] = {}
+    for vol in volumes.values():
+        labels = vol["labels"]
+        if labels.get(LABEL_GOLDEN) == "true" and labels.get("labforge.golden.os"):
+            os_id = labels["labforge.golden.os"]
+            stamp = labels.get("labforge.golden.created", "")
+            if os_id not in newest or stamp > newest[os_id][0]:
+                newest[os_id] = (stamp, labels.get("labforge.golden.name", ""))
+    seeds: list[dict[str, str]] = []
+    for host, base in wanted:
+        if base in newest and newest[base][1]:
+            seeds.append({"host": host, "golden": newest[base][1], "project": project})
+        elif BASE_PREFIX + base in volumes:
+            seeds.append({"host": host, "base": base, "project": project})
+    return seeds

@@ -258,6 +258,29 @@ with open(exit_path, "w", encoding="utf-8") as fh:
 '''
 
 
+def _log_reuse(topology: LabConfig, workspace: Path) -> None:
+    """Say in the build log what was already on this computer and what is being fetched.
+
+    The fetching itself is Compose's job (it only pulls images that are missing) and, for Windows
+    guests, the seeding step; this makes the decision visible.
+    """
+    try:
+        plan = images.plan(topology)
+    except Exception:
+        _LOGGER.warning("image_plan_failed", exc_info=True)
+        return
+    with (workspace / BUILD_LOG).open("a", encoding="utf-8") as fh:
+        fh.write(f"[labforge] reusing {len(plan['present_ids'])} image(s) already on this computer\n")
+        if plan["missing_ids"]:
+            fh.write(
+                f"[labforge] fetching {len(plan['missing_ids'])} missing item(s), about {plan['download_mb']} MB: "
+                + ", ".join(plan["missing_ids"])
+                + "\n"
+            )
+        else:
+            fh.write("[labforge] nothing to download\n")
+
+
 def _spawn_daemon(lab: Lab, workspace: Path) -> None:
     """Heartbeat daemon, best effort: the build proceeds without it."""
     try:
@@ -403,6 +426,7 @@ def start_build_detailed(
         if warnings:
             with (workspace / BUILD_LOG).open("a", encoding="utf-8") as fh:
                 fh.writelines(f"[labforge] warning: {w}\n" for w in warnings)
+        _log_reuse(topology, workspace)
     except Exception:
         # Never leave a half-created lab behind: drop the row and any files.
         session.delete(lab)
