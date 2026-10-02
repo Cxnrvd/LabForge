@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
 
@@ -101,8 +101,8 @@ def create_lab(
         provider=payload.provider,
         status="pending",
         workspace_path=payload.workspace_path,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
     )
     session.add(row)
     session.commit()
@@ -137,7 +137,7 @@ def update_status(
             detail={"detail": f"Lab {lab_id} not found", "code": "not_found"},
         )
     row.status = new_status
-    row.updated_at = datetime.utcnow()
+    row.updated_at = datetime.now(UTC)
     session.add(row)
     session.commit()
     session.refresh(row)
@@ -201,7 +201,7 @@ async def post_heartbeat(
             detail={"detail": f"Lab {lab_id} not found", "code": "not_found"},
         )
 
-    captured_at = payload.captured_at or datetime.utcnow()
+    captured_at = payload.captured_at or datetime.now(UTC)
     serialized = payload.model_dump(mode="json")
     serialized["captured_at"] = captured_at.isoformat()
     hb = LabHeartbeat(
@@ -390,7 +390,7 @@ def build_status(
         new_status = "failed"
     if new_status is not None and new_status != lab.status:
         lab.status = new_status
-        lab.updated_at = datetime.utcnow()
+        lab.updated_at = datetime.now(UTC)
         session.add(lab)
         session.commit()
     return BuildStatus(**snap)
@@ -480,7 +480,7 @@ def stop_lab_build(
     result = stop_build(workspace)
     if result["phase"] == "aborted" and lab.status == "building":
         lab.status = "failed"
-        lab.updated_at = datetime.utcnow()
+        lab.updated_at = datetime.now(UTC)
         session.add(lab)
         session.commit()
     return BuildStatus(**read_build_status(workspace))
@@ -658,7 +658,7 @@ def recent_activity(
     limit: int = Query(default=30, ge=1, le=200),
 ) -> list[ActivityEntry]:
     """Cross-lab activity feed for the dashboard."""
-    since = datetime.utcnow() - timedelta(hours=24)
+    since = datetime.now(UTC) - timedelta(hours=24)
     rows = session.exec(
         select(LabHeartbeat, Lab)
         .where(LabHeartbeat.lab_id == Lab.id, LabHeartbeat.captured_at >= since)

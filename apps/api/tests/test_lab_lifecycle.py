@@ -322,3 +322,27 @@ def test_build_log_has_no_coverage_note_when_every_node_runs(fake, session, tmp_
     lab = _build(session, tmp_path)
     log = (Path(lab.workspace_path) / build_runner.BUILD_LOG).read_text(encoding="utf-8")
     assert "cannot run on Docker" not in log
+
+
+def test_heartbeat_accepts_aware_and_naive_captured_at_without_raising(fake, session, tmp_path):
+    """The agent now sends a timezone-aware captured_at (datetime.now(UTC).isoformat()); older
+    payloads, or one with no captured_at at all, must still work. Regression for a real
+    inconsistency: the API's own fallback used to be naive (datetime.utcnow()) while the agent
+    started sending aware timestamps, which never crashed (SQLAlchemy strips tzinfo on write) but
+    was worth closing so every timestamp in this path is produced the same, non-deprecated way."""
+    lab = _build(session, tmp_path)
+    app = FastAPI()
+    app.include_router(labs_router.router, prefix="/api/v1")
+    app.dependency_overrides[get_session] = lambda: session
+    client = TestClient(app)
+
+    aware = client.post(f"/api/v1/labs/{lab.id}/heartbeat", json={"captured_at": "2026-10-02T20:00:00+00:00"})
+    assert aware.status_code == 200
+    naive = client.post(f"/api/v1/labs/{lab.id}/heartbeat", json={"captured_at": "2026-10-02T20:00:05"})
+    assert naive.status_code == 200
+    no_timestamp = client.post(f"/api/v1/labs/{lab.id}/heartbeat", json={})
+    assert no_timestamp.status_code == 200
+
+    recent = client.get("/api/v1/labs/activity/recent")
+    assert recent.status_code == 200
+    assert len(recent.json()) >= 3

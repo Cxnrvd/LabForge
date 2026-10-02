@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import UTC, datetime
 from functools import lru_cache
 
 from sqlalchemy import Column, Text
@@ -23,8 +23,8 @@ class StoredTopology(SQLModel, table=True):
     name: str
     description: str = ""
     payload_json: str = Field(sa_column=Column(Text, nullable=False))
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     def payload(self) -> dict:
         return json.loads(self.payload_json)
@@ -41,8 +41,8 @@ class Lab(SQLModel, table=True):
     provider: str = "virtualbox"
     status: str = "pending"
     workspace_path: str | None = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class LabHeartbeat(SQLModel, table=True):
@@ -54,7 +54,7 @@ class LabHeartbeat(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     lab_id: int = Field(index=True)
-    captured_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    captured_at: datetime = Field(default_factory=lambda: datetime.now(UTC), index=True)
     payload_json: str = Field(sa_column=Column(Text, nullable=False))
 
     def payload(self) -> dict:
