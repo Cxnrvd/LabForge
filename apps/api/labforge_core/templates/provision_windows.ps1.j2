@@ -6,6 +6,7 @@
 $ErrorActionPreference = "Continue"
 $VerbosePreference     = "Continue"
 
+$failed = @()
 $logDir  = "C:\Labforge"
 $logPath = "$logDir\provision.log"
 if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir | Out-Null }
@@ -36,6 +37,7 @@ try {
 {{ block.body | indent(4, True) }}
 } catch {
     Write-Host "[!] Role '{{ block.label }}' failed: $_"
+    $failed += "role {{ block.label }}"
 }
 Write-Host "----- end role: {{ block.label }} -----"
 {% endfor %}
@@ -50,6 +52,11 @@ Write-Host "  - {{ block.cve_id }}: {{ block.description }}"
 {% endfor %}
 {% endif %}
 
+if ($failed.Count -gt 0) {
+    Write-Host "=== LabForge provisioner FINISHED WITH ERRORS for {{ node.config.hostname }}: $($failed -join ', ') ==="
+    Stop-Transcript | Out-Null
+    exit 1
+}
 Write-Host "=== LabForge provisioner complete for {{ node.config.hostname }} ==="
 Stop-Transcript | Out-Null
 exit 0

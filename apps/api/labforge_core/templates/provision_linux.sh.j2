@@ -5,6 +5,7 @@
 # time you click "Generate Lab".
 set -uo pipefail
 
+FAILED_BLOCKS=()
 LOG=/var/log/labforge-provision.log
 exec > >(tee -a "$LOG") 2>&1
 echo "[$(date -Is)] === LabForge provisioner start for {{ node.config.hostname }} ==="
@@ -23,9 +24,15 @@ printf '%s\n' "vagrant:"{{ node.config.credentials.password | bash_q }} | chpass
 echo "[+] Applying {{ install_blocks | length }} role install block(s)..."
 {% for block in install_blocks %}
 echo "----- begin role: {{ block.label }} -----"
-set +e
-{{ block.body }}
+(
 set -e
+{{ block.body }}
+)
+rc=$?
+if [ "$rc" -ne 0 ]; then
+    echo "[!] role '{{ block.label }}' FAILED with exit code $rc"
+    FAILED_BLOCKS+=("role {{ block.label }}")
+fi
 echo "----- end role: {{ block.label }} -----"
 {% endfor %}
 {% else %}
@@ -36,12 +43,22 @@ echo "[i] No roles attached — nothing to install beyond base OS."
 echo "[+] Applying {{ cve_blocks | length }} CVE provisioner(s)..."
 {% for block in cve_blocks %}
 echo "----- begin CVE: {{ block.cve_id }} ({{ block.description }}) -----"
-set +e
-{{ block.script }}
+(
 set -e
+{{ block.script }}
+)
+rc=$?
+if [ "$rc" -ne 0 ]; then
+    echo "[!] CVE {{ block.cve_id }} FAILED with exit code $rc"
+    FAILED_BLOCKS+=("CVE {{ block.cve_id }}")
+fi
 echo "----- end CVE: {{ block.cve_id }} -----"
 {% endfor %}
 {% endif %}
 
+if [ -n "${FAILED_BLOCKS[*]:-}" ]; then
+    echo "[$(date -Is)] === LabForge provisioner FINISHED WITH ERRORS for {{ node.config.hostname }}: ${FAILED_BLOCKS[*]} ==="
+    exit 1
+fi
 echo "[$(date -Is)] === LabForge provisioner complete for {{ node.config.hostname }} ==="
 exit 0

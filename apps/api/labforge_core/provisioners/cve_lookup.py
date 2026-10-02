@@ -26,15 +26,15 @@ _DESCRIPTIONS: dict[str, str] = {
     "CVE-2017-5638": "Apache Struts 2 Jakarta multipart parser RCE",
     "CVE-2022-22965": "Spring Framework data-binding RCE (Spring4Shell)",
     # OS / protocol
-    "CVE-2019-0708": "Microsoft RDP pre-authentication RCE (BlueKeep)",
-    "CVE-2020-1472": "Netlogon elevation of privilege (Zerologon)",
+    "CVE-2019-0708": "Microsoft RDP pre-authentication RCE (BlueKeep). Notes only: LabForge does not provision a vulnerable host",
+    "CVE-2020-1472": "Netlogon elevation of privilege (Zerologon). Notes only: the unsafe DC setting is not applied by LabForge",
     "CVE-2014-0160": "OpenSSL heartbeat memory disclosure (Heartbleed)",
     "CVE-2014-6271": "GNU bash environment variable RCE (Shellshock)",
     "CVE-2017-0144": "Windows SMBv1 EternalBlue RCE",
     "CVE-2021-34527": "Windows Print Spooler RCE (PrintNightmare)",
     "CVE-2023-4966": "Citrix NetScaler ADC / Gateway buffer overflow (CitrixBleed)",
     # Mail / desktop
-    "CVE-2023-23397": "Microsoft Outlook NTLM relay via PidLidReminderFileParameter",
+    "CVE-2023-23397": "Outlook NTLM relay via PidLidReminderFileParameter. Installs Responder and Impacket on the attacker only",
 }
 
 

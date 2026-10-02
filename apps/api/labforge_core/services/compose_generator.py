@@ -246,7 +246,10 @@ def _windows_service(
         "stop_grace_period": "2m",
         "restart": "on-failure:3",
         "mem_limit": f"{ram + 1024}m",
-        "volumes": [f"{host}-storage:/storage", f"./oem/{host}:/oem:ro"],
+        "volumes": [f"{host}-storage:/storage"],
+        # Injected by Compose (not a bind mount), so it also works when the API itself runs in a
+        # container and the workspace path means nothing to the Docker engine.
+        "configs": [{"source": f"oem-{host}", "target": "/oem/install.bat", "mode": 0o444}],
     }
     return service, env
 
@@ -271,6 +274,7 @@ def render(
     warnings: list[str] = []
     published: dict[str, list[tuple[int, int]]] = {}
     named_volumes: set[str] = set()
+    config_docs: dict[str, dict[str, str]] = {}
     taken_ports: set[int] = set()
     isolated = False
     primary_by_host: dict[str, DockerRole | None] = {}
@@ -312,6 +316,7 @@ def render(
                     f"{host} uses {gateway}, which Docker reserves as the network gateway; pick another address"
                 )
             named_volumes.add(f"{host}-storage")
+            config_docs[f"oem-{host}"] = {"content": _WINDOWS_OEM_INSTALL}
             if publish == "loopback":
                 mappings = []
                 rendered_ports = []
@@ -512,6 +517,8 @@ def render(
     document: dict[str, object] = {"name": proj, "services": services, "networks": {"labforge": network}}
     if named_volumes:
         document["volumes"] = {name: {} for name in sorted(named_volumes)}
+    if config_docs:
+        document["configs"] = config_docs
 
     return ComposeArtifacts(
         compose_yaml=yaml.safe_dump(document, sort_keys=False, default_flow_style=False, width=120),

@@ -44,6 +44,10 @@ def test_windows_workstation_becomes_a_kvm_backed_service():
     assert "RAM_SIZE=" in env and "DISK_SIZE=64G" in env
     assert f"oem/{host}/install.bat" in files
     assert b"fictional" in files[f"oem/{host}/install.bat"]
+    # No bind mount: the first-boot script is injected as a Compose config.
+    assert not any("./oem" in str(v) for v in svc["volumes"])
+    assert svc["configs"][0]["target"] == "/oem/install.bat"
+    assert "fictional" in doc["configs"][f"oem-{host}"]["content"]
     assert f"{host}" not in art.fallback_notes
 
 
