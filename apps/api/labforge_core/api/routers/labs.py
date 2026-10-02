@@ -53,6 +53,7 @@ from labforge_core.services.build_runner import (
     start_build,
     stop_build,
 )
+from labforge_core.services.compose_generator import endpoints_from_workspace
 from labforge_core.services.live_bus import bus
 
 _LOGGER = logging.getLogger("labforge.labs")
@@ -525,6 +526,22 @@ def resume_lab_route(
         ) from exc
     session.refresh(lab)
     return LabSummary.model_validate(lab, from_attributes=True)
+
+
+@router.get("/{lab_id}/endpoints")
+def lab_endpoints(
+    lab_id: int,
+    session: Annotated[Session, Depends(get_session)],
+) -> list[dict[str, object]]:
+    """Addresses a running Docker lab publishes on this computer (Kibana, consoles, RDP)."""
+    lab = session.get(Lab, lab_id)
+    if lab is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": f"Lab {lab_id} not found", "code": "not_found"},
+        )
+    workspace = _resolve_workspace(lab)
+    return endpoints_from_workspace(workspace)
 
 
 @router.get("/build/preflight")

@@ -8,7 +8,7 @@ import { toast } from "sonner";
 
 import type { LabConfig } from "@labforge/schema";
 import { cn } from "@/lib/utils/cn";
-import { api, type ApiError, type BuildPhasesPayload, type BuildStatusPayload } from "@/lib/api/client";
+import { api, type ApiError, type BuildPhasesPayload, type BuildStatusPayload, type LabEndpoint } from "@/lib/api/client";
 import { useLiveBus, type LiveBusEvent } from "@/lib/api/live-bus";
 import { LiveTopologyView } from "@/components/monitor/LiveTopologyView";
 import { TimeScrubber, type ScrubberSample } from "@/components/monitor/TimeScrubber";
@@ -171,6 +171,14 @@ export default function BuildMonitorPage() {
     queryFn: () => api.getLabTopology(id),
     enabled,
     staleTime: Infinity,
+  });
+
+  const endpointsQ = useQuery<LabEndpoint[]>({
+    queryKey: ["lab-endpoints", id],
+    queryFn: () => api.labEndpoints(id),
+    enabled: enabled && labQ.data?.provider === "docker",
+    staleTime: 60_000,
+    retry: 0,
   });
 
   const statusQ = useQuery<BuildStatusPayload>({
@@ -412,6 +420,25 @@ export default function BuildMonitorPage() {
         <span className="badge mono">lab #{id}</span>
 
         <div style={{ flex: 1 }} />
+
+        {(endpointsQ.data ?? []).map((ep) =>
+          ep.url ? (
+            <a
+              key={`${ep.host}-${ep.host_port}`}
+              className="btn sm primary"
+              href={ep.url}
+              target="_blank"
+              rel="noreferrer"
+              title={ep.url}
+            >
+              Open {ep.label}
+            </a>
+          ) : (
+            <span key={`${ep.host}-${ep.host_port}`} className="badge mono" title={`${ep.label} on ${ep.host}`}>
+              {ep.label} {ep.address}
+            </span>
+          ),
+        )}
 
         <button
           className="btn sm"

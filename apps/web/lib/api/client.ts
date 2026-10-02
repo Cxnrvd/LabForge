@@ -106,6 +106,15 @@ export interface HostMetrics {
   };
 }
 
+export interface LabEndpoint {
+  host: string;
+  label: string;
+  url: string | null;
+  address: string;
+  kind: "web" | "rdp" | "tcp";
+  host_port: number;
+}
+
 export interface PreflightCheck {
   id: string;
   status: "ok" | "warn" | "fail";
@@ -121,6 +130,7 @@ export interface PreflightReport {
 }
 
 export const api = {
+  labEndpoints: (labId: number) => request<LabEndpoint[]>(`/labs/${labId}/endpoints`),
   preflight: (opts: { windowsGuests?: number; memoryMb?: number; recheck?: boolean } = {}) => {
     const q = new URLSearchParams();
     if (opts.windowsGuests) q.set("windows_guests", String(opts.windowsGuests));

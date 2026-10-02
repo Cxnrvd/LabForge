@@ -245,3 +245,30 @@ def test_build_shim_drops_pull_progress_noise_and_writes_the_exit_file(tmp_path)
     assert out.count("Downloading") <= 2
     code, _stamp = (tmp_path / ".build.exit").read_text().split()
     assert code == "0"
+
+
+def test_endpoints_are_read_back_from_a_built_workspace(tmp_path):
+    from labforge_core.services.compose_generator import build_bundle, endpoints_from_workspace
+
+    files, _ = build_bundle(get_template("ransomware-intrusion-lab"), project="lf7-x", port_free=lambda p: p != 9200)
+    for rel, content in files.items():
+        target = tmp_path / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content if isinstance(content, bytes) else content.encode())
+
+    found = {ep["host"]: ep for ep in endpoints_from_workspace(tmp_path)}
+    assert found["kibana"]["url"] == "http://127.0.0.1:5601/"
+    assert found["kibana"]["label"] == "Kibana"
+    assert found["elastic"]["host_port"] == 10200  # 9200 was busy
+    assert endpoints_from_workspace(tmp_path / "missing") == []
+
+
+def test_endpoints_route(fake, session, tmp_path):
+    lab = _build(session, tmp_path)
+    app = FastAPI()
+    app.include_router(labs_router.router, prefix="/api/v1")
+    app.dependency_overrides[get_session] = lambda: session
+    client = TestClient(app)
+    urls = {ep["label"]: ep["url"] for ep in client.get(f"/api/v1/labs/{lab.id}/endpoints").json()}
+    assert urls["Kibana"].startswith("http://127.0.0.1:")
+    assert client.get("/api/v1/labs/404/endpoints").status_code == 404

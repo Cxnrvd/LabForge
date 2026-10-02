@@ -540,6 +540,69 @@ _WEB_ROLES: dict[str, tuple[str, str]] = {
 }
 
 
+def endpoints(
+    topology: LabConfig,
+    published: dict[str, list[tuple[int, int]]],
+    windows_hosts: list[str] | tuple[str, ...] = (),
+) -> list[dict[str, object]]:
+    """What the user can open from this computer: ``{host, label, url, address, kind, host_port}``."""
+    by_host = {n.config.hostname: n for n in topology.nodes}
+    out: list[dict[str, object]] = []
+    for host, mappings in published.items():
+        node = by_host.get(host)
+        if node is None:
+            continue
+        for host_port, container_port in mappings:
+            address = f"127.0.0.1:{host_port}"
+            if host in windows_hosts:
+                if container_port == WINDOWS_WEB_PORT:
+                    out.append(
+                        {"host": host, "label": "Windows console", "url": f"http://{address}", "address": address,
+                         "kind": "web", "host_port": host_port}
+                    )
+                else:
+                    out.append(
+                        {"host": host, "label": "Remote Desktop", "url": None, "address": address,
+                         "kind": "rdp", "host_port": host_port}
+                    )
+                continue
+            role_name = next((parse_role(r)[0] for r in node.config.roles if parse_role(r)[0] in _WEB_ROLES), None)
+            if role_name and container_port in DOCKER_ROLES[role_name].ports[:1]:
+                path, label = _WEB_ROLES[role_name]
+                out.append(
+                    {"host": host, "label": label, "url": f"http://{address}{path}", "address": address,
+                     "kind": "web", "host_port": host_port}
+                )
+            else:
+                out.append(
+                    {"host": host, "label": f"Port {container_port}", "url": None, "address": address,
+                     "kind": "tcp", "host_port": host_port}
+                )
+    return out
+
+
+def endpoints_from_workspace(workspace: Path) -> list[dict[str, object]]:
+    """``endpoints`` for a lab that is already built, read back from its compose file and topology."""
+    compose_path = workspace / "docker-compose.yml"
+    topo_path = workspace / "topology.json"
+    if not compose_path.exists() or not topo_path.exists():
+        return []
+    document = yaml.safe_load(compose_path.read_text(encoding="utf-8")) or {}
+    topology = LabConfig.model_validate_json(topo_path.read_text(encoding="utf-8"))
+    by_service = {n.config.hostname: n for n in topology.nodes}
+    published: dict[str, list[tuple[int, int]]] = {}
+    windows_hosts: list[str] = []
+    for host, service in (document.get("services") or {}).items():
+        for mapping in service.get("ports", []) or []:
+            parts = str(mapping).split(":")
+            if len(parts) >= 2 and parts[-1].split("/")[0].isdigit() and parts[-2].isdigit():
+                published.setdefault(host, []).append((int(parts[-2]), int(parts[-1].split("/")[0])))
+        node = by_service.get(host)
+        if node is not None and is_windows_guest(node):
+            windows_hosts.append(host)
+    return endpoints(topology, published, windows_hosts)
+
+
 def render_readme(topology: LabConfig, artifacts: ComposeArtifacts) -> str:
     proj = artifacts.project
     lines = [
@@ -572,23 +635,11 @@ def render_readme(topology: LabConfig, artifacts: ComposeArtifacts) -> str:
         node = by_host[host]
         roles = ", ".join(node.config.roles) or "bare OS"
         lines.append(f"- **{host}** ({node.config.ip}): {roles}")
-    if artifacts.published_ports:
+    reachable = endpoints(topology, artifacts.published_ports, artifacts.windows_hosts)
+    if reachable:
         lines += ["", "## Reachable from this machine", ""]
-        for host, mappings in artifacts.published_ports.items():
-            node = by_host[host]
-            for host_port, container_port in mappings:
-                if host in artifacts.windows_hosts:
-                    if container_port == WINDOWS_WEB_PORT:
-                        lines.append(f"- Windows console ({host}): http://127.0.0.1:{host_port}")
-                    else:
-                        lines.append(f"- Remote Desktop ({host}): 127.0.0.1:{host_port}")
-                    continue
-                role_name = next((parse_role(r)[0] for r in node.config.roles if parse_role(r)[0] in _WEB_ROLES), None)
-                if role_name and container_port in DOCKER_ROLES[role_name].ports[:1]:
-                    path, label = _WEB_ROLES[role_name]
-                    lines.append(f"- {label} ({host}): http://127.0.0.1:{host_port}{path}")
-                else:
-                    lines.append(f"- {host}: 127.0.0.1:{host_port} -> container port {container_port}")
+        for ep in reachable:
+            lines.append(f"- {ep['label']} ({ep['host']}): {ep['url'] or ep['address']}")
     if artifacts.fallback_notes:
         lines += ["", "## Not started in Docker", ""]
         lines += [f"- {note.strip()}" for note in artifacts.fallback_notes.values()]

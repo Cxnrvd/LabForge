@@ -181,7 +181,10 @@ def run(*, windows_guests: int = 0, memory_needed_mb: int | None = None, ports: 
         need = memory_needed_mb or 0
         if dmem is not None:
             host_mb = hostenv.host_memory_mb()
-            suggest = max(8, min(((host_mb or 16384) // 1024) // 2, 24))
+            # Enough for this lab plus 2 GB of headroom, never more than three quarters of the computer.
+            wanted_gb = -(-(need + 2048) // 1024) if need else 8
+            cap_gb = max(4, int((host_mb or 16384) * 0.75) // 1024)
+            suggest = max(8, min(wanted_gb, cap_gb))
             fix = (
                 f"Docker Desktop is limited to {dmem // 1024} GB. Create %UserProfile%\\.wslconfig containing "
                 f"[wsl2] and memory={suggest}GB, run 'wsl --shutdown', then start Docker Desktop again."

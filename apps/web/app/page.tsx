@@ -14,7 +14,7 @@ import Link from "next/link";
 import { useQuery, useQueries } from "@tanstack/react-query";
 
 import { api } from "@/lib/api/client";
-import type { HostMetrics, PreflightReport } from "@/lib/api/client";
+import type { HostMetrics, LabEndpoint, PreflightReport } from "@/lib/api/client";
 import { OS_LABELS } from "@labforge/schema";
 
 interface Lab {
@@ -226,6 +226,14 @@ export default function Home(): React.ReactElement {
   const events = (activityQ.data ?? []).filter((a) => !live || a.lab_id === live.id).slice(0, 4);
   const liveTopo = live ? topoQs[0]?.data : undefined;
   const liveBeat = live ? beatQs[0]?.data : undefined;
+  const endpointsQ = useQuery<LabEndpoint[]>({
+    queryKey: ["lab-endpoints", live?.id],
+    queryFn: () => api.labEndpoints(live!.id),
+    enabled: !!live && live.provider === "docker",
+    staleTime: 60_000,
+    retry: 0,
+  });
+  const liveEndpoints = endpointsQ.data;
 
   const eng = m?.engine;
   const histBars = hist.length ? hist : [];
@@ -412,7 +420,12 @@ export default function Home(): React.ReactElement {
                 ))}
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 14 }}>
-                <Link href={`/monitor/${live.id}`} className="btn primary btn-block">Open live view</Link>
+                {(liveEndpoints ?? []).filter((ep) => ep.url).map((ep) => (
+                  <a key={`${ep.host}-${ep.host_port}`} href={ep.url ?? "#"} target="_blank" rel="noreferrer" className="btn primary btn-block">
+                    Open {ep.label}
+                  </a>
+                ))}
+                <Link href={`/monitor/${live.id}`} className="btn btn-block">Open live view</Link>
                 <Link href={`/labs/${live.id}`} className="btn btn-block">Lab details</Link>
               </div>
             </>
