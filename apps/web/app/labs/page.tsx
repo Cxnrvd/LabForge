@@ -73,7 +73,7 @@ const TEMPLATE_FILTERS: Array<{ id: string; label: string }> = [
   { id: "custom", label: "custom" },
 ];
 
-const PROVIDERS = ["virtualbox", "vmware", "libvirt", "docker"] as const;
+const PROVIDERS = ["all", "docker", "virtualbox", "vmware", "libvirt"] as const;
 type Provider = (typeof PROVIDERS)[number];
 
 /* ============================================================
@@ -330,7 +330,7 @@ export default function LabsIndex(): React.ReactElement {
     custom: false,
   }));
 
-  const [providerFilter, setProviderFilter] = React.useState<Provider>("virtualbox");
+  const [providerFilter, setProviderFilter] = React.useState<Provider>("all");
 
   /* ---------- per-row heartbeats (nodes + last action) ---------- */
 
@@ -390,7 +390,7 @@ export default function LabsIndex(): React.ReactElement {
       }
 
       // .filt Provider chip
-      if (lab.provider && lab.provider !== providerFilter) return false;
+      if (providerFilter !== "all" && lab.provider && lab.provider !== providerFilter) return false;
 
       // Search box — name / template / workspace path (≈ "hostname" in the brief)
       if (q) {
@@ -413,7 +413,7 @@ export default function LabsIndex(): React.ReactElement {
     Object.values(templateFilter).forEach((v) => {
       if (v) n += 1;
     });
-    if (providerFilter !== "virtualbox") n += 1;
+    if (providerFilter !== "all") n += 1;
     return n;
   }, [statusFilter, templateFilter, providerFilter]);
 

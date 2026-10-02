@@ -13,7 +13,7 @@ export const SAMPLE_TOPOLOGY: LabConfig = {
   name: "Quickstart",
   description: "Sample lab pre-loaded on your first visit. Edit it freely.",
   network_cidr: "192.168.56.0/24",
-  provider: "virtualbox",
+  provider: "docker",
   version: "1.0",
   zones: [
     {

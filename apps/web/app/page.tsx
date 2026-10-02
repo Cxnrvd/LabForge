@@ -312,10 +312,10 @@ export default function Home(): React.ReactElement {
               <div className="r"><span className="k">Compose</span><span className="v">{eng?.compose_version ?? "n/a"}</span></div>
               <div className="r"><span className="k">Docker memory</span>
                 <span className="v">{eng?.docker_memory_mb != null ? `${(eng.docker_memory_mb / 1024).toFixed(0)} GB` : "n/a"}</span></div>
-              <div className="r"><span className="k">Virtualization</span>
+              <div className="r"><span className="k">Virtualization (host)</span>
                 <span className="v">{eng?.hypervisor_present == null ? "n/a" : eng.hypervisor_present ? "available" : "missing"}</span></div>
-              <div className="r"><span className="k">Vagrant</span><span className="v">{eng?.vagrant_version ?? "not installed"}</span></div>
-              <div className="r"><span className="k">VirtualBox</span><span className="v">{eng?.virtualbox_version ?? "not installed"}</span></div>
+              <div className="r"><span className="k">Vagrant (optional)</span><span className="v">{eng?.vagrant_version ?? "not installed"}</span></div>
+              <div className="r"><span className="k">VirtualBox (optional)</span><span className="v">{eng?.virtualbox_version ?? "not installed"}</span></div>
             </div>
           </div>
         </div>

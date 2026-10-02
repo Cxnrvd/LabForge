@@ -109,7 +109,7 @@ function defaultMeta(): LabMeta {
     name: "Untitled Lab",
     description: "",
     network_cidr: "192.168.56.0/24",
-    provider: "virtualbox",
+    provider: "docker",
   };
 }
 
