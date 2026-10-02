@@ -20,6 +20,7 @@ import { formatSize, requiredImages } from "@/lib/api/images";
 import { useLaunchStore } from "@/lib/store/launch-store";
 import { useTopologyStore } from "@/lib/store/topology-store";
 import { downloadBlob } from "@/lib/utils/download";
+import { useHydrated } from "@/lib/utils/use-hydrated";
 
 const TABS: TabSpec[] = [
   { id: "canvas", label: "Canvas", href: "/build" },
@@ -27,13 +28,18 @@ const TABS: TabSpec[] = [
   { id: "generate", label: "Launch", active: true, href: "/build/generate" },
 ];
 
+const EMPTY_TOPOLOGY = { id: "empty", name: "", description: "", network_cidr: "192.168.56.0/24", provider: "docker", version: "1.0", nodes: [], edges: [], zones: [] } as unknown as ReturnType<ReturnType<typeof useTopologyStore.getState>["toTopology"]>;
+
 export default function LaunchPage(): React.ReactElement {
   const toTopology = useTopologyStore((s) => s.toTopology);
-  const meta = useTopologyStore((s) => s.meta);
+  const storeMeta = useTopologyStore((s) => s.meta);
   const nodes = useTopologyStore((s) => s.nodes);
   const show = useLaunchStore((s) => s.show);
 
-  const topology = React.useMemo(() => toTopology(), [toTopology, nodes, meta]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The persisted canvas only exists in the browser; show the empty form until it has loaded.
+  const hydrated = useHydrated();
+  const meta = hydrated ? storeMeta : { ...storeMeta, name: "", description: "", provider: "docker" as const };
+  const topology = React.useMemo(() => (hydrated ? toTopology() : EMPTY_TOPOLOGY), [hydrated, toTopology, nodes, storeMeta]); // eslint-disable-line react-hooks/exhaustive-deps
   const ram = topology.nodes.reduce((a, n) => a + (n.config.memory_mb ?? 0), 0);
   const cpu = topology.nodes.reduce((a, n) => a + (n.config.cpus ?? 0), 0);
   const images = requiredImages(topology, meta.provider);

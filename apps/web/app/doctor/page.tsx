@@ -377,7 +377,7 @@ export default function DoctorPage(): React.JSX.Element {
   const rawReport = React.useMemo(() => {
     const obj = {
       version: healthQ.data?.version ?? "unknown",
-      host: typeof navigator !== "undefined" ? navigator.userAgent : "unknown",
+      host: mounted ? navigator.userAgent : "unknown",
       duration_ms: lastRunMs,
       checks: {
         vagrant: vagrantOk
@@ -388,7 +388,7 @@ export default function DoctorPage(): React.JSX.Element {
           ? { ok: false, reason: "GET /health failed" }
           : {
               ok: true,
-              url: typeof window !== "undefined" ? window.location.origin : null,
+              url: mounted ? window.location.origin : null,
               latency_ms: healthQ.data?._latencyMs ?? null,
               auth_required: authRequired,
             },
