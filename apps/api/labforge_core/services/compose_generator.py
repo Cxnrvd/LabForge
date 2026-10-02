@@ -321,10 +321,10 @@ def render(
                     f"{host} uses {gateway}, which Docker reserves as the network gateway; pick another address"
                 )
             named_volumes.add(f"{host}-storage")
-            config_docs[f"oem-{host}"] = {"content": windows_oem.install_bat(with_setup=bool(elastic_ip))}
+            config_docs[f"oem-{host}"] = {"content": _compose_literal(windows_oem.install_bat(with_setup=bool(elastic_ip)))}
             if elastic_ip:
                 config_docs[f"oem-{host}-setup"] = {
-                    "content": windows_oem.setup_ps1(hostname=host, elastic_ip=elastic_ip)
+                    "content": _compose_literal(windows_oem.setup_ps1(hostname=host, elastic_ip=elastic_ip))
                 }
             if publish == "loopback":
                 mappings = []
@@ -617,6 +617,15 @@ def endpoints_from_workspace(workspace: Path) -> list[dict[str, object]]:
         if node is not None and is_windows_guest(node):
             windows_hosts.append(host)
     return endpoints(topology, published, windows_hosts)
+
+
+def _compose_literal(text: str) -> str:
+    """Compose interpolates ``$name`` inside config content, so literal dollars must be doubled.
+
+    Without this every PowerShell variable in the first-boot script came out empty on the guest
+    and the script failed to parse.
+    """
+    return text.replace("$", "$$")
 
 
 def golden_seeds(topology: LabConfig, project: str) -> list[dict[str, str]]:

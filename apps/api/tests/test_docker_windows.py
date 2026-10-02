@@ -126,3 +126,12 @@ def test_ransomware_lab_has_two_windows_guests_with_logging_and_a_linux_fallback
     assert "kali" in doc["services"]
     linux = get_template("ransomware-intrusion-linux-lab")
     assert not any(n.config.os.value.startswith("windows") for n in linux.nodes)
+
+
+def test_dollars_in_first_boot_scripts_survive_compose_interpolation():
+    from labforge_core.services.template_loader import get_template
+
+    files, _ = build_bundle(get_template("ransomware-intrusion-lab"), project="lf1-rw")
+    doc = yaml.safe_load(files["docker-compose.yml"])
+    content = doc["configs"]["oem-ws-acc-014-setup"]["content"]
+    assert "$$work" in content and "$work" not in content.replace("$$work", "")
