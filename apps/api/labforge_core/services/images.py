@@ -72,18 +72,36 @@ _CACHE: dict[str, tuple[float, Any]] = {}
 
 
 def _cached(key: str, ttl: float, make):
-    """Tiny time based cache for things that are slow to compute and change rarely."""
+    """Time based cache, stale while revalidate: an expired value is returned at once and refreshed
+    in the background, so a slow Docker call (copying a big disk keeps the engine busy) never makes
+    a page wait or the proxy time out. Only the very first call computes inline."""
     now = time.monotonic()
     hit = _CACHE.get(key)
-    if hit and now - hit[0] < ttl:
-        return hit[1]
-    value = make()
-    _CACHE[key] = (now, value)
-    return value
+    if hit is None:
+        value = make()
+        _CACHE[key] = (now, value)
+        return value
+    if now - hit[0] >= ttl and key not in _REFRESHING:
+        _REFRESHING.add(key)
+
+        def refresh() -> None:
+            try:
+                _CACHE[key] = (time.monotonic(), make())
+            except Exception:
+                pass
+            finally:
+                _REFRESHING.discard(key)
+
+        threading.Thread(target=refresh, name=f"refresh-{key}", daemon=True).start()
+    return hit[1]
+
+
+_REFRESHING: set[str] = set()
 
 
 def clear_cache() -> None:
     _CACHE.clear()
+    _REFRESHING.clear()
 
 
 class ImageError(RuntimeError):

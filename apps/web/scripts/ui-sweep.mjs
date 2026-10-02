@@ -70,7 +70,7 @@ for (const theme of ["light", "dark"]) {
     await ctx.addInitScript((t) => {
       try {
         localStorage.setItem("theme", t);
-        localStorage.setItem("labforge.tour.done", "1");
+        localStorage.setItem("labforge.onboarding.v1", "1");
       } catch {
         /* storage blocked */
       }

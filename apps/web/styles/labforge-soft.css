@@ -555,7 +555,12 @@ html.dark {
 body { background-color: var(--page-bg); }
 ::selection { background: rgba(29, 111, 165, 0.22); }
 html.dark ::selection { background: rgba(90, 169, 224, 0.32); }
-:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+/* Keyboard focus: a thin accent ring on things you can press. Text inputs already change border. */
+:where(a, button, [role="button"], [role="tab"], summary, select, [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.7);
+  outline-offset: 1px;
+}
+:where(input, textarea, [cmdk-input]):focus-visible { outline: none; }
 
 /* Shared table and bar behaviour: one line per cell where it matters, tabs never wrap. */
 .lf .cell-ellipsis { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

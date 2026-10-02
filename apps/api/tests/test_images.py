@@ -328,3 +328,25 @@ def test_a_failed_golden_copy_stays_visible_with_its_reason(fake):
         time.sleep(0.05)
     entry = next(e for e in images.list_images()["images"] if e["id"] == "golden-oops")
     assert entry["status"] == "missing" and "Last attempt failed" in entry["note"]
+
+
+def test_an_expired_cache_entry_is_served_stale_while_it_refreshes(fake):
+    import threading
+
+    calls = []
+    release = threading.Event()
+
+    def make():
+        calls.append(1)
+        if len(calls) > 1:
+            release.wait(5)
+        return len(calls)
+
+    assert images._cached("k", 0.0, make) == 1  # first call computes inline
+    assert images._cached("k", 0.0, make) == 1  # expired, but answered at once with the stale value
+    release.set()
+    for _ in range(100):
+        if images._CACHE["k"][1] == 2:
+            break
+        time.sleep(0.02)
+    assert images._CACHE["k"][1] == 2
