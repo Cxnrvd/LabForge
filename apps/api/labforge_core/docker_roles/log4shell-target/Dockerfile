@@ -19,7 +19,8 @@ RUN apt-get update \
 ENV JDK_URL=https://github.com/AdoptOpenJDK/openjdk8-binaries/releases/download/jdk8u181-b13/OpenJDK8U-jdk_x64_linux_hotspot_8u181b13.tar.gz
 RUN mkdir -p /opt/jdk8u181 \
     && wget "${JDK_URL}" -O /tmp/jdk8u181.tar.gz \
-    && tar -xzf /tmp/jdk8u181.tar.gz -C /opt/jdk8u181 --strip-components=1 \
+    && tar -xzf /tmp/jdk8u181.tar.gz -C /opt/jdk8u181 --strip-components=2 \
+    && test -x /opt/jdk8u181/bin/javac \
     && rm -f /tmp/jdk8u181.tar.gz
 ENV JAVA_HOME=/opt/jdk8u181
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
