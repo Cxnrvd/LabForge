@@ -8,10 +8,16 @@
  * apps/web/styles/labforge-d10.css (no inline cosmetic styles beyond grid
  * geometry / row highlight tints that the design markup also uses inline).
  *
- * Backend (frozen) endpoints:
+ * Backend endpoints:
  *   GET /api/v1/cves/search?q=…&limit=…  → CVEEntry[]
  *   GET /api/v1/cves/{id}                → CVEEntry
- *   GET /api/v1/cves/curated             → { [cveId]: description }
+ *   GET /api/v1/cves/curated             → CuratedCve[] (lib/api/client.ts)
+ *   GET /api/v1/cves/{id}/script         → CveScript — the real curated script, or the honest
+ *                                           stub/notes-only one, never a fabricated guess.
+ *
+ * The curated list is fetched once via useCuratedCves() (lib/api/hooks.ts) — the same hook
+ * NodeCvePopover and CuratedCveGrid use — rather than this page rolling its own fetch, which is
+ * what let it drift out of sync with the endpoint's shape before.
  *
  * Deep-link support: `?q=CVE-YYYY-NNNNN` pre-fills the search input AND
  * relaxes severity/score filters so the linked CVE is never hidden.
@@ -25,6 +31,7 @@ import { toast } from "sonner";
 import Link from "next/link";
 
 import { api } from "@/lib/api/client";
+import { useCuratedCves } from "@/lib/api/hooks";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useTopologyStore } from "@/lib/store/topology-store";
 import { PageToolbars } from "@/components/dashboard/AppShell";
@@ -53,10 +60,6 @@ const PINNED_MAP_KEY = "labforge.pinned-cve-nodes";
 
 type SeverityKey = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
 type TabKey = "all" | "curated" | "stubs" | "pinned";
-
-interface CuratedMap {
-  [cveId: string]: string;
-}
 
 interface PinnedNodeMap {
   [cveId: string]: string;
@@ -299,15 +302,7 @@ function CvesPageInner(): React.ReactElement {
     staleTime: 30_000,
   });
 
-  const curatedQ = useQuery<CuratedMap>({
-    queryKey: ["cves-curated"],
-    queryFn: async () => {
-      const r = await fetch("/api/v1/cves/curated");
-      if (!r.ok) throw new Error("curated fetch failed");
-      return (await r.json()) as CuratedMap;
-    },
-    staleTime: 5 * 60_000,
-  });
+  const curatedQ = useCuratedCves();
 
   const detailQ = useQuery<CVEEntry>({
     queryKey: ["cve-detail", selectedId],
@@ -321,7 +316,7 @@ function CvesPageInner(): React.ReactElement {
   // The list is small (the bundled curated map ships ~8 entries) so a fan-out
   // here is cheap, and react-query dedupes overlapping keys.
   const curatedIds = React.useMemo<string[]>(
-    () => Object.keys(curatedQ.data ?? {}).map((x) => x.toUpperCase()),
+    () => (curatedQ.data ?? []).map((c) => c.cve_id.toUpperCase()),
     [curatedQ.data],
   );
   const curatedDetailsQ = useQuery<CVEEntry[]>({
@@ -362,9 +357,11 @@ function CvesPageInner(): React.ReactElement {
     () => searchQ.data ?? [],
     [searchQ.data],
   );
-  const curatedSet = React.useMemo<Set<string>>(() => {
-    return new Set(Object.keys(curatedQ.data ?? {}).map((x) => x.toUpperCase()));
-  }, [curatedQ.data]);
+  const curatedSet = React.useMemo<Set<string>>(() => new Set(curatedIds), [curatedIds]);
+  const fullyProvisionedSet = React.useMemo<Set<string>>(
+    () => new Set((curatedQ.data ?? []).filter((c) => c.fully_provisioned).map((c) => c.cve_id.toUpperCase())),
+    [curatedQ.data],
+  );
 
   // Re-read pinned set whenever `pinnedTick` bumps.
   const pinnedSet = React.useMemo<Set<string>>(() => {
@@ -536,29 +533,16 @@ function CvesPageInner(): React.ReactElement {
     : false;
   const detailSeverity = detail ? severityFromScore(detail.cvss_score) : "LOW";
 
-  // The /cves/{id} endpoint returns CVEEntry without a script body, so the
-  // curated-script string isn't actually shipped over the wire. We show the
-  // curated description here as a placeholder until the API exposes the
-  // shell text — the structure & token highlighter is wired and ready.
-  // TODO(LabForge): extend /api/v1/cves/{id} (or add /provisioner) to ship
-  // the bundled .sh body so we can render the real script.
-  const provisionerScript = React.useMemo(() => {
-    if (!detail) return "";
-    if (!detailCurated) {
-      return "# No curated provisioner — manual exploitation only.\n# Refer to the NVD reference list for vendor advisories.";
-    }
-    const desc = curatedQ.data?.[detail.id] ?? detail.description ?? "";
-    const slug = detail.id.toLowerCase();
-    return [
-      "#!/usr/bin/env bash",
-      `# ${slug}.sh — ${desc}`,
-      "apt-get update -y",
-      "apt-get install -y curl wget",
-      `curl -L "$PROVISIONER_BUNDLE_URL" -o /opt/${slug}.tar.gz`,
-      `tar -xzf /opt/${slug}.tar.gz -C /opt`,
-      `systemctl start ${slug}`,
-    ].join("\n");
-  }, [detail, detailCurated, curatedQ.data]);
+  // The real script GET /cves/{id}/script would write into a build, not a guess at what one
+  // might look like. Fetched lazily (only once a CVE is selected), and only for an id that looks
+  // like a CVE — the endpoint 422s on anything else, which would just be noise while typing.
+  const scriptQ = useQuery({
+    queryKey: ["cve-script", detail?.id],
+    queryFn: () => api.getCveScript(detail!.id),
+    enabled: Boolean(detail && CVE_ID_RE.test(detail.id)),
+    staleTime: Infinity,
+  });
+  const provisionerScript = scriptQ.data?.script ?? (scriptQ.isLoading ? "# Loading…" : "");
 
   /* -------------------------------------------------------------- *
    * Render                                                         *
@@ -749,6 +733,7 @@ function CvesPageInner(): React.ReactElement {
               {filtered.map((entry) => {
                 const upper = entry.id.toUpperCase();
                 const isCurated = curatedSet.has(upper);
+                const isFullyProvisioned = fullyProvisionedSet.has(upper);
                 const isSelected = upper === selectedId;
                 const sev = severityFromScore(entry.cvss_score);
                 const pinnedTo = pinnedNodes[upper];
@@ -779,8 +764,10 @@ function CvesPageInner(): React.ReactElement {
                       <span className={`pill ${pillToneFor(sev)}`}>{sev}</span>
                     </td>
                     <td>
-                      {isCurated ? (
+                      {isFullyProvisioned ? (
                         <span className="pill act">curated.sh</span>
+                      ) : isCurated ? (
+                        <span className="pill warn">notes only</span>
                       ) : (
                         <span className="pill mute">stub</span>
                       )}
@@ -836,7 +823,11 @@ function CvesPageInner(): React.ReactElement {
                 <span className="title">{detail.id}</span>
                 <span className="sub">
                   {detail.severity.toLowerCase()} ·{" "}
-                  {detailCurated ? "curated provisioner" : "stub"}
+                  {scriptQ.data?.fully_provisioned
+                    ? "curated provisioner"
+                    : detailCurated
+                      ? "notes only, nothing is set up"
+                      : "stub"}
                 </span>
               </div>
               <div className="card-b">

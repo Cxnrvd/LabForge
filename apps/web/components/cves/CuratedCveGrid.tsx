@@ -1,17 +1,16 @@
 "use client";
 
 /**
- * Every CVE LabForge actually has a provisioner script for, read live from the API
- * (GET /cves/curated) rather than a fixed list in this file — the previous version of this
- * component hardcoded claims ("Pre-configured Win7 target", "Includes Metasploit module") that
- * did not match what the bundled scripts do, for CVEs that did not even have a script.
+ * Every CVE LabForge actually has a provisioner script for, read live from the API via the
+ * shared useCuratedCves() hook (lib/api/hooks.ts) — the same one NodeCvePopover and the CVE
+ * library page use, so there is exactly one place that knows the shape of GET /cves/curated.
  */
 
 import * as React from "react";
-import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 
-import { api, type CuratedCve } from "@/lib/api/client";
+import type { CuratedCve } from "@/lib/api/client";
+import { useCuratedCves } from "@/lib/api/hooks";
 
 function severityGuess(cveId: string): "crit" | "high" {
   // The curated endpoint doesn't carry a CVSS score (that's NVD's job, see /cves/search); these
@@ -20,11 +19,7 @@ function severityGuess(cveId: string): "crit" | "high" {
 }
 
 export function CuratedCveGrid(): React.ReactElement {
-  const q = useQuery({
-    queryKey: ["cves-curated"],
-    queryFn: () => api.curatedCves(),
-    staleTime: Infinity,
-  });
+  const q = useCuratedCves();
 
   const handlePin = (cveId: string): void => {
     toast.info("Attach this from the canvas", {

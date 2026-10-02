@@ -10,6 +10,14 @@ export interface CuratedCve {
   fully_provisioned: boolean;
 }
 
+export interface CveScript {
+  cve_id: string;
+  known: boolean;
+  fully_provisioned: boolean;
+  description: string;
+  script: string;
+}
+
 export interface TemplateSummary {
   id: string;
   name: string;
@@ -231,6 +239,11 @@ export const api = {
    * Vagrant/VirtualBox build — the Docker build does not read a node's CVE list at all.
    */
   curatedCves: () => request<CuratedCve[]>("/cves/curated"),
+  /**
+   * What LabForge actually does with this CVE: the real curated script for a fully-provisioned
+   * one, or the honest stub / notes-only script it would write otherwise. Never fabricated.
+   */
+  getCveScript: (id: string) => request<CveScript>(`/cves/${encodeURIComponent(id)}/script`),
   generateZip: (
     topology: LabConfig,
     options: { target?: "vagrant" | "docker-compose" } = {},

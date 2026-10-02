@@ -55,3 +55,29 @@ def test_curated_endpoint_matches_the_lookup_module():
     by_id = {r["cve_id"]: r for r in rows}
     assert by_id["CVE-2021-44228"]["fully_provisioned"] is True
     assert by_id["CVE-2020-1472"]["fully_provisioned"] is False
+
+
+def test_script_endpoint_returns_the_real_curated_script_not_a_guess():
+    app = FastAPI()
+    app.include_router(cves_router.router, prefix="/api/v1")
+    client = TestClient(app)
+
+    real = client.get("/api/v1/cves/CVE-2021-44228/script").json()
+    assert real["known"] is True and real["fully_provisioned"] is True
+    assert "log4j-core-2.14.1.jar" in real["script"]
+
+    notes_only = client.get("/api/v1/cves/CVE-2020-1472/script").json()
+    assert notes_only["known"] is True and notes_only["fully_provisioned"] is False
+    assert "zerologon" in notes_only["script"].lower()
+
+    unknown = client.get("/api/v1/cves/CVE-1999-9999/script").json()
+    assert unknown["known"] is False and unknown["fully_provisioned"] is False
+    assert "no curated provisioner is bundled" in unknown["script"]
+
+
+def test_script_endpoint_rejects_a_malformed_cve_id():
+    app = FastAPI()
+    app.include_router(cves_router.router, prefix="/api/v1")
+    client = TestClient(app)
+    assert client.get("/api/v1/cves/not-a-cve/script").status_code == 422
+    assert client.get("/api/v1/cves/..%2f..%2fetc%2fpasswd/script").status_code in (404, 422)  # not routed, or rejected — either way, never reaches the filesystem lookup
