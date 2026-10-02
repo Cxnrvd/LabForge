@@ -70,3 +70,4 @@ apps/web/lib/api/generated.ts
 # audit output
 .labforge-audit.txt
 .audit-shots/
+.labforge-ui-audit.txt

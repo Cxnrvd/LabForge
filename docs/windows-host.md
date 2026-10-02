@@ -97,6 +97,38 @@ docker run --rm --privileged alpine sh -c "ls -l /dev/kvm"
 
 Verified on a real run (Windows 10, Docker Desktop 29, WSL2, KVM): the web console on http://127.0.0.1:8006 works and showed Setup and then the desktop; the OEM script created `C:\Users\Public\Documents\Finance` (three fictional files) and `C:\labforge-ready.txt`. Remote Desktop answers inside the lab network (checked from a helper container), but on this PC the published `127.0.0.1:3389` accepted the connection and then closed it without an RDP handshake. Use the web console until that is sorted out.
 
+### Measured numbers (ransomware lab with two Windows 10 guests)
+
+PC: 8 threads, 32 GB RAM, Docker Desktop with WSL2 and KVM, Docker limited to 15.9 GB, internet about 1.5 to 4 MB/s. Each guest has 3 GB RAM, 1 CPU, a 64 GB sparse disk (about 11 GB used). Times are from pressing Build to the guest answering on its Remote Desktop port. The desktop and the first-boot script finish a few minutes after that.
+
+| What | Time |
+|---|---|
+| First boot of both guests, each downloading Windows (two 6 GB downloads share the link) | `ws-acc-014` about 2 h 23 min, `ws-ops-003` about 2 h 31 min (checked every 10 min, so at most); the download alone took 1 h 58 min and 2 h 10 min |
+| Setup after the download, both guests installing at once | 17 to 20 min |
+| First boot of a guest on its own, download 34 min | 45 min in total |
+| Both guests from the saved Windows installer (a "Windows base") | 18.5 and 18.7 min (no download); `compose up` itself returns after 3 min 49 s |
+| Both guests from a golden image | 3.7 min (`compose up` 4 min 50 s including the 10 GB disk copies) |
+| Saving a golden image from a running guest | 3 min 2 s (stop the guest, copy 10.3 GB of real disk, start it again) |
+| Saving a Windows base from a guest's storage volume (5.9 GB ISO) | 44 s |
+| Stop the whole lab (7 containers, 2 Windows guests shut down cleanly) | 65 s |
+| Start again, guest `ws-acc-014` | 95 s |
+| Start again, guest `ws-ops-003` | 12 min (it had just been installed and was stopped before it finished first boot; give a new guest a few minutes before stopping it) |
+| Destroy (containers, network, volumes) | 11 to 16 s |
+
+Resources while both guests run: each guest 3.1 to 3.8 GiB RAM (limit 5 GiB) and one full CPU thread (100 to 110 %) while installing and for a few minutes after; Elasticsearch 1.3 to 1.4 GiB of its 1.5 GiB, Kibana 0.5 to 0.6 GiB, the rest under 100 MiB. The whole lab uses about 9 GB of the Docker VM, so 16 GB is the realistic floor for two Windows guests.
+
+What the guests send: Winlogbeat shipped 1,546 events within minutes of the first boot (Sysmon 661, Security 509, System 268, Application 94, PowerShell 14) from both machines into `winlogbeat-labforge-*`.
+
+Things learned the hard way, all fixed in LabForge:
+
+* The Windows installer ISO (6 GB) is deleted by dockurr after the first successful boot. LabForge therefore keeps a copy as a "Windows base" before that happens, and a golden image after.
+* Compose replaces `$name` inside injected config text with an empty string, which silently broke the PowerShell setup script. Dollars are doubled now.
+* BusyBox `cp` writes all 64 GB of a sparse disk; copies use GNU `cp --sparse=always`, and sizes shown are the space really used.
+* Windows guests show `installing` in the monitor until the guest answers on its Remote Desktop port, instead of `running` as soon as the container starts.
+* RDP answers before the desktop is ready; the first logon (and the setup script) takes a few more minutes.
+
+Image library (Images page and `/api/v1/images`): Docker images, the Windows base, golden images and Vagrant boxes each template needs, with Download, Remove, Prepare images per template, export and import. A Windows node with the role `golden-image@<name>` starts from that golden image; otherwise it starts from the saved installer when one exists. Windows disks never leave this computer: there is no upload code, exports are plain local downloads marked `X-LabForge-Local-Only`. Each guest booted from a golden image has the same Windows computer name and security id as the one it was copied from, which is fine for a standalone lab but not for joining a domain.
+
 ## 3. Check the machine before you build
 
 ```powershell

@@ -579,3 +579,5 @@ html.dark ::selection { background: rgba(90, 169, 224, 0.32); }
   border-radius: 8px; padding: 7px 10px; font: inherit; font-size: 13px;
 }
 .lf select:focus-visible, .lf input[type="number"]:focus-visible { outline: 2px solid hsl(var(--ring) / 0.5); outline-offset: 0; }
+.lf .mtable td.nm { white-space: normal; max-width: 380px; }
+.lf .mtable td.cell-wrap { max-width: 340px; }
