@@ -16,6 +16,7 @@ import { useQuery, useQueries } from "@tanstack/react-query";
 import { api } from "@/lib/api/client";
 import type { HostMetrics, LabEndpoint, PreflightReport, TemplateSummary } from "@/lib/api/client";
 import { formatSize, resolveRequirements, useImages, useRequiredImages } from "@/lib/api/images";
+import { useWorkspace } from "@/components/settings/WorkspaceLocation";
 import { useLaunchStore } from "@/lib/store/launch-store";
 import { useTopologyStore } from "@/lib/store/topology-store";
 import { OS_LABELS } from "@labforge/schema";
@@ -139,6 +140,7 @@ function PreflightCard({
 }
 
 export default function Home(): React.ReactElement {
+  const workspaceQ = useWorkspace();
   const metricsQ = useQuery<HostMetrics>({
     queryKey: ["host-metrics"],
     queryFn: () => api.hostMetrics(),
@@ -274,7 +276,7 @@ export default function Home(): React.ReactElement {
   const liveEndpoints = endpointsQ.data;
 
   const imgs = imagesQ.data;
-  const imgSample = imgs?.sample ?? true;
+  const imgUnavailable = imgs?.unavailable ?? true;
   const imgMissing = (imgs?.images ?? []).filter((i) => i.status === "missing").length;
   const imgReady = (imgs?.images ?? []).filter((i) => i.status === "ready").length;
   const imgUpdates = (imgs?.images ?? []).filter((i) => i.status === "outdated").length;
@@ -287,15 +289,15 @@ export default function Home(): React.ReactElement {
     retry: 0,
   });
   const featuredReqQ = useRequiredImages(featuredTopoQ.data, "docker");
-  const featuredStates = resolveRequirements(featuredTopoQ.data, "docker", featuredReqQ.data, imgs?.images, imgSample).map((x) => x.state);
-  const featuredMissing = featuredStates.filter((x) => x === "missing").length;
+  const featuredStates = resolveRequirements(featuredTopoQ.data, "docker", featuredReqQ.data, imgs?.images, imgUnavailable).map((x) => x.state);
+  const featuredMissing = featuredStates.filter((x) => x === "missing" || x === "outdated").length;
   const featuredRam = featuredTopoQ.data?.nodes.reduce((a, n) => a + (n.config.memory_mb ?? 0), 0) ?? 0;
 
   const eng = m?.engine;
 
   const steps = [
     { done: !!eng?.docker_daemon, label: "Docker is running" },
-    { done: !imgSample && imgMissing === 0 && imgReady > 0, label: "Images are downloaded" },
+    { done: !imgUnavailable && imgMissing === 0 && imgReady > 0, label: "Images are downloaded" },
     { done: labs.length > 0, label: "Build your first lab" },
     { done: running.length > 0, label: "See a lab running" },
   ];
@@ -344,7 +346,7 @@ export default function Home(): React.ReactElement {
             <div><div className="eyebrow">Memory</div><div style={{ fontSize: 20, fontWeight: 600 }}>{featuredRam ? formatSize(featuredRam) : "n/a"}</div></div>
             <div><div className="eyebrow">Images</div>
               <div style={{ fontSize: 20, fontWeight: 600 }}>
-                {imgSample ? "not checked" : featuredMissing === 0 ? "ready" : `${featuredMissing} to download`}
+                {imgUnavailable ? "not checked" : featuredMissing === 0 ? "ready" : `${featuredMissing} to download`}
               </div></div>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
@@ -379,6 +381,8 @@ export default function Home(): React.ReactElement {
                 <span className="v">{m?.cpu.percent != null ? `${m.cpu.percent.toFixed(0)}%` : "n/a"}{m?.cpu.cores ? ` of ${m.cpu.cores} threads` : ""}</span></div>
               <div className="r"><span className="k">{dockerDisk != null ? "Disk free (Docker)" : "Disk free"}</span>
                 <span className="v">{dockerDisk != null ? `${dockerDisk.toFixed(0)} GB` : m?.disk.free_gb != null ? `${m.disk.free_gb.toFixed(0)} GB` : "n/a"}</span></div>
+              <div className="r"><span className="k">Labs are stored in</span>
+                <span className="v mono" title={m?.disk.workspace_path ?? undefined}>{m?.disk.workspace_path ?? workspaceQ.data?.path ?? "n/a"}</span></div>
               <div className="r"><span className="k">Used by labs</span>
                 <span className="v">{labMb > 0 ? `${gb(labMb)} GB` : "none"}</span></div>
               <div className="r"><span className="k">Room for Windows guests</span>
@@ -386,6 +390,12 @@ export default function Home(): React.ReactElement {
             </div>
             {metricsQ.isError && (
               <div className="home-sub" style={{ marginTop: 8 }}>Host metrics unavailable. Is the API running?</div>
+            )}
+            {workspaceQ.data && workspaceQ.data.state !== "ok" && (
+              <div className="home-sub" role="alert" style={{ marginTop: 8, color: "var(--d10-danger, #e5484d)" }}>
+                {workspaceQ.data.error}{" "}
+                <Link href="/settings#general" style={{ color: "var(--d10-accent)" }}>Choose a folder in Settings</Link>
+              </div>
             )}
           </div>
 
@@ -541,7 +551,7 @@ export default function Home(): React.ReactElement {
             <div className="eyebrow" style={{ flex: 1 }}>Images</div>
             <Link href="/images" className="eyebrow" style={{ color: "var(--d10-accent)" }}>Library</Link>
           </div>
-          {imgSample ? (
+          {imgUnavailable ? (
             <div className="home-sub" style={{ marginTop: 8 }}>The image library is not connected yet.</div>
           ) : (
             <div className="rows" style={{ marginTop: 6 }}>

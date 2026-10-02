@@ -72,11 +72,11 @@ export default function ImagesPage(): React.ReactElement {
         </div>
       </div>
 
-      {data?.sample && (
+      {data?.unavailable && (
         <div className="scard" style={{ padding: "12px 18px", flexDirection: "row", gap: 10, alignItems: "center" }}>
-          <span className="chip warn">Sample data</span>
+          <span className="chip warn">Not available</span>
           <span className="home-sub" style={{ margin: 0 }}>
-            The image service is not running on this API yet, so these rows are examples and the buttons will report that.
+            Image status cannot be read. Check that the API is running and that Docker is started, then this page fills in with what is really on this computer.
           </span>
         </div>
       )}

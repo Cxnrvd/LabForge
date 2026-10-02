@@ -3,7 +3,7 @@
 /**
  * Image library: client types, hooks and helpers.
  *
- * Backend contract (to be implemented by the API):
+ * Backend contract (implemented in apps/api/labforge_core/api/routers/images.py):
  *   GET    /api/v1/images                  -> ImagesResponse
  *   POST   /api/v1/images/{id}/pull        -> ImageEntry   (starts a pull/download)
  *   DELETE /api/v1/images/{id}             -> 204
@@ -11,8 +11,9 @@
  *   POST   /api/v1/images/golden           -> ImageEntry   body: { source_id, name }
  *   POST   /api/v1/images/prepare          -> { queued: string[] } body: { template_id }
  *
- * Until the API exposes /images, `useImages` serves a clearly flagged sample
- * catalog (`sample: true`) so the UI can be reviewed end to end.
+ * `status` is "ready" (here), "missing" (not here), "outdated" (another tag or provider is here, the
+ * required one still has to be fetched) or "pulling". When the API cannot be reached or Docker is not
+ * running, `useImages` reports `unavailable: true` and no rows rather than guessing.
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -39,22 +40,14 @@ export interface ImagesResponse {
   images: ImageEntry[];
   total_mb: number;
   disk_free_gb?: number | null;
+  /** False when the Docker daemon is not answering, so nothing is known about local images. */
+  engine?: boolean;
 }
 
 export interface ImagesResult extends ImagesResponse {
-  /** True when the API has no /images endpoint yet and sample rows are shown. */
-  sample: boolean;
+  /** True when image status could not be read (API offline or Docker not running). */
+  unavailable: boolean;
 }
-
-const SAMPLE: ImageEntry[] = [
-  { id: "elasticsearch", kind: "docker", name: "elasticsearch", tag: "8.15", size_mb: 1320, status: "ready", used_by: ["ransomware-intrusion-lab"], updated_at: "2026-09-28T09:10:00Z" },
-  { id: "kibana", kind: "docker", name: "kibana", tag: "8.15", size_mb: 1090, status: "ready", used_by: ["ransomware-intrusion-lab"], updated_at: "2026-09-28T09:12:00Z" },
-  { id: "log-replay", kind: "docker", name: "labforge/log-replay", tag: "local", size_mb: 210, status: "ready", used_by: ["ransomware-intrusion-lab"], updated_at: "2026-09-30T14:02:00Z" },
-  { id: "kali", kind: "docker", name: "kalilinux/kali-rolling", tag: "latest", size_mb: 3200, status: "missing", used_by: ["ransomware-intrusion-lab"] },
-  { id: "windows-10", kind: "windows-base", name: "Windows 10 base", tag: "dockurr/windows", size_mb: 22000, status: "missing", used_by: ["ransomware-intrusion-lab"], note: "Downloaded from Microsoft on first boot, then kept in a local volume." },
-  { id: "win10-golden", kind: "golden", name: "win10-finance-victim", tag: "golden", size_mb: 18400, status: "ready", used_by: ["ransomware-intrusion-lab"], updated_at: "2026-10-01T16:40:00Z", note: "Local only. Windows images must not be shared." },
-  { id: "ubuntu-2204-box", kind: "vagrant-box", name: "ubuntu/jammy64", tag: "virtualbox", size_mb: 640, status: "outdated", used_by: ["basic-ad"], updated_at: "2026-07-02T08:00:00Z" },
-];
 
 export function useImages() {
   return useQuery<ImagesResult>({
@@ -64,14 +57,9 @@ export function useImages() {
         const res = await fetch("/api/v1/images");
         if (!res.ok) throw new Error(String(res.status));
         const body = (await res.json()) as ImagesResponse;
-        return { ...body, sample: false };
+        return { ...body, unavailable: body.engine === false };
       } catch {
-        return {
-          images: SAMPLE,
-          total_mb: SAMPLE.filter((i) => i.status !== "missing").reduce((a, i) => a + i.size_mb, 0),
-          disk_free_gb: null,
-          sample: true,
-        };
+        return { images: [], total_mb: 0, disk_free_gb: null, unavailable: true };
       }
     },
     refetchInterval: (q) => (q.state.data?.images.some((i) => i.status === "pulling") ? 2000 : 20_000),
@@ -166,8 +154,8 @@ export function requiredImages(topology: LabConfig, provider: string): RequiredI
 
 export type Readiness = "ready" | "missing" | "pulling" | "outdated" | "unknown";
 
-export function readinessOf(req: RequiredImage, images: ImageEntry[] | undefined, sample: boolean): Readiness {
-  if (!images || sample) return "unknown";
+export function readinessOf(req: RequiredImage, images: ImageEntry[] | undefined, unavailable: boolean): Readiness {
+  if (!images || unavailable) return "unknown";
   const k = req.key.toLowerCase();
   const hit = images.find((i) => i.id.toLowerCase() === k || i.name.toLowerCase().includes(k) || k.includes(i.name.toLowerCase()));
   return hit ? hit.status : "missing";
@@ -209,9 +197,9 @@ export function resolveRequirements(
   provider: string,
   server: ServerRequirement[] | undefined,
   images: ImageEntry[] | undefined,
-  sample: boolean,
+  unavailable: boolean,
 ): Array<{ r: RequiredImage; state: Readiness }> {
   if (server) return server.map((r) => ({ r, state: r.status }));
   if (!topology) return [];
-  return requiredImages(topology, provider).map((r) => ({ r, state: readinessOf(r, images, sample) }));
+  return requiredImages(topology, provider).map((r) => ({ r, state: readinessOf(r, images, unavailable) }));
 }

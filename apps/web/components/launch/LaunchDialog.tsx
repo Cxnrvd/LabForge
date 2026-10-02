@@ -99,8 +99,8 @@ export function LaunchDialog(): React.ReactElement {
       : null;
 
   const requiredQ = useRequiredImages(topology, provider);
-  const imageRows = resolveRequirements(topology, provider, requiredQ.data, imagesQ.data?.images, imagesQ.data?.sample ?? true);
-  const missing = imageRows.filter((x) => x.state === "missing");
+  const imageRows = resolveRequirements(topology, provider, requiredQ.data, imagesQ.data?.images, imagesQ.data?.unavailable ?? true);
+  const missing = imageRows.filter((x) => x.state === "missing" || x.state === "outdated");
 
   const checks: Check[] = [];
   const p = preflight.data;
@@ -134,8 +134,12 @@ export function LaunchDialog(): React.ReactElement {
     else if (totalRam > freeMb * 0.8) checks.push({ label: `Needs ${formatSize(totalRam)} of RAM, ${formatSize(freeMb)} is free`, detail: "Tight. The host may feel slow.", tone: "warn" });
     else checks.push({ label: `RAM fits: ${formatSize(totalRam)} of ${formatSize(freeMb)} free`, tone: "ok" });
   }
-  if (host.data?.disk.free_gb != null && host.data.disk.free_gb < 40 && missing.length > 0) {
-    checks.push({ label: `Only ${host.data.disk.free_gb.toFixed(0)} GB of disk is free`, detail: "Downloads may not fit.", tone: "warn" });
+  // Image downloads and Windows disks land in Docker's data folder, not in the workspace folder.
+  const dockerDisk = provider === "docker" ? host.data?.engine.docker_disk : null;
+  const diskFree = dockerDisk?.free_gb ?? host.data?.disk.free_gb ?? null;
+  const diskWhere = dockerDisk?.free_gb != null ? dockerDisk.path : host.data?.disk.workspace_path ?? host.data?.disk.path;
+  if (diskFree != null && diskFree < 40 && missing.length > 0) {
+    checks.push({ label: `Only ${diskFree.toFixed(0)} GB of disk is free${diskWhere ? ` at ${diskWhere}` : ""}`, detail: "Downloads may not fit.", tone: "warn" });
   }
 
   const blocked = checks.some((c) => c.tone === "err") || !topology || topology.nodes.length === 0;

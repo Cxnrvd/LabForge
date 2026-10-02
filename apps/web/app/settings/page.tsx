@@ -21,6 +21,7 @@ import { useTheme } from "next-themes";
 import { toast } from "sonner";
 
 import { PageToolbars, type TabSpec } from "@/components/dashboard/AppShell";
+import { WorkspaceLocation } from "@/components/settings/WorkspaceLocation";
 import { getStoredToken } from "@/lib/api/client";
 
 /* ============================================================
@@ -379,7 +380,7 @@ export default function SettingsPage(): React.ReactElement {
             <div className="card-h">
               <span className="title">General</span>
               <div className="actions">
-                <span className="muted">localStorage</span>
+                <span className="muted">workspace folder is saved by the API</span>
               </div>
             </div>
             <div className="card-b">
@@ -408,6 +409,7 @@ export default function SettingsPage(): React.ReactElement {
                   </select>
                 </div>
               </div>
+              <WorkspaceLocation />
             </div>
           </div>
         </section>

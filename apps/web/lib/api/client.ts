@@ -15,6 +15,8 @@ export interface TemplateSummary {
 export interface ApiError {
   detail: string;
   code: string;
+  /** Structured fields of the error body (for example the data found in the old workspace). */
+  extra?: Record<string, unknown>;
 }
 
 const API_PREFIX = "/api/v1";
@@ -45,6 +47,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!response.ok) {
     let detail = `${response.status} ${response.statusText}`;
     let code = "request_failed";
+    let extra: Record<string, unknown> | undefined;
     try {
       const body = (await response.json()) as {
         detail?: string | { detail?: string; code?: string };
@@ -56,12 +59,13 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
         if (typeof body.detail.detail === "string") detail = body.detail.detail;
         else detail = JSON.stringify(body.detail);
         if (body.detail.code) code = body.detail.code;
+        extra = body.detail as Record<string, unknown>;
       }
       if (body.code) code = body.code;
     } catch {
       // ignore parse failure
     }
-    const err: ApiError = { detail, code };
+    const err: ApiError = { detail, code, extra };
     throw err;
   }
   if (response.status === 204) return undefined as T;
@@ -92,7 +96,16 @@ async function requestZip(path: string, body: unknown): Promise<Blob> {
 export interface HostMetrics {
   memory: { total_mb: number | null; used_mb: number | null; percent: number | null };
   cpu: { percent: number | null; cores: number | null };
-  disk: { path: string | null; total_gb: number | null; used_gb: number | null; free_gb: number | null };
+  disk: {
+    /** The folder actually measured (the nearest one that exists). */
+    path: string | null;
+    /** The workspace folder labs are built in, and where that setting came from. */
+    workspace_path?: string | null;
+    source?: "settings" | "environment" | "default";
+    total_gb: number | null;
+    used_gb: number | null;
+    free_gb: number | null;
+  };
   sampled_at: string;
   engine: {
     docker_daemon: boolean;
@@ -129,7 +142,54 @@ export interface PreflightReport {
   checks: PreflightCheck[];
 }
 
+export type WorkspaceState = "ok" | "missing" | "not_writable" | "device_changed";
+
+export interface WorkspaceExisting {
+  path: string;
+  entries: number;
+  labs: number;
+  size_mb: number;
+  names: string[];
+}
+
+export interface WorkspaceStatus {
+  path: string;
+  source: "settings" | "environment" | "default";
+  default_path: string;
+  exists: boolean;
+  writable: boolean;
+  state: WorkspaceState;
+  error: string | null;
+  free_gb: number | null;
+  total_gb: number | null;
+  existing?: WorkspaceExisting;
+  moved?: { from: string; to: string; entries: number; labs: number } | null;
+}
+
+export interface WorkspaceValidation {
+  ok: boolean;
+  path: string | null;
+  code: string | null;
+  error: string | null;
+  writable: boolean;
+  free_gb: number | null;
+  total_gb: number | null;
+  existing: WorkspaceExisting | null;
+}
+
 export const api = {
+  workspace: () => request<WorkspaceStatus>("/settings/workspace"),
+  validateWorkspace: (path: string) =>
+    request<WorkspaceValidation>("/settings/workspace/validate", {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    }),
+  /** `path: null` goes back to the default. `existingData` answers the "move or leave" question. */
+  setWorkspace: (path: string | null, existingData?: "move" | "leave") =>
+    request<WorkspaceStatus>("/settings/workspace", {
+      method: "PUT",
+      body: JSON.stringify({ path, existing_data: existingData ?? null }),
+    }),
   labEndpoints: (labId: number) => request<LabEndpoint[]>(`/labs/${labId}/endpoints`),
   preflight: (opts: { windowsGuests?: number; memoryMb?: number; recheck?: boolean } = {}) => {
     const q = new URLSearchParams();
