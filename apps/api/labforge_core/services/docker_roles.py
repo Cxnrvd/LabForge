@@ -54,6 +54,10 @@ class DockerRole:
     depends_on: tuple[str, ...] = ()
     cap_add: tuple[str, ...] = ()
     security_opt: tuple[str, ...] = ()
+    # "key=value" pairs for Compose's per-service `sysctls:` — namespaced kernel settings a
+    # container may set for itself without --privileged, e.g. net.ipv4.ip_forward for a role that
+    # routes or forwards traffic (pfsense/frr stand-ins).
+    sysctls: tuple[str, ...] = ()
     tty: bool = False
     # Put the whole lab network offline (no route to the internet).
     isolate_network: bool = False
@@ -165,6 +169,32 @@ _ROLES: tuple[DockerRole, ...] = (
     DockerRole("bloodhound", image="specterops/bloodhound:latest", ports=(8080,),
                note="Needs Postgres and Neo4j; not wired up."),
     DockerRole("metasploit", image="metasploitframework/metasploit-framework:latest", tty=True),
+    # ------------------------------------------------------- Network appliance stand-ins
+    #
+    # The Vagrant path's 'pfsense'/'opnsense' roles are themselves a stand-in (nftables + dnsmasq
+    # on a plain box; no real pfSense box exists for Vagrant either). This is the same stand-in
+    # as a container: default-accept IPv4 forwarding plus dnsmasq. It is not a real pfSense/
+    # OPNsense configuration surface — there is no web UI, no rule editor — just enough that a
+    # firewall/router node in the topology is a real, reachable container instead of silently
+    # absent. Not integration-tested against a live Docker engine.
+    DockerRole(
+        "pfsense",
+        build_dir="network-standin",
+        cap_add=("NET_ADMIN",),
+        sysctls=("net.ipv4.ip_forward=1",),
+        command=("sh", "-c", "nft add table inet filter; exec dnsmasq --no-daemon"),
+        note="pfSense/OPNsense stand-in: default-accept IPv4 forwarding + dnsmasq. No rule editor, "
+             "same as the Vagrant stand-in. Not integration-tested.",
+    ),
+    DockerRole(
+        "frr",
+        image="frrouting/frr:9.1.1",
+        cap_add=("NET_ADMIN",),
+        sysctls=("net.ipv4.ip_forward=1",),
+        note="FRRouting with its stock config: no daemon (OSPF/BGP/static) is enabled yet. Exec in "
+             "and edit /etc/frr/daemons, then 'vtysh' to configure routing. Image tag and default "
+             "behaviour are not verified against a live Docker engine.",
+    ),
     # ------------------------------------------------------- Elastic stack
     DockerRole(
         "elastic",
@@ -269,6 +299,13 @@ _ROLES: tuple[DockerRole, ...] = (
 )
 
 DOCKER_ROLES: dict[str, DockerRole] = {r.role_id: r for r in _ROLES}
+
+# Role names used by a bundled template that are a more specific name for a role above, same
+# reasoning as the Vagrant-side aliases in provisioners/role_installers.py: 'opnsense' and
+# 'pfsense-emulator' (telecom-ad-rts's firewall) get the same nftables+dnsmasq stand-in as
+# 'pfsense' rather than silently having no Docker role at all.
+DOCKER_ROLES["opnsense"] = DOCKER_ROLES["pfsense"]
+DOCKER_ROLES["pfsense-emulator"] = DOCKER_ROLES["pfsense"]
 
 # Bare OS container used when a node has no role with an image. These images
 # exit immediately without a long-running command, so the generator adds one.

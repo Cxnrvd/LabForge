@@ -52,15 +52,24 @@ from labforge_core.services.docker_roles import (
 
 ROLE_BUILD_ROOT = Path(__file__).resolve().parent.parent / "docker_roles"
 
-# Node types that need a real VM; a container cannot stand in for them.
-_VM_ONLY: set[NodeType] = {
+# Node types with no container path at all, regardless of role: nothing today can stand in for
+# a real domain controller or an ICS HMI, and "internet" is a symbolic node on every provider.
+_HARD_VM_ONLY: set[NodeType] = {
     NodeType.DOMAIN_CONTROLLER,
-    NodeType.FIREWALL,
-    NodeType.ROUTER,
     NodeType.ICS_HMI,
     NodeType.INTERNET,
+}
+# Node types that need a real VM only when the node's own role doesn't resolve to a container.
+# A firewall/router tagged 'pfsense', 'opnsense' or 'frr', or a camera tagged 'mediamtx', has a
+# real Docker role (see docker_roles.py) and runs as a container like anything else; the same
+# node type with no role, or an unrecognized one, still correctly falls back to "needs a VM"
+# instead of silently becoming an inert bare-OS container with nothing configured.
+_SOFT_VM_ONLY: set[NodeType] = {
+    NodeType.FIREWALL,
+    NodeType.ROUTER,
     NodeType.CAMERA,
 }
+_VM_ONLY: set[NodeType] = _HARD_VM_ONLY | _SOFT_VM_ONLY
 
 _PROJECT_RE = re.compile(r"[^a-z0-9_-]+")
 
@@ -117,8 +126,10 @@ def has_windows_guests(topology: LabConfig) -> bool:
     return any(is_windows_guest(n) for n in topology.nodes)
 
 
-def _is_container_capable(node: TopologyNode) -> bool:
-    if node.type in _VM_ONLY:
+def _is_container_capable(node: TopologyNode, primary: DockerRole | None) -> bool:
+    if node.type in _HARD_VM_ONLY:
+        return False
+    if node.type in _SOFT_VM_ONLY and primary is None:
         return False
     return not node.config.os.value.startswith("windows") or is_windows_guest(node)
 
@@ -296,11 +307,20 @@ def render(
 
     for node in topology.nodes:
         host = node.config.hostname
-        if not _is_container_capable(node):
-            notes[host] = (
-                f"{host} ({node.type.value}, {node.config.os.value}) needs a full VM. "
-                "It is not started in the docker runtime; use a VM provider for it.\n"
-            )
+        node_primary = primary_by_host.get(host)
+        if not _is_container_capable(node, node_primary):
+            if node.type in _SOFT_VM_ONLY:
+                tried = ", ".join(node.config.roles) or "none"
+                notes[host] = (
+                    f"{host} ({node.type.value}, {node.config.os.value}) has no role here that "
+                    f"runs in Docker (roles: {tried}). Add a role such as pfsense, opnsense or "
+                    "frr, or use a VM provider for it.\n"
+                )
+            else:
+                notes[host] = (
+                    f"{host} ({node.type.value}, {node.config.os.value}) needs a full VM. "
+                    "It is not started in the docker runtime; use a VM provider for it.\n"
+                )
             continue
 
         if is_windows_guest(node):
@@ -407,6 +427,8 @@ def render(
                 service["cap_add"] = list(primary.cap_add)
             if primary.security_opt:
                 service["security_opt"] = list(primary.security_opt)
+            if primary.sysctls:
+                service["sysctls"] = list(primary.sysctls)
             if primary.tty:
                 service["tty"] = True
                 service["stdin_open"] = True

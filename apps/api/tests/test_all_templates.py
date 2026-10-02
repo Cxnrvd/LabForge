@@ -13,6 +13,7 @@ from labforge_schema import Provider
 from labforge_core.provisioners.cve_lookup import is_fully_provisioned
 from labforge_core.provisioners.role_registry import linux_snippet, windows_snippet
 from labforge_core.services import compose_generator as cg
+from labforge_core.services.docker_roles import lookup
 from labforge_core.services.generator import generate_artifacts
 from labforge_core.services.template_loader import list_templates
 from labforge_core.services.validator import validate_topology
@@ -128,3 +129,117 @@ def test_docker_native_templates_warn_instead_of_silently_doing_nothing_on_vagra
     } & DOCKER_ONLY_ROLES
     if docker_only_roles_present:
         assert artifacts.warnings, f"{topology.id}: expected a warning for {docker_only_roles_present}, got none"
+
+
+# ---------------------------------------------------------------- firewall/router/camera on docker
+#
+# These three node types used to be unconditionally VM-only (compose_generator._VM_ONLY), even
+# though their actual roles (pfsense/opnsense/frr, mediamtx) now have real Docker roles. The type
+# is "soft" VM-only now: skipped only when the node's own role doesn't resolve to a container, so
+# a hypothetical firewall node with no recognized role still gets a clear "needs a VM" note rather
+# than silently becoming an inert bare-OS container.
+
+# {template_id: {hostname: expected_role_id}} for every node that should now survive on Docker.
+NOW_CONTAINERIZED = {
+    "red-team-range": {"fw01": "pfsense", "rtr01": "frr"},
+    "smart-factory": {"fw01": "pfsense", "cam01": "mediamtx", "cam02": "mediamtx"},
+    "telecom-ad-rts": {"fw01": "pfsense"},  # role is 'pfsense-emulator', aliased to pfsense
+    "llm-red-team-range": {"fw01": "pfsense"},  # role is 'opnsense', aliased to pfsense
+    "wan-sim": {"rtr-hq": "frr", "rtr-east": "frr", "rtr-west": "frr"},
+}
+
+# Still correctly VM-only: no Docker role exists for these node types at all.
+STILL_VM_ONLY = {
+    "basic-ad": {"dc01"},
+    "red-team-range": {"dc01"},
+    "telecom-ad-rts": {"dc01"},
+    "smart-factory": {"internet", "hmi01"},
+    "llm-red-team-range": {"internet"},
+}
+
+
+@pytest.mark.parametrize("template_id", sorted(NOW_CONTAINERIZED))
+def test_firewall_router_camera_now_run_as_real_containers(template_id):
+    topology = next(t for t in TEMPLATES if t.id == template_id)
+    docker_topology = topology.model_copy(update={"provider": Provider.DOCKER})
+    files, artifacts = cg.build_bundle(
+        docker_topology, project="lf-audit", include_readme=False, include_hosts_file=False
+    )
+    compose = yaml.safe_load(files["docker-compose.yml"]) or {}
+    services = compose.get("services", {})
+    by_id = {n.id: n for n in topology.nodes}
+    for node_id, expected_role in NOW_CONTAINERIZED[template_id].items():
+        hostname = by_id[node_id].config.hostname
+        assert hostname not in artifacts.fallback_notes, (
+            f"{template_id}/{hostname}: still dropped — {artifacts.fallback_notes.get(hostname)}"
+        )
+        svc = services.get(hostname)
+        assert svc is not None, f"{template_id}/{hostname}: no compose service generated"
+        role, _ = lookup(expected_role)
+        assert role is not None
+        if role.build_dir:
+            assert svc.get("build", {}).get("context") == f"./build/{role.build_dir}", (template_id, hostname)
+        else:
+            assert svc.get("image") == role.image, (template_id, hostname)
+
+
+@pytest.mark.parametrize("template_id", sorted(STILL_VM_ONLY))
+def test_hard_vm_only_types_are_unaffected(template_id):
+    """domain_controller, ics_hmi and internet must still be skipped — this change must not
+    accidentally let them through."""
+    topology = next(t for t in TEMPLATES if t.id == template_id)
+    docker_topology = topology.model_copy(update={"provider": Provider.DOCKER})
+    files, artifacts = cg.build_bundle(
+        docker_topology, project="lf-audit", include_readme=False, include_hosts_file=False
+    )
+    compose = yaml.safe_load(files["docker-compose.yml"]) or {}
+    by_id = {n.id: n for n in topology.nodes}
+    for node_id in STILL_VM_ONLY[template_id]:
+        hostname = by_id[node_id].config.hostname
+        assert hostname in artifacts.fallback_notes, f"{template_id}/{hostname}: expected a fallback note"
+        assert hostname not in compose.get("services", {})
+
+
+def test_firewall_with_no_recognized_role_still_gets_a_clear_fallback_note():
+    """The 'soft' VM-only type must still fail clearly, not become an inert bare-OS container,
+    when nothing on the node resolves to a container role."""
+    from labforge_schema import (
+        Credentials,
+        LabConfig,
+        NodeConfig,
+        NodeType,
+        OsType,
+        Position,
+        TopologyNode,
+    )
+
+    node = TopologyNode(
+        id="fw1",
+        type=NodeType.FIREWALL,
+        label="fw1",
+        position=Position(x=0, y=0),
+        config=NodeConfig(
+            os=OsType.UBUNTU_2204,
+            ip="192.168.90.10",
+            hostname="fw1",
+            roles=["some-unrecognized-role"],
+            credentials=Credentials(username="vagrant", password="vagrant"),
+        ),
+    )
+    topology = LabConfig(name="soft-vm-only-test", network_cidr="192.168.90.0/24", nodes=[node], provider=Provider.DOCKER)
+    files, artifacts = cg.build_bundle(topology, project="lf-soft", include_readme=False, include_hosts_file=False)
+    assert "fw1" in artifacts.fallback_notes
+    assert "needs a VM" in artifacts.fallback_notes["fw1"] or "runs in Docker" in artifacts.fallback_notes["fw1"]
+    compose = yaml.safe_load(files["docker-compose.yml"]) or {}
+    assert "fw1" not in compose.get("services", {})
+
+
+def test_pfsense_and_frr_roles_carry_net_admin_and_ip_forward():
+    from labforge_core.services.docker_roles import lookup
+
+    for role_id in ("pfsense", "opnsense", "pfsense-emulator", "frr"):
+        role, _ = lookup(role_id)
+        assert role is not None, role_id
+        assert "NET_ADMIN" in role.cap_add, role_id
+        assert any("ip_forward" in s for s in role.sysctls), role_id
+        assert role.verified is False, f"{role_id}: not integration-tested, must not claim verified"
