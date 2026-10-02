@@ -249,6 +249,16 @@ _ROLES: tuple[DockerRole, ...] = (
         note="Static and dynamic triage toolkit with benign, purpose-built samples in /samples.",
     ),
     DockerRole(
+        "log4shell-target",
+        build_dir="log4shell-target",
+        ports=(8080,),
+        verified=False,
+        note=(
+            "Builds a real CVE-2021-44228 target (Log4j 2.14.1 on a pre-8u191 JDK so remote JNDI "
+            "class loading still works). First build compiles from source and takes a minute."
+        ),
+    ),
+    DockerRole(
         "fakenet",
         build_dir="fakenet",
         isolate_network=True,
