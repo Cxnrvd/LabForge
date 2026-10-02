@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from labforge_core.services import docker_runtime, hostenv, hostmetrics
+from labforge_core.services import docker_runtime, hostenv, hostmetrics, workspace
 
 
 @pytest.fixture(autouse=True)
@@ -29,12 +29,35 @@ def test_sample_shape_and_ranges():
 
 
 def test_sample_disk_walks_up_to_existing_parent(tmp_path, monkeypatch):
-    class _S:
-        workspace_root = tmp_path / "missing" / "deeper"
-
-    monkeypatch.setattr(hostmetrics, "get_settings", lambda: _S())
-    assert hostmetrics.sample()["disk"]["path"] == str(tmp_path)
+    monkeypatch.setattr(workspace, "configured_default", lambda: tmp_path / "missing" / "deeper")
+    disk = hostmetrics.sample()["disk"]
+    assert disk["path"] == str(tmp_path)
+    assert disk["workspace_path"] == str(tmp_path / "missing" / "deeper")
     assert not (tmp_path / "missing").exists()
+
+
+def test_reported_disk_follows_the_configured_workspace(tmp_path, monkeypatch):
+    """The disk figure is measured at the workspace folder, whichever way it was configured."""
+    import psutil
+
+    measured: list[str] = []
+    real = psutil.disk_usage
+    monkeypatch.setattr(psutil, "disk_usage", lambda p: (measured.append(str(p)), real(p))[1])
+
+    env_dir = tmp_path / "from-env"
+    env_dir.mkdir()
+    monkeypatch.setattr(workspace, "configured_default", lambda: env_dir)
+    assert hostmetrics.sample()["disk"]["path"] == str(env_dir)
+    assert measured[-1] == str(env_dir)
+
+    chosen = tmp_path / "chosen"
+    chosen.mkdir()
+    workspace.change(str(chosen), None, None)
+    disk = hostmetrics.sample()["disk"]
+    assert disk["path"] == str(chosen) and disk["source"] == "settings"
+    assert measured[-1] == str(chosen)
+    store = hostmetrics.storage()["workspace"]
+    assert store["configured_path"] == str(chosen) and store["measured_path"] == str(chosen)
 
 
 def test_sample_returns_none_when_psutil_fails(monkeypatch):

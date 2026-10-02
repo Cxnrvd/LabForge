@@ -48,6 +48,7 @@ from sqlmodel import Session, select
 
 from labforge_core.models import Lab
 from labforge_core.services import boxes, docker_runtime, hostenv, images, preflight
+from labforge_core.services import workspace as workspace_store
 from labforge_core.services.compose_generator import (
     build_bundle,
     has_windows_guests,
@@ -350,8 +351,13 @@ def start_build_detailed(
         if vm_problem:
             raise BuildPrereqError(vm_problem[1], vm_problem[0])
 
-    settings = get_settings()
-    root = workspace_root or settings.workspace_root
+    if workspace_root is not None:
+        root = workspace_root
+    else:
+        try:
+            root = workspace_store.require_usable()
+        except workspace_store.WorkspaceError as exc:
+            raise BuildPrereqError(str(exc), exc.code) from exc
     slug = _slug(topology.name)
 
     if replace:

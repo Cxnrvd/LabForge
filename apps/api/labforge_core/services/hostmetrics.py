@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from labforge_core.settings import get_settings
+from labforge_core.services import workspace as workspace_store
 
 _ENGINE_TTL_SECONDS = 30.0
 _engine_cache: tuple[float, dict[str, Any]] | None = None
@@ -53,11 +53,18 @@ def _disk() -> dict[str, Any]:
     try:
         import psutil
 
-        target = _nearest_existing(Path(get_settings().workspace_root))
+        configured = workspace_store.root()
+        target = _nearest_existing(configured)
         usage = psutil.disk_usage(str(target))
         gb = 1024**3
+        key = f"disk|{configured}|{target}"
+        if key not in _logged_paths:
+            _logged_paths.add(key)
+            _LOGGER.info("disk_measured", extra={"workspace_configured": str(configured), "disk_path": str(target)})
         return {
             "path": str(target),
+            "workspace_path": str(configured),
+            "source": workspace_store.source(),
             "total_gb": round(usage.total / gb, 2),
             "used_gb": round(usage.used / gb, 2),
             "free_gb": round(usage.free / gb, 2),
@@ -91,16 +98,13 @@ def storage() -> dict[str, Any]:
     * ``docker``: where Docker keeps images and volumes on this computer, and the drive it is on.
       Image downloads and Windows disks land here, so this is the figure to watch.
     """
-    import os
-
     import psutil
 
     from labforge_core.services import preflight
 
-    settings = get_settings()
-    configured = Path(settings.workspace_root)
+    configured = workspace_store.root()
     measured = _nearest_existing(configured)
-    from_env = "workspace_root" in settings.model_fields_set or "LABFORGE_WORKSPACE_ROOT" in os.environ
+    ws_state = workspace_store.status()
     gb = 1024**3
     try:
         usage = psutil.disk_usage(str(measured))
@@ -109,7 +113,9 @@ def storage() -> dict[str, Any]:
         workspace_disk = {"total_gb": None, "free_gb": None}
     workspace = {
         "configured_path": str(configured),
-        "source": "LABFORGE_WORKSPACE_ROOT" if from_env else "default",
+        "source": workspace_store.source(),
+        "state": ws_state["state"],
+        "error": ws_state["error"],
         "measured_path": str(measured),
         "exists": configured.exists(),
         "drive": measured.anchor or str(measured),

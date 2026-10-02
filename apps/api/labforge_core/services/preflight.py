@@ -15,9 +15,8 @@ from typing import Any
 
 import psutil
 
-from labforge_core.services import docker_runtime, hostenv
+from labforge_core.services import docker_runtime, hostenv, workspace
 from labforge_core.services.compose_generator import host_port_free
-from labforge_core.settings import get_settings
 
 GB = 1024**3
 # Windows guests: the installer ISO plus a sparse system disk that grows as the guest is used.
@@ -110,7 +109,12 @@ def docker_data_dir() -> Path | None:
                 return Path(custom)
         default = Path(os.environ.get("LOCALAPPDATA", "")) / "Docker" / "wsl"
         return default if default.exists() else None
-    for candidate in (Path("/var/lib/docker"), Path("/var/lib")):
+    # Native Linux Docker: the engine's own DockerRootDir is a real folder on this computer, and it
+    # may have been moved off /var/lib/docker to a bigger drive. On macOS it is inside Docker's VM,
+    # so it does not exist here and the fallbacks below apply.
+    reported = docker_root_dir()
+    candidates = ([Path(reported)] if reported else []) + [Path("/var/lib/docker"), Path("/var/lib")]
+    for candidate in candidates:
         if candidate.exists():
             return candidate
     return None
@@ -260,9 +264,14 @@ def run(*, windows_guests: int = 0, memory_needed_mb: int | None = None, ports: 
     except Exception:
         pass
 
+    ws = workspace.status()
+    if ws["state"] != "ok":
+        checks.append(_check("workspace", "fail", "The workspace folder is not available", ws["error"] or "",
+                             "Choose a folder in Settings, General, Workspace location."))
+
     # Disk where Docker keeps images and volumes (Windows guests grow a disk image here).
     dd = docker_disk()
-    root = Path(get_settings().workspace_root)
+    root = workspace.root()
     target = root
     while not target.exists() and target != target.parent:
         target = target.parent
@@ -288,7 +297,7 @@ def run(*, windows_guests: int = 0, memory_needed_mb: int | None = None, ports: 
                 "fail",
                 "No room for lab files",
                 f"{workspace_free:.1f} GB free where LabForge keeps lab folders ({target}).",
-                "Free up space there, or set LABFORGE_WORKSPACE_ROOT to a folder on a bigger drive and restart the API.",
+                "Free up space there, or choose a folder on a bigger drive in Settings, General, Workspace location.",
             )
         )
 
@@ -327,7 +336,7 @@ def blocking_problem(topology: Any) -> tuple[str, str] | None:
     )
     report = run(windows_guests=windows, memory_needed_mb=need, ports=[])
     for check in report["checks"]:
-        if check["status"] == "fail" and check["id"] in {"docker_memory", "kvm", "disk", "workspace_disk"}:
+        if check["status"] == "fail" and check["id"] in {"docker_memory", "kvm", "disk", "workspace_disk", "workspace"}:
             return f"preflight_{check['id']}", f"{check['title']}. {check['detail']} {check['fix'] or ''}".strip()
     return None
 

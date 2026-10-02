@@ -46,7 +46,9 @@ def fake(monkeypatch):
     f = FakeDocker()
     monkeypatch.setattr(images, "_docker", f.run)
     monkeypatch.setattr(images, "_docker_images", lambda: {ES: {"Size": "1.96GB", "CreatedAt": "2026-09-01"}})
-    monkeypatch.setattr(images, "_volumes", lambda: {})
+    monkeypatch.setattr(
+        images, "_volumes", lambda: {v: {"labels": {}, "size_mb": 0.0} for v in f.volumes}
+    )
     monkeypatch.setattr(images, "_vagrant_boxes", lambda: {})
     monkeypatch.setattr(images.preflight, "docker_disk", lambda: {"free_gb": 100.0})
     images._JOBS.clear()
