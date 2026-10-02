@@ -281,7 +281,7 @@ function CvesPageInner(): React.ReactElement {
   const trimmed = debouncedQuery.trim();
   const searchQ = useQuery<CVEEntry[]>({
     queryKey: ["cves", trimmed],
-    queryFn: () => api.searchCves(trimmed, 100),
+    queryFn: () => api.searchCves(trimmed, 50),
     enabled: trimmed.length > 0,
     placeholderData: keepPreviousData,
     staleTime: 30_000,

@@ -62,7 +62,7 @@ function InnerCanvas({ hideToolbar = false }: InnerCanvasProps) {
   // instead of direct refs.
   React.useEffect(() => {
     const onFit = (): void => {
-      fitView({ padding: 0.25, duration: 450, minZoom: 0.2, maxZoom: 1.5 });
+      fitView({ ...FIT_OPTIONS, duration: 450 });
     };
     const onZoom100 = (): void => {
       zoomTo(1, { duration: 250 });
@@ -138,11 +138,11 @@ function InnerCanvas({ hideToolbar = false }: InnerCanvasProps) {
     if (fitToken === 0) return; // initial mount handled by `fitView` prop
     if (nodes.length === 0) return;
     const t1 = window.setTimeout(
-      () => fitView({ padding: 0.25, duration: 0, minZoom: 0.2, maxZoom: 1.5 }),
+      () => fitView({ ...FIT_OPTIONS, duration: 0 }),
       80,
     );
     const t2 = window.setTimeout(
-      () => fitView({ padding: 0.25, duration: 450, minZoom: 0.2, maxZoom: 1.5 }),
+      () => fitView({ ...FIT_OPTIONS, duration: 450 }),
       280,
     );
     return () => {
@@ -194,7 +194,7 @@ function InnerCanvas({ hideToolbar = false }: InnerCanvasProps) {
         edgeTypes={edgeTypes}
         nodesDraggable
         fitView
-        fitViewOptions={{ padding: 0.25, duration: 450, minZoom: 0.2, maxZoom: 1.5 }}
+        fitViewOptions={{ ...FIT_OPTIONS, duration: 450 }}
         snapToGrid
         snapGrid={[16, 16]}
         onPaneClick={() => setSelectedNode(null)}
@@ -252,6 +252,13 @@ export interface LabCanvasProps {
    */
   hideToolbar?: boolean;
 }
+
+// Keep the nodes clear of the floating palette (left), toolbar (top) and zoom controls (right).
+const FIT_OPTIONS = {
+  padding: { top: "96px", left: "260px", right: "90px", bottom: "70px" },
+  minZoom: 0.2,
+  maxZoom: 1.5,
+} as const;
 
 export function LabCanvas({ hideToolbar = false }: LabCanvasProps = {}) {
   return (

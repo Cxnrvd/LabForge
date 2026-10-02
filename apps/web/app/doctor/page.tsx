@@ -121,6 +121,10 @@ function maskToken(token: string | null): string {
 }
 
 export default function DoctorPage(): React.JSX.Element {
+  // Anything that reads the browser (origin, cores, clock) renders only after mount,
+  // otherwise the server HTML and the first client render differ and React reports a hydration error.
+  const [mounted, setMounted] = React.useState(false);
+  React.useEffect(() => setMounted(true), []);
   const [lastRunAt, setLastRunAt] = React.useState<Date>(() => new Date());
   const [lastRunMs, setLastRunMs] = React.useState<number>(0);
 
@@ -251,7 +255,7 @@ export default function DoctorPage(): React.JSX.Element {
         : apiOk
           ? `200 · ${healthQ.data?._latencyMs ?? 0}ms`
           : "unreachable",
-      detail: typeof window !== "undefined" ? window.location.origin : "/api/v1",
+      detail: mounted ? window.location.origin : "/api/v1",
     },
     {
       title: "Agent token",
@@ -431,7 +435,7 @@ export default function DoctorPage(): React.JSX.Element {
     errCount > 0 ? "badge err" : warnCount > 0 ? "badge warn" : "badge live";
   const summaryText = `${okCount} of ${total} checks pass`;
 
-  const timeStr = lastRunAt.toLocaleTimeString(undefined, { hour12: false });
+  const timeStr = mounted ? lastRunAt.toLocaleTimeString(undefined, { hour12: false }) : "--:--:--";
 
   return (
     <main className="page" style={{ maxWidth: 1100 }}>
@@ -528,7 +532,7 @@ export default function DoctorPage(): React.JSX.Element {
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
               <span style={{ color: "var(--ink-mute)", fontSize: 12 }}>CPU cores</span>
               <span className="mono" style={{ fontSize: 13, color: "var(--ink-mute)" }}>
-                {typeof navigator !== "undefined" && navigator.hardwareConcurrency
+                {mounted && navigator.hardwareConcurrency
                   ? `${navigator.hardwareConcurrency} logical`
                   : "unknown"}
               </span>

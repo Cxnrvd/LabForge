@@ -237,6 +237,10 @@ function snapshot(state: TopologyState): HistoryEntry {
   };
 }
 
+// Where the nodes were when the current drag started. Undo has to return there; the state
+// seen when the drag ends already contains the moved positions.
+let dragOrigin: HistoryEntry | null = null;
+
 function pushHistory(state: TopologyState): Pick<TopologyState, "past" | "future"> {
   const next = [...state.past, snapshot(state)];
   return {
@@ -273,16 +277,25 @@ export const useTopologyStore = create<TopologyState>()(
     const positionDone = changes.some(
       (c) => c.type === "position" && c.dragging === false,
     );
+    const positionMoving = changes.some(
+      (c) => c.type === "position" && c.dragging === true,
+    );
     const removed = changes.some((c) => c.type === "remove");
     const dimChanges = changes.filter((c) => c.type === "dimensions");
-    const shouldSnapshot = positionDone || removed;
 
     // Snapshot the OLD state BEFORE applying changes; otherwise undo
     // restores the same state we just produced, i.e. no-op.
     set((state) => {
+      if (positionMoving && dragOrigin === null) dragOrigin = snapshot(state);
       const newNodes = applyNodeChanges(changes, state.nodes);
       const update: Partial<TopologyState> = { nodes: newNodes };
-      if (shouldSnapshot) {
+      if (positionDone && dragOrigin !== null) {
+        const origin = dragOrigin;
+        dragOrigin = null;
+        const past = [...state.past, origin];
+        update.past = past.length > HISTORY_LIMIT ? past.slice(past.length - HISTORY_LIMIT) : past;
+        update.future = [];
+      } else if (removed) {
         Object.assign(update, pushHistory(state));
       }
       return update;
