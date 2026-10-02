@@ -68,6 +68,24 @@ BASE_USER = "labadmin"
 BASE_PASSWORD = "LabForge!2026"
 
 
+_CACHE: dict[str, tuple[float, Any]] = {}
+
+
+def _cached(key: str, ttl: float, make):
+    """Tiny time based cache for things that are slow to compute and change rarely."""
+    now = time.monotonic()
+    hit = _CACHE.get(key)
+    if hit and now - hit[0] < ttl:
+        return hit[1]
+    value = make()
+    _CACHE[key] = (now, value)
+    return value
+
+
+def clear_cache() -> None:
+    _CACHE.clear()
+
+
 class ImageError(RuntimeError):
     def __init__(self, message: str, code: str = "image_error", status: int = 409) -> None:
         super().__init__(message)
@@ -151,6 +169,10 @@ def topology_images(topology: LabConfig) -> list[dict[str, Any]]:
 
 def catalog() -> dict[str, Spec]:
     """Every image any bundled template needs, with who uses it."""
+    return _cached("catalog", 300, _build_catalog)
+
+
+def _build_catalog() -> dict[str, Spec]:
     specs: dict[str, Spec] = {}
     for template in list_templates():
         for req in topology_images(template):
@@ -205,21 +227,21 @@ def _used_mb(volume: str) -> float | None:
 
 
 def _volumes() -> dict[str, dict[str, Any]]:
-    proc = _docker(["system", "df", "-v", "--format", "json"], timeout=120)
-    if proc.returncode != 0:
-        return {}
-    try:
-        data = json.loads(proc.stdout)
-    except ValueError:
-        return {}
+    """Labelled LabForge volumes (bases and golden images) with the space they really use."""
     out: dict[str, dict[str, Any]] = {}
-    for vol in data.get("Volumes") or []:
-        labels = dict(p.split("=", 1) for p in (vol.get("Labels") or "").split(",") if "=" in p)
-        out[vol["Name"]] = {"labels": labels, "size_mb": _parse_size_mb(vol.get("Size"))}
-        if labels.get(LABEL_GOLDEN) == "true" or labels.get(LABEL_BASE) == "true":
-            used = _used_mb(vol["Name"])
-            if used is not None:
-                out[vol["Name"]]["size_mb"] = used
+    for label in (LABEL_GOLDEN, LABEL_BASE):
+        proc = _docker(["volume", "ls", "--filter", f"label={label}=true", "--format", "{{json .}}"], timeout=30)
+        if proc.returncode != 0:
+            continue
+        for line in proc.stdout.splitlines():
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            labels = dict(p.split("=", 1) for p in (row.get("Labels") or "").split(",") if "=" in p)
+            name = row["Name"]
+            used = _cached("used:" + name, 120, lambda name=name: _used_mb(name))
+            out[name] = {"labels": labels, "size_mb": used or 0.0}
     return out
 
 
@@ -290,6 +312,10 @@ def list_images() -> dict[str, Any]:
 
 
 def _vagrant_boxes() -> dict[str, str]:
+    return _cached("boxes", 120, _read_vagrant_boxes)
+
+
+def _read_vagrant_boxes() -> dict[str, str]:
     if not shutil.which("vagrant"):
         return {}
     try:

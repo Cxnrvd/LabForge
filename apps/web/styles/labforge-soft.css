@@ -491,3 +491,75 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+/* CVE ids stay on one line; the table scrolls sideways instead of wrapping them into three rows. */
+.lf .cve-id { white-space: nowrap; font-size: 12px; }
+
+/* ============================================================
+   One palette for every surface.
+   shadcn/Tailwind components (dialogs, toasts, tooltips, the command palette, the canvas toolbar,
+   node palette, drawers, popovers) read these HSL tokens. They render in portals outside .lf, so
+   the tokens are set on :root and html.dark and mirror the Soft Cards values above.
+   ============================================================ */
+:root {
+  --page-bg: #e8e8e8;
+  --background: 0 0% 100%;
+  --foreground: 0 0% 10%;
+  --card: 0 0% 100%;
+  --card-foreground: 0 0% 10%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 0 0% 10%;
+  --primary: 0 0% 7%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 0 0% 94.5%;
+  --secondary-foreground: 0 0% 10%;
+  --muted: 0 0% 94.5%;
+  --muted-foreground: 0 0% 40%;
+  --accent: 0 0% 94.5%;
+  --accent-foreground: 0 0% 10%;
+  --destructive: 0 63% 49%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 0 0% 90%;
+  --input: 0 0% 86%;
+  --ring: 204 71% 37%;
+  --radius: 0.625rem;
+  color-scheme: light;
+  accent-color: #1d6fa5;
+}
+
+html.dark {
+  --page-bg: #0a0a0a;
+  --background: 0 0% 11%;
+  --foreground: 0 0% 90%;
+  --card: 0 0% 11%;
+  --card-foreground: 0 0% 90%;
+  --popover: 0 0% 11%;
+  --popover-foreground: 0 0% 90%;
+  --primary: 0 0% 94.5%;
+  --primary-foreground: 0 0% 7%;
+  --secondary: 0 0% 15%;
+  --secondary-foreground: 0 0% 90%;
+  --muted: 0 0% 15%;
+  --muted-foreground: 0 0% 61%;
+  --accent: 0 0% 15%;
+  --accent-foreground: 0 0% 90%;
+  --destructive: 0 100% 72%;
+  --destructive-foreground: 0 0% 7%;
+  --border: 0 0% 17%;
+  --input: 0 0% 23%;
+  --ring: 205 68% 62%;
+  color-scheme: dark;
+  accent-color: #5aa9e0;
+}
+
+body { background-color: var(--page-bg); }
+::selection { background: rgba(29, 111, 165, 0.22); }
+html.dark ::selection { background: rgba(90, 169, 224, 0.32); }
+:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+
+/* Shared table and bar behaviour: one line per cell where it matters, tabs never wrap. */
+.lf .cell-ellipsis { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lf .nowrap { white-space: nowrap; }
+.lf .tb2 { overflow-x: auto; scrollbar-width: none; }
+.lf .tb2 .tab { white-space: nowrap; flex-shrink: 0; }
+.lf .tb3 { flex-wrap: wrap; row-gap: 8px; }

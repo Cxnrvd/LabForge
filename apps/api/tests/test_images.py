@@ -50,6 +50,7 @@ def fake(monkeypatch):
     monkeypatch.setattr(images, "_vagrant_boxes", lambda: {})
     monkeypatch.setattr(images.preflight, "docker_disk", lambda: {"free_gb": 100.0})
     images._JOBS.clear()
+    images.clear_cache()
     return f
 
 

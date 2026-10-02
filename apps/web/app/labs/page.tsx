@@ -643,7 +643,7 @@ export default function LabsIndex(): React.ReactElement {
         </div>
 
         {/* ----------------- main column ----------------- */}
-        <div style={{ minWidth: 0, minHeight: 0, overflowY: "auto" }}>
+        <div style={{ minWidth: 0, minHeight: 0, overflow: "auto" }}>
           <table>
             <thead>
               <tr>
@@ -713,13 +713,13 @@ export default function LabsIndex(): React.ReactElement {
                     <td>{nodeCount ?? "—"}</td>
                     <td className="mono">{lab.provider}</td>
                     <td>{bucket === "running" ? uptimeFrom(lab.updated_at) : "—"}</td>
-                    <td className="mono" style={{ color: "var(--d10-fg-faint)" }}>
+                    <td className="mono cell-ellipsis" title={lastAction} style={{ color: "var(--d10-fg-faint)" }}>
                       {lastAction}
                     </td>
                     <td onClick={(e) => e.stopPropagation()}>
                       <Link
                         href={`/monitor/${lab.id}`}
-                        className="btn primary"
+                        className="btn primary nowrap"
                         style={{ textDecoration: "none" }}
                         onClick={(e) => e.stopPropagation()}
                       >

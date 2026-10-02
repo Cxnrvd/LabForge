@@ -603,7 +603,7 @@ function CvesPageInner(): React.ReactElement {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "220px 1fr 380px",
+          gridTemplateColumns: selectedId ? "200px minmax(0, 1fr) 380px" : "200px minmax(0, 1fr)",
           flex: 1,
           minHeight: 0,
         }}
@@ -681,7 +681,10 @@ function CvesPageInner(): React.ReactElement {
         </div>
 
         {/* -------- Centre: results table -------- */}
-        <div style={{ overflowY: "auto", minHeight: 0 }}>
+        <div style={{ overflow: "auto", minHeight: 0 }}>
+          <div className="home-sub" style={{ padding: "10px 14px 0" }}>
+            Click a row to see its details, the provisioner script and the pin to topology action.
+          </div>
           <table>
             <thead>
               <tr>
@@ -775,7 +778,7 @@ function CvesPageInner(): React.ReactElement {
 
         {/* -------- Right: detail panel -------- */}
         {/* Only this panel scrolls when CPE/references lists overflow. */}
-        <div style={{ padding: 14, overflowY: "auto", minHeight: 0 }}>
+        {selectedId && <div style={{ padding: 14, overflowY: "auto", minHeight: 0 }}>
           {!detail ? (
             <div
               className="card"
@@ -872,7 +875,7 @@ function CvesPageInner(): React.ReactElement {
               </div>
             </div>
           )}
-        </div>
+        </div>}
       </div>
     </>
   );

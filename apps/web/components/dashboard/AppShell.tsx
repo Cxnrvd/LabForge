@@ -136,11 +136,13 @@ export function AppShell({ children }: { children: React.ReactNode }): React.Rea
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  const isActive = (href: string): boolean => {
-    if (href === "/") return pathname === "/";
-    return pathname === href || pathname.startsWith(`${href}/`);
-  };
-
+  // The most specific entry wins, so /build/generate lights up Launch and not Canvas as well.
+  const allNav = [...WORKSPACE_NAV, ...CATALOG_NAV, ...BUILD_NAV, ...SYSTEM_NAV];
+  const bestHref = allNav
+    .map((e) => e.href)
+    .filter((h) => (h === "/" ? pathname === "/" : pathname === h || pathname.startsWith(`${h}/`)))
+    .sort((x, y) => y.length - x.length)[0];
+  const isActive = (href: string): boolean => href === bestHref;
   // Live counts feeding badges in the sidebar + tb1. Cheap polls; failures
   // are silent so the shell renders even if the API is down.
   const labsQ = useQuery<Array<{ id: number; status: string }>>({

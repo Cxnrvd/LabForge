@@ -106,7 +106,7 @@ for (const theme of ["light", "dark"]) {
       }));
       if (info.overflow > 1) problems.push(`horizontal scroll of ${info.overflow}px`);
       if (info.theme && info.theme !== theme) problems.push(`theme is ${info.theme}, wanted ${theme}`);
-      if (r.sidebar && !info.active.includes(r.path)) problems.push(`sidebar highlight is ${JSON.stringify(info.active)}, wanted ${r.path}`);
+      if (r.sidebar && !(info.active.length === 1 && info.active[0] === r.path)) problems.push(`sidebar highlight is ${JSON.stringify(info.active)}, wanted ${r.path}`);
       if (resp && resp.status() >= 500) problems.push(`status ${resp.status()}`);
       const name = (r.path === "/" ? "home" : r.path.slice(1).replace(/\//g, "_")) + ".png";
       await page.screenshot({ path: path.join(dir, name), fullPage: false }).catch(() => {});

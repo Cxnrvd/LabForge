@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 
@@ -90,6 +91,13 @@ def _enforce_auth_or_loopback() -> None:
 _enforce_auth_or_loopback()
 
 
+def _warm_images() -> None:
+    with suppress(Exception):
+        from labforge_core.services import images
+
+        images.list_images()
+
+
 @asynccontextmanager
 async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
     create_db_and_tables()
@@ -106,6 +114,8 @@ async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
                 next(session_gen)
     except Exception as exc:
         _LOGGER.warning("reconcile_failed", extra={"error": str(exc)})
+    # Warm the image catalog so the first visit to the Images page or the Launch dialog is fast.
+    threading.Thread(target=_warm_images, name="warm-images", daemon=True).start()
     yield
 
 
