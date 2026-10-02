@@ -34,6 +34,7 @@ import {
 
 import { PageToolbars, type TabSpec } from "@/components/dashboard/AppShell";
 import { lookupVendor } from "@/lib/icons/catalog";
+import { downloadBlob } from "@/lib/utils/download";
 
 /* ============================================================
    Vendor catalog (UI-only fixture)
@@ -389,8 +390,8 @@ export default function VendorsPage(): React.ReactElement {
     id: "custom",
     label: "+ Custom role",
     onSelect: () =>
-      toast("Custom role builder", {
-        description: "TODO: needs backend support — vendor authoring UI not yet wired.",
+      toast("Custom roles are not available yet", {
+        description: "The API has no endpoint for adding roles, so the catalog here is read only.",
       }),
   });
 
@@ -432,20 +433,22 @@ export default function VendorsPage(): React.ReactElement {
               <button
                 type="button"
                 className="btn"
-                onClick={() =>
-                  toast("Export catalog.json", {
-                    description: "TODO: needs backend support — no /api/v1/vendors/export yet.",
-                  })
-                }
+                onClick={() => {
+                  downloadBlob(
+                    new Blob([JSON.stringify(VENDOR_CATALOG, null, 2)], { type: "application/json" }),
+                    "labforge-vendor-catalog.json",
+                  );
+                  toast.success("Catalog downloaded", { description: `${VENDOR_CATALOG.length} vendors, as shown on this page.` });
+                }}
               >
-                ⤓ Export catalog.json
+                Export catalog.json
               </button>
               <button
                 type="button"
                 className="btn primary"
                 onClick={() =>
-                  toast("New vendor", {
-                    description: "TODO: needs backend support — vendor authoring not yet wired.",
+                  toast("Adding vendors is not available yet", {
+                    description: "The API has no endpoint for it. Today the catalog ships with LabForge.",
                   })
                 }
               >

@@ -242,6 +242,7 @@ export default function BuildMonitorPage() {
   const { status: wsStatus } = useLiveBus(enabled ? id : null, { onEvent: onLiveEvent });
 
   const qc = useQueryClient();
+  const { golden: goldenMut } = useImageActions();
   const stopMut = useMutation<BuildStatusPayload, ApiError>({
     mutationFn: () => api.buildStop(id),
     onSuccess: (data) => {
@@ -319,6 +320,8 @@ export default function BuildMonitorPage() {
   const destroyMut = useMutation<void, ApiError>({
     mutationFn: () => api.destroyLab(id),
     onSuccess: () => {
+      // Stop every poll of this lab first, otherwise they answer 404 while the page navigates away.
+      qc.removeQueries({ predicate: (q) => Array.isArray(q.queryKey) && q.queryKey.includes(id) });
       toast.success("Lab destroyed");
       qc.invalidateQueries({ queryKey: ["labs"] });
       router.push("/labs");
@@ -392,7 +395,6 @@ export default function BuildMonitorPage() {
   const windowsHosts = (topologyQ.data?.nodes ?? [])
     .filter((n) => String(n.config.os).startsWith("windows"))
     .map((n) => n.config.hostname);
-  const { golden: goldenMut } = useImageActions();
   const handleGolden = (): void => {
     const hostName =
       windowsHosts.length === 1 ? windowsHosts[0] : window.prompt(`Which machine? (${windowsHosts.join(", ")})`, windowsHosts[0]);

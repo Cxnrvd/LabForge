@@ -178,7 +178,9 @@ export default function OnboardPage() {
         ? "GET /api/v1/labs/build/preflight"
         : vagrantOk
         ? `default provider: ${provider ?? "unknown"}`
-        : (error ?? "optional: install Vagrant and VirtualBox to run VM based labs"),
+        : error
+          ? "The API did not answer, so this could not be checked. Start it with pnpm dev."
+          : "optional: install Vagrant and VirtualBox to run VM based labs",
     };
 
     const vboxRow: CheckRow = {
@@ -262,8 +264,8 @@ export default function OnboardPage() {
             style={{
               width: 36,
               height: 36,
-              background: "var(--ink)",
-              clipPath: "polygon(50% 0, 100% 100%, 0 100%)",
+              background: "var(--d10-btn, var(--ink))",
+              borderRadius: 10,
             }}
           />
           <div style={{ fontSize: 22, fontWeight: 600, letterSpacing: "-.02em" }}>
@@ -292,7 +294,7 @@ export default function OnboardPage() {
           From canvas to{" "}
           <span
             style={{
-              background: "linear-gradient(90deg, var(--blue), var(--purple))",
+              background: "var(--d10-accent)",
               WebkitBackgroundClip: "text",
               backgroundClip: "text",
               color: "transparent",

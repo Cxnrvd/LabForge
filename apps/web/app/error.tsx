@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 
 export default function ErrorPage({ error, reset }: { error: Error; reset: () => void }): React.ReactElement {
   return (
@@ -14,7 +15,7 @@ export default function ErrorPage({ error, reset }: { error: Error; reset: () =>
         <pre className="code" style={{ marginTop: 12, fontSize: 11, whiteSpace: "pre-wrap" }}>{error.message}</pre>
         <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
           <button type="button" className="btn primary" onClick={reset}>Try again</button>
-          <a href="/" className="btn">Go to Home</a>
+          <Link href="/" className="btn">Go to Home</Link>
         </div>
       </div>
     </main>

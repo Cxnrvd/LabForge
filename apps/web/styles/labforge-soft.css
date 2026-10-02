@@ -570,3 +570,12 @@ html.dark ::selection { background: rgba(90, 169, 224, 0.32); }
 .lf .tb3 { flex-wrap: wrap; row-gap: 8px; }
 .lf .topo-mini .n { max-width: 44%; overflow: hidden; text-overflow: ellipsis; padding: 5px 8px; }
 .lf .role-chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; }
+
+.lf .mtable td.cell-wrap { white-space: normal; max-width: 260px; font-size: 12px; color: var(--d10-fg-mute); }
+
+/* Native selects and number inputs follow the theme like every other field. */
+.lf select, .lf input[type="number"] {
+  background: var(--d10-bg-elev-1); color: var(--d10-fg); border: 1px solid var(--d10-border-strong);
+  border-radius: 8px; padding: 7px 10px; font: inherit; font-size: 13px;
+}
+.lf select:focus-visible, .lf input[type="number"]:focus-visible { outline: 2px solid hsl(var(--ring) / 0.5); outline-offset: 0; }

@@ -441,7 +441,7 @@ export default function DoctorPage(): React.JSX.Element {
     tokenSet,
     nvdSet,
     warnCount,
-  ]);
+  , mounted]);
 
   const copyReport = async (): Promise<void> => {
     try {

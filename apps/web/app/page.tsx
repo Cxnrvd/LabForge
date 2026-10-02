@@ -77,17 +77,21 @@ function PreflightCard({
   linux,
   windows,
   loading,
+  offline,
 }: {
   linux?: PreflightReport;
   windows?: PreflightReport;
   loading: boolean;
+  offline: boolean;
 }): React.ReactElement {
   const problems = (linux?.checks ?? []).filter((c) => c.status !== "ok");
   // Windows guests need more (KVM, a big disk). Show only what is different from the Linux report.
   const winOnly = (windows?.checks ?? []).filter(
     (c) => c.status !== "ok" && (c.id === "kvm" || (c.id === "disk" && !problems.some((p) => p.id === "disk"))),
   );
-  const chip = loading || !linux
+  const chip = offline
+    ? { cls: "err", text: "API offline" }
+    : loading || !linux
     ? { cls: "", text: "Checking" }
     : linux.status === "fail"
       ? { cls: "err", text: "Blocked" }
@@ -100,6 +104,11 @@ function PreflightCard({
         <div className="eyebrow" style={{ flex: 1 }}>Preflight</div>
         <span className={`chip ${chip.cls}`}>{chip.text}</span>
       </div>
+      {offline && (
+        <div className="home-sub" style={{ marginTop: 8 }}>
+          The API is not answering, so nothing can be checked. Start it with <span className="mono">pnpm dev</span> and press Re-check host.
+        </div>
+      )}
       {linux && problems.length === 0 && (
         <div className="home-sub" style={{ marginTop: 8 }}>
           Docker, memory, disk and ports are fine for Linux labs like the ransomware hunt.
@@ -115,7 +124,7 @@ function PreflightCard({
       <div className="rows" style={{ marginTop: 10 }}>
         <div className="r"><span className="k">Windows guests</span>
           <span className="v">
-            {!windows ? "checking" : winOnly.length === 0 ? <span className="chip ok">Ready</span> : <span className="chip err">Not ready</span>}
+            {offline ? "unknown" : !windows ? "checking" : winOnly.length === 0 ? <span className="chip ok">Ready</span> : <span className="chip err">Not ready</span>}
           </span></div>
       </div>
       {winOnly.map((c) => (
@@ -380,7 +389,7 @@ export default function Home(): React.ReactElement {
             )}
           </div>
 
-          <PreflightCard linux={preflightQ.data} windows={windowsQ.data} loading={preflightQ.isLoading} />
+          <PreflightCard linux={preflightQ.data} windows={windowsQ.data} loading={preflightQ.isLoading && !metricsQ.isError} offline={metricsQ.isError} />
 
           <div className="scard">
             <div className="eyebrow">Engines</div>
@@ -388,7 +397,7 @@ export default function Home(): React.ReactElement {
               <div className="r"><span className="k">Docker</span>
                 <span className="v">
                   <span className={`chip ${eng?.docker_daemon ? "ok" : "err"}`}>
-                    {eng ? (eng.docker_daemon ? eng.docker_version ?? "running" : "not running") : "checking"}
+                    {eng ? (eng.docker_daemon ? eng.docker_version ?? "running" : "not running") : metricsQ.isError ? "API offline" : "checking"}
                   </span></span></div>
               <div className="r"><span className="k">Compose</span><span className="v">{eng?.compose_version ?? "n/a"}</span></div>
               <div className="r"><span className="k">Docker memory</span>

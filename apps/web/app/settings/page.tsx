@@ -634,10 +634,10 @@ export default function SettingsPage(): React.ReactElement {
               <div className="g-2" style={{ rowGap: 12 }}>
                 {THEME_SWATCHES.map((s) => {
                   const selected =
-                    mounted && theme === s.slug && themeVariant === s.variant;
+                    mounted && theme === s.slug;
                   return (
                     <button
-                      key={s.variant}
+                      key={s.slug}
                       type="button"
                       onClick={() => onPickTheme(s.slug, s.variant)}
                       style={{

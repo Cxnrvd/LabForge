@@ -156,7 +156,7 @@ export default function ImagesPage(): React.ReactElement {
                     <td>
                       <span className={`chip ${chip.cls}`}>{chip.text}{i.status === "pulling" && i.progress != null ? ` ${Math.round(i.progress)}%` : ""}</span>
                     </td>
-                    <td>{i.used_by.join(", ") || "none"}</td>
+                    <td className="cell-wrap">{i.used_by.join(", ") || "none"}</td>
                     <td>{ago(i.updated_at)}</td>
                     <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
                       {(i.status === "missing" || i.status === "outdated") && (
