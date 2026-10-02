@@ -15,7 +15,7 @@ from sqlmodel import Session
 from labforge_core.api.rate_limit import rate_limited
 from labforge_core.api.security import require_agent_token
 from labforge_core.models import Lab, get_session
-from labforge_core.services import docker_runtime, images
+from labforge_core.services import compose_generator, docker_runtime, images
 from labforge_core.services.template_loader import TemplateNotFound
 
 router = APIRouter(prefix="/images", tags=["images"])
@@ -48,11 +48,16 @@ def list_images() -> dict[str, Any]:
 
 @router.post("/required", dependencies=_AUTH)
 def required(payload: RequiredRequest) -> dict[str, Any]:
-    """What this topology needs and whether it is here (for the Launch dialog)."""
+    """What this topology needs and whether it is here, plus which nodes a Docker build would
+    actually include (for the Launch dialog's pre-build warning about nodes Docker can't run)."""
     try:
-        return {"requirements": images.requirements(payload.topology)}
+        requirements = images.requirements(payload.topology)
     except images.ImageError as exc:
         raise _http(exc) from exc
+    return {
+        "requirements": requirements,
+        "node_coverage": compose_generator.docker_node_coverage(payload.topology),
+    }
 
 
 @router.post("/prepare", dependencies=_AUTH)

@@ -304,3 +304,21 @@ def test_absurd_lab_ids_are_rejected_not_a_500(fake, session):
         assert client.get(f"/api/v1/labs/99999999999999999999{path}").status_code == 422, path
         assert client.get(f"/api/v1/labs/0{path}").status_code == 422, path
     assert client.post("/api/v1/labs/99999999999999999999/halt").status_code == 422
+
+
+def test_build_log_banners_the_nodes_docker_cannot_run(fake, session, tmp_path):
+    """red-team-range loses its domain controller on Docker (firewall/router now survive, see
+    compose_generator's soft-VM-only fix) — build.log must say so plainly, not bury it."""
+    from labforge_schema import Provider
+
+    topology = get_template("red-team-range").model_copy(update={"provider": Provider.DOCKER})
+    _lab, workspace = build_runner.start_build(topology, session, tmp_path)
+    log = (workspace / build_runner.BUILD_LOG).read_text(encoding="utf-8")
+    assert "[labforge] NOTE: 7 of 8 nodes will run. 1 cannot run on Docker:" in log
+    assert "DC01:" in log and "needs a full VM" in log
+
+
+def test_build_log_has_no_coverage_note_when_every_node_runs(fake, session, tmp_path):
+    lab = _build(session, tmp_path)
+    log = (Path(lab.workspace_path) / build_runner.BUILD_LOG).read_text(encoding="utf-8")
+    assert "cannot run on Docker" not in log

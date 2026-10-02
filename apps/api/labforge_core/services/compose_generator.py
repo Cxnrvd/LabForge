@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml  # provided indirectly by uvicorn[standard] -> pyyaml
-from labforge_schema import LabConfig, NodeType, TopologyNode
+from labforge_schema import LabConfig, NodeType, Provider, TopologyNode
 
 from labforge_core.services import hostenv, windows_oem
 from labforge_core.services.docker_roles import (
@@ -746,3 +746,33 @@ def build_bundle(
         files[".labforge-seeds.json"] = json.dumps(seeds, indent=2)
     files[".labforge-project"] = artifacts.project + "\n"
     return files, artifacts
+
+
+def coverage_from_fallback_notes(topology: LabConfig, fallback_notes: dict[str, str]) -> dict[str, object]:
+    """Turn a render's fallback_notes into the shape the Launch dialog, build log and Monitor
+    page all show: how many of the topology's nodes actually run on Docker, and why any that
+    don't were skipped. ``fallback_notes`` is keyed by hostname; this adds back each node's id
+    and type so a caller can link it to the topology without re-deriving anything."""
+    by_hostname = {n.config.hostname: n for n in topology.nodes}
+    skipped = []
+    for hostname, note in fallback_notes.items():
+        node = by_hostname.get(hostname)
+        skipped.append(
+            {
+                "hostname": hostname,
+                "node_id": node.id if node else None,
+                "node_type": node.type.value if node else None,
+                "reason": note.strip(),
+            }
+        )
+    total = len(topology.nodes)
+    return {"total": total, "built": total - len(skipped), "skipped": skipped}
+
+
+def docker_node_coverage(topology: LabConfig) -> dict[str, object]:
+    """What a Docker build of this exact topology would actually include, regardless of the
+    topology's own stored provider — this is what the Launch dialog shows before a build starts,
+    computed the same way a real build's own fallback_notes are, nothing re-implemented."""
+    forced = topology if topology.provider is Provider.DOCKER else topology.model_copy(update={"provider": Provider.DOCKER})
+    artifacts = render(forced)
+    return coverage_from_fallback_notes(topology, artifacts.fallback_notes)

@@ -51,6 +51,7 @@ from labforge_core.services import boxes, docker_runtime, hostenv, images, prefl
 from labforge_core.services import workspace as workspace_store
 from labforge_core.services.compose_generator import (
     build_bundle,
+    coverage_from_fallback_notes,
     has_windows_guests,
     host_port_free,
     project_name,
@@ -154,9 +155,12 @@ def _write_artifacts(
 
 def _write_docker_bundle(
     topology: LabConfig, workspace: Path, *, project: str, publish: str
-) -> list[str]:
-    """Write the compose project; returns the generator's warnings."""
+) -> tuple[list[str], dict[str, object]]:
+    """Write the compose project; returns the generator's warnings and the node-coverage summary
+    (compose_generator.coverage_from_fallback_notes) — which nodes this exact build includes,
+    separate from the general warnings list so the caller can make it impossible to miss."""
     files, artifacts = build_bundle(topology, publish=publish, project=project, port_free=host_port_free)
+    coverage = coverage_from_fallback_notes(topology, artifacts.fallback_notes)
     workspace.mkdir(parents=True, exist_ok=True)
     for rel, content in files.items():
         target = workspace / rel
@@ -172,7 +176,7 @@ def _write_docker_bundle(
         extra = []
     if extra:
         hostenv.write_guest_file(seeds_path, json.dumps([*existing, *extra], indent=2), ".labforge-seeds.json")
-    return artifacts.warnings
+    return artifacts.warnings, coverage
 
 
 def _shim_dir() -> Path:
@@ -402,13 +406,14 @@ def start_build_detailed(
                     + "; ".join(conflicts)
                     + ". Change the network CIDR or destroy the other lab."
                 )
-            warnings = _write_docker_bundle(topology, workspace, project=project, publish=publish)
+            warnings, node_coverage = _write_docker_bundle(topology, workspace, project=project, publish=publish)
             # A Windows guest downloads and installs Windows on its first start.
             wait = 5400 if has_windows_guests(topology) else 900
             argv = docker_runtime.up_command(project, wait_timeout=wait, workspace=workspace)
             banner = f"--- runtime=docker project={project} ---"
             env_extra = None
         else:
+            node_coverage = None
             provider = vagrant_provider_name(topology.provider)
             try:
                 resolved = boxes.resolve_boxes(topology, provider, BOX_MAP)
@@ -432,8 +437,17 @@ def start_build_detailed(
         for warning in warnings:
             _LOGGER.info("compose_warning lab=%s %s", lab.id, warning)
         pid = _spawn_build(workspace, argv, banner=banner, env_extra=env_extra)
-        if warnings:
+        skipped = node_coverage["skipped"] if node_coverage else []  # type: ignore[index]
+        if skipped or warnings:
             with (workspace / BUILD_LOG).open("a", encoding="utf-8") as fh:
+                if skipped:
+                    built, total = node_coverage["built"], node_coverage["total"]  # type: ignore[index]
+                    fh.write(
+                        f"[labforge] NOTE: {built} of {total} nodes will run. "
+                        f"{len(skipped)} cannot run on Docker:\n"
+                    )
+                    for s in skipped:
+                        fh.write(f"[labforge]   - {s['hostname']}: {s['reason']}\n")
                 fh.writelines(f"[labforge] warning: {w}\n" for w in warnings)
         _log_reuse(topology, workspace)
     except Exception:

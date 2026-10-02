@@ -352,3 +352,21 @@ def test_an_expired_cache_entry_is_served_stale_while_it_refreshes(fake):
             break
         time.sleep(0.02)
     assert images._CACHE["k"][1] == 2
+
+
+def test_required_endpoint_reports_node_coverage_for_docker(client, fake, monkeypatch):
+    """The Launch dialog's pre-build warning for nodes Docker can't run — this is the same data
+    GET /images/required was already returning requirements from, now also carrying which nodes a
+    Docker build would include."""
+    monkeypatch.setattr(images.docker_runtime, "docker_available", lambda: True)
+    topo = get_template("red-team-range").model_dump(mode="json")
+    body = client.post("/api/v1/images/required", json={"topology": topo}).json()
+    coverage = body["node_coverage"]
+    assert coverage["total"] == 8
+    skipped_ids = {s["node_id"] for s in coverage["skipped"]}
+    assert skipped_ids == {"dc01"}  # fw01/rtr01 now containerized, see compose_generator fix
+    assert coverage["built"] == 7
+
+    clean = get_template("ransomware-intrusion-linux-lab").model_dump(mode="json")
+    body2 = client.post("/api/v1/images/required", json={"topology": clean}).json()
+    assert body2["node_coverage"]["skipped"] == []
