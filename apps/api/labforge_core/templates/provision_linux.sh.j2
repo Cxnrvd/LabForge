@@ -23,7 +23,7 @@ printf '%s\n' "vagrant:"{{ node.config.credentials.password | bash_q }} | chpass
 {% if install_blocks %}
 echo "[+] Applying {{ install_blocks | length }} role install block(s)..."
 {% for block in install_blocks %}
-echo "----- begin role: {{ block.label }} -----"
+echo "----- begin role: {{ block.label }} ({{ block.description }}) -----"
 (
 set -e
 {{ block.body }}

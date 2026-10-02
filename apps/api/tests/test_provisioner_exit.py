@@ -37,7 +37,7 @@ def _render(blocks, cves=()):
         node=node,
         is_dc=False,
         cve_blocks=[SimpleNamespace(cve_id=c[0], description="test", script=c[1]) for c in cves],
-        install_blocks=[SimpleNamespace(label=label, body=body) for label, body in blocks],
+        install_blocks=[SimpleNamespace(label=label, body=body, description="test") for label, body in blocks],
         endpoints={},
     )
     return text
@@ -83,7 +83,7 @@ def test_windows_template_reports_failed_roles():
         node=node,
         is_dc=False,
         cve_blocks=[],
-        install_blocks=[SimpleNamespace(label="r", body="throw 'x'")],
+        install_blocks=[SimpleNamespace(label="r", body="throw 'x'", description="test")],
         endpoints={},
     )
     assert "$failed += " in text

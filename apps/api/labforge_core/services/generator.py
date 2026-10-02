@@ -6,7 +6,7 @@ import io
 import re
 import shlex
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
 from labforge_schema import LabConfig, NodeType, OsType, Provider, TopologyNode
@@ -130,6 +130,11 @@ class GeneratedArtifacts:
     provisioner_scripts: dict[str, str]
     hosts_file: str
     readme: str
+    # A role with no curated installer, or a CVE that is a stub or notes-only (see
+    # provisioners/cve_lookup.is_fully_provisioned) — things the build will silently do nothing
+    # for. Also written into build.log and the README, the same way the Docker generator's
+    # warnings are.
+    warnings: list[str] = field(default_factory=list)
 
 
 def _safe_slug(value: str) -> str:
@@ -253,6 +258,30 @@ def _render_role_block(
     }
 
 
+def _coverage_warnings(topology: LabConfig) -> list[str]:
+    """Roles with no curated installer, and CVEs that are a stub or notes-only — the things a
+    build will produce no error for but also won't actually set up. Mirrors the Docker
+    generator's warnings, which the Launch dialog and README already show for that provider."""
+    warnings: list[str] = []
+    for node in topology.nodes:
+        if not _is_provisionable(node):
+            continue
+        host = node.config.hostname
+        windows = is_windows(node)
+        for role in node.config.roles:
+            bare, _ = _parse_role(role)
+            snippet = windows_snippet(bare) if windows else linux_snippet(bare)
+            if snippet is None:
+                warnings.append(f"{host}: role '{bare}' has no curated installer, nothing was installed for it")
+        for cve in node.config.cves:
+            payload = resolve_cve_payload(cve)
+            if not payload.known:
+                warnings.append(f"{host}: {cve} has no curated provisioner, only a stub comment was added")
+            elif not payload.fully_provisioned:
+                warnings.append(f"{host}: {cve} is notes only ({payload.description}) — nothing vulnerable was set up")
+    return warnings
+
+
 def _render_node(
     env: Environment,
     node: TopologyNode,
@@ -310,6 +339,7 @@ def generate_artifacts(
     provisionable_nodes = [n for n in topology.nodes if _is_provisionable(n)]
     external_nodes = [n for n in topology.nodes if not _is_provisionable(n)]
     endpoints = _compute_endpoints(topology)
+    warnings = _coverage_warnings(topology)
 
     provisioners: dict[str, tuple[str, TopologyNode]] = {}
     for node in provisionable_nodes:
@@ -357,6 +387,8 @@ def generate_artifacts(
             vagrant_nodes=vagrant_nodes,
             box_map=boxes,
             external_nodes=external_nodes,
+            warnings=warnings,
+            cve_status=lambda cve: resolve_cve_payload(cve),
         )
 
     flat_scripts: dict[str, str] = {}
@@ -370,6 +402,7 @@ def generate_artifacts(
         provisioner_scripts=flat_scripts,
         hosts_file=hosts_file,
         readme=readme,
+        warnings=warnings,
     )
 
 

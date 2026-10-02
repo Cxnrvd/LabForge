@@ -32,7 +32,7 @@ try {
 {% if install_blocks %}
 Write-Host "[+] Applying {{ install_blocks | length }} role install block(s)..."
 {% for block in install_blocks %}
-Write-Host "----- begin role: {{ block.label }} -----"
+Write-Host "----- begin role: {{ block.label }} ({{ block.description }}) -----"
 try {
 {{ block.body | indent(4, True) }}
 } catch {

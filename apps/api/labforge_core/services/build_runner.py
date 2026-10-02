@@ -132,7 +132,9 @@ def runtime_of(workspace: Path) -> str:
 
 def _write_artifacts(
     topology: LabConfig, workspace: Path, box_overrides: dict | None = None
-) -> None:
+) -> list[str]:
+    """Write the Vagrant project; returns the generator's warnings (roles with no curated
+    installer, CVEs that are a stub or notes-only), the same shape as _write_docker_bundle's."""
     artifacts = generate_artifacts(topology, box_overrides=box_overrides)
     workspace.mkdir(parents=True, exist_ok=True)
     # LF endings everywhere: these scripts run inside Linux guests, where a
@@ -147,6 +149,7 @@ def _write_artifacts(
     if artifacts.readme:
         hostenv.write_guest_file(workspace / "README.md", artifacts.readme)
     hostenv.write_guest_file(workspace / "topology.json", topology.model_dump_json(indent=2))
+    return artifacts.warnings
 
 
 def _write_docker_bundle(
@@ -422,7 +425,7 @@ def start_build_detailed(
                     f"This computer already has address(es) {', '.join(clash)} inside the lab network "
                     f"{topology.network_cidr}. Pick a different network CIDR if VMs are unreachable."
                 )
-            _write_artifacts(topology, workspace, resolved.overrides)
+            warnings.extend(_write_artifacts(topology, workspace, resolved.overrides))
             argv = ["vagrant", "up", "--provider", provider]
             banner = f"--- runtime=vagrant provider={provider} ---"
             env_extra = {"VAGRANT_DEFAULT_PROVIDER": provider}

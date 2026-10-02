@@ -547,6 +547,11 @@ apt-get update -y && apt-get install -y vault
 
     # ============================================================== Markers
     "external": _bash("external", "Marker for external/internet node", "# external: nothing to install.\n"),
+    # Camera brand tags (smart-factory). These exist so NVD search on the node (useRoleCves on the
+    # frontend) matches real vendor advisories, same as the PLC vendor tags above; mediatx is the
+    # role that actually runs a stream. There is no installable "camera firmware" package.
+    "hikvision": _bash("hikvision", "Vendor tag for CVE lookup, not an installer", "# hikvision: vendor tag only, nothing to install here.\n"),
+    "dahua": _bash("dahua", "Vendor tag for CVE lookup, not an installer", "# dahua: vendor tag only, nothing to install here.\n"),
     "domain-joined": _bash(
         "domain-joined",
         "Marker — domain join is done in the Windows provisioner.",
@@ -700,6 +705,15 @@ if ($existing -ne "labforge.local") {
         '# DNS: bundled with AD DS install.' + "\n",
     ),
 }
+
+# Role names used by a bundled template that are really just a more specific name for an
+# installer above. Without these, the role silently gets no installer at all (it falls through to
+# the "no curated installer" stub) even though the near-identical bare name works fine — this bit
+# both the dfir-lab ('splunk-enterprise@9.3.0', only 'splunk' was registered) and telecom-ad-rts
+# ('pfsense-emulator', only 'pfsense' was registered; red-team-range's firewall already used
+# 'pfsense' correctly, same stand-in box, same intent).
+LINUX_INSTALLERS["splunk-enterprise"] = LINUX_INSTALLERS["splunk"]
+LINUX_INSTALLERS["pfsense-emulator"] = LINUX_INSTALLERS["pfsense"]
 
 
 def linux_snippet(role_id: str) -> RoleSnippet | None:

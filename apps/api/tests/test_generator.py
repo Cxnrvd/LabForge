@@ -82,3 +82,142 @@ def test_each_template_generates(all_template_paths, load_template):
             continue
         assert "Vagrantfile" in names, f"{path.name} missing Vagrantfile"
         assert "manifest.json" in names, f"{path.name} missing manifest"
+
+
+def test_coverage_warnings_flag_an_unmatched_role_and_a_notes_only_cve():
+    """generate_artifacts().warnings is what the Launch/README/build-log fix for the
+    splunk-enterprise and pfsense-emulator bugs relies on — prove it actually fires."""
+    from labforge_schema import (
+        Credentials,
+        LabConfig,
+        NodeConfig,
+        NodeType,
+        OsType,
+        Position,
+        TopologyNode,
+    )
+
+    from labforge_core.services.generator import generate_artifacts
+
+    node = TopologyNode(
+        id="srv",
+        type=NodeType.SERVER,
+        label="srv",
+        position=Position(x=0, y=0),
+        config=NodeConfig(
+            os=OsType.UBUNTU_2204,
+            ip="192.168.56.10",
+            hostname="srv",
+            roles=["not-a-real-role"],
+            cves=["CVE-2020-1472"],  # Zerologon: known but notes-only
+            credentials=Credentials(username="vagrant", password="vagrant"),
+        ),
+    )
+    topology = LabConfig(name="warn-test", network_cidr="192.168.56.0/24", nodes=[node])
+    artifacts = generate_artifacts(topology)
+    assert any("not-a-real-role" in w and "no curated installer" in w for w in artifacts.warnings)
+    assert any("CVE-2020-1472" in w and "notes only" in w for w in artifacts.warnings)
+    assert "## Warnings" in artifacts.readme
+    assert "not-a-real-role" in artifacts.readme or "CVE-2020-1472" in artifacts.readme
+
+
+def test_readme_cve_status_distinguishes_real_notes_only_and_unknown():
+    from labforge_schema import (
+        Credentials,
+        LabConfig,
+        NodeConfig,
+        NodeType,
+        OsType,
+        Position,
+        TopologyNode,
+    )
+
+    from labforge_core.services.generator import generate_artifacts
+
+    node = TopologyNode(
+        id="srv",
+        type=NodeType.SERVER,
+        label="srv",
+        position=Position(x=0, y=0),
+        config=NodeConfig(
+            os=OsType.UBUNTU_2204,
+            ip="192.168.56.10",
+            hostname="srv",
+            cves=["CVE-2021-44228", "CVE-2020-1472", "CVE-1999-9999"],
+            credentials=Credentials(username="vagrant", password="vagrant"),
+        ),
+    )
+    topology = LabConfig(name="cve-status-test", network_cidr="192.168.56.0/24", nodes=[node])
+    readme = generate_artifacts(topology).readme
+    assert "CVE-2021-44228` — a real vulnerable target is set up" in readme
+    assert "CVE-2020-1472` — notes only, nothing is set up" in readme
+    assert "CVE-1999-9999` — no curated provisioner" in readme
+
+
+def test_role_install_echo_line_shows_the_description_not_just_the_label():
+    """Previously 'begin role: X' looked identical whether X installed something real or had no
+    curated installer at all. The description must now be inline so a build log doesn't hide it."""
+    from labforge_schema import (
+        Credentials,
+        LabConfig,
+        NodeConfig,
+        NodeType,
+        OsType,
+        Position,
+        TopologyNode,
+    )
+
+    from labforge_core.services.generator import generate_artifacts
+
+    real = TopologyNode(
+        id="web",
+        type=NodeType.SERVER,
+        label="web",
+        position=Position(x=0, y=0),
+        config=NodeConfig(
+            os=OsType.UBUNTU_2204,
+            ip="192.168.56.10",
+            hostname="web",
+            roles=["apache"],
+            credentials=Credentials(username="vagrant", password="vagrant"),
+        ),
+    )
+    stub = TopologyNode(
+        id="bad",
+        type=NodeType.SERVER,
+        label="bad",
+        position=Position(x=0, y=0),
+        config=NodeConfig(
+            os=OsType.UBUNTU_2204,
+            ip="192.168.56.11",
+            hostname="bad",
+            roles=["not-a-real-role"],
+            credentials=Credentials(username="vagrant", password="vagrant"),
+        ),
+    )
+    topology = LabConfig(name="echo-test", network_cidr="192.168.56.0/24", nodes=[real, stub])
+    artifacts = generate_artifacts(topology)
+    assert "begin role: apache (" in artifacts.provisioner_scripts["provision_web.sh"]
+    assert "begin role: not-a-real-role (no curated installer)" in artifacts.provisioner_scripts["provision_bad.sh"]
+
+
+def test_dfir_lab_splunk_and_telecom_ad_rts_firewall_now_have_real_installers():
+    """Regression test for the two role-name-typo bugs: dfir-lab's splunk01 used
+    'splunk-enterprise@9.3.0' and telecom-ad-rts's fw01 used 'pfsense-emulator', neither of which
+    matched the registered 'splunk' / 'pfsense' installers, so neither node got anything installed."""
+    from labforge_core.services.generator import generate_artifacts
+    from labforge_core.services.template_loader import get_template
+
+    dfir = get_template("dfir-lab")
+    splunk_node = next(n for n in dfir.nodes if n.config.hostname == "splunk01")
+    assert splunk_node.config.roles == ["splunk-enterprise@9.3.0"]
+    dfir_artifacts = generate_artifacts(dfir)
+    assert dfir_artifacts.warnings == []
+    assert "splunkforwarder" in dfir_artifacts.provisioner_scripts["provision_splunk01.sh"]
+
+    telecom = get_template("telecom-ad-rts")
+    fw_node = next(n for n in telecom.nodes if n.config.hostname == "fw01")
+    assert fw_node.config.roles == ["pfsense-emulator"]
+    telecom_artifacts = generate_artifacts(telecom)
+    assert telecom_artifacts.warnings == []
+    assert "nftables" in telecom_artifacts.provisioner_scripts["provision_fw01.sh"]

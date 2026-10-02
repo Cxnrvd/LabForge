@@ -69,14 +69,21 @@ router/firewall appliances, etc.):
 {% endfor %}
 {% endif %}
 
-## CVEs preinstalled
+## CVEs
 
 {% set cve_ns = namespace(any=False) %}
 {% for n in topology.nodes %}{% if n.config.cves %}{% set cve_ns.any = True %}{% endif %}{% endfor %}
 {% if cve_ns.any %}
+Status is per CVE, not per node — pinning a CVE here does not by itself mean something vulnerable
+gets set up; see the status next to each one.
+
 {% for n in topology.nodes %}
 {% if n.config.cves %}
-- **{{ n.config.hostname }}**: {{ n.config.cves | join(', ') }}
+- **{{ n.config.hostname }}**:
+{% for cve in n.config.cves %}
+{% set status = cve_status(cve) %}
+  - `{{ cve }}` — {{ "a real vulnerable target is set up" if status.fully_provisioned else ("notes only, nothing is set up ("+ status.description +")" if status.known else "no curated provisioner, only a stub comment was added") }}
+{% endfor %}
 {% endif %}
 {% endfor %}
 {% else %}
@@ -93,6 +100,14 @@ _None — this is a clean topology._
 {% endfor %}
 {% else %}
 _No edges defined._
+{% endif %}
+
+{% if warnings %}
+## Warnings
+
+{% for w in warnings %}
+- {{ w }}
+{% endfor %}
 {% endif %}
 
 ## Troubleshooting
