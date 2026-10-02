@@ -54,7 +54,7 @@ cd C:\LabForge
 pnpm install
 uv venv
 pnpm run setup
-pnpm dev            # API on :8000, web on :3000
+pnpm dev            # API on :8000 (or the next free port), web on :3000
 ```
 
 Keep the workspace path short. Vagrant and VirtualBox break on very long Windows paths:
@@ -64,6 +64,22 @@ setx LABFORGE_WORKSPACE_ROOT C:\lf
 ```
 
 (open a new terminal after `setx`).
+
+## Windows machines in Docker
+
+A Docker lab can include Windows 10, 11 and Server 2019/2022 nodes. They run as a real Windows VM inside a container (the `dockurr/windows` image), not as a Windows container, so they have a desktop, registry, Event Log and Defender, and they sit on the same lab network as the Linux containers.
+
+Requirements: `/dev/kvm` must exist inside Docker. Check with
+
+```powershell
+docker run --rm --privileged alpine sh -c "ls -l /dev/kvm"
+```
+
+* First start downloads Windows and installs it: 30 to 60 minutes and several GB. LabForge waits up to 90 minutes for it. Do this the day before.
+* The disk is kept in a Docker volume named `<host>-storage`, so `docker compose stop` / `start` is fast. LabForge's Destroy removes the volume, so the next build installs Windows again.
+* Open the machine in a browser at the console link in the lab README (http://127.0.0.1:8006) or with Remote Desktop on the published 3389 port. Ports bind to 127.0.0.1 only.
+* Domain controllers, routers and firewalls are still VM-only. Roles on a Windows node (Sysmon, agents) are not applied in Docker, so the first-boot script only creates fictional documents to attack.
+* Needs at least 4 GB RAM per Windows node (LabForge raises smaller values) and about 64 GB disk each.
 
 ## 3. Check the machine before you build
 
@@ -121,3 +137,7 @@ Plan about 25 GB of disk per Windows guest plus 12 GB for the Linux boxes and to
 ## What is verified
 
 The Windows-specific logic (line endings, box choice, provider checks, stopping a build, the warnings) is covered by unit tests that simulate a Windows host. Generated Vagrantfiles and Linux provisioning scripts for every bundled template are syntax-checked with Ruby and bash. The actual VM boot on Windows has not been exercised from LabForge's development environment, which has no hypervisor, so the first real run on your PC is the final check. Run step 3 first.
+
+### `WinError 10013` when the API starts
+
+Windows reserves port ranges for Hyper-V, WSL2 and Docker Desktop, so port 8000 can be off limits. `pnpm dev` now tries 8000, 8010, 8080 and a few more and prints the one it picked. To force one: `$env:LABFORGE_API_PORT=8010; pnpm dev`. See what Windows reserves with `netsh int ipv4 show excludedportrange protocol=tcp`.

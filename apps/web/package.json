@@ -9,7 +9,7 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "generate:api-types": "node scripts/generate-api-types.mjs",
-    "postinstall": "node scripts/generate-api-types.mjs || true"
+    "postinstall": "node scripts/generate-api-types.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",

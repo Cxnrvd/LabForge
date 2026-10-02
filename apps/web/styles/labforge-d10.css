@@ -183,7 +183,7 @@
   font-weight: 600;
 }
 .lf .sidebar a.nav .badge.hot {
-  background: rgba(255, 138, 61, 0.18);
+  background: rgba(var(--d10-accent-rgb), 0.18);
   color: var(--d10-accent);
 }
 .lf .sidebar .footer {
@@ -201,7 +201,7 @@
   height: 7px;
   border-radius: 50%;
   background: var(--d10-ok);
-  box-shadow: 0 0 8px rgba(76, 217, 100, 0.5);
+  box-shadow: 0 0 8px rgba(var(--d10-ok-rgb), 0.5);
 }
 
 /* ============================================================
@@ -271,7 +271,7 @@
   height: 6px;
   border-radius: 50%;
   background: var(--d10-ok);
-  box-shadow: 0 0 6px rgba(76, 217, 100, 0.5);
+  box-shadow: 0 0 6px rgba(var(--d10-ok-rgb), 0.5);
 }
 
 /* ============================================================
@@ -461,11 +461,11 @@
   font-weight: 500;
 }
 .lf .pill.act {
-  background: rgba(76, 217, 100, 0.15);
+  background: rgba(var(--d10-ok-rgb), 0.15);
   color: var(--d10-ok);
 }
 .lf .pill.warn {
-  background: rgba(255, 138, 61, 0.15);
+  background: rgba(var(--d10-accent-rgb), 0.15);
   color: var(--d10-accent);
 }
 .lf .pill.mute {
@@ -510,11 +510,11 @@
 }
 .lf .sd.run {
   background: var(--d10-ok);
-  box-shadow: 0 0 8px rgba(76, 217, 100, 0.55);
+  box-shadow: 0 0 8px rgba(var(--d10-ok-rgb), 0.55);
 }
 .lf .sd.prov {
   background: var(--d10-accent);
-  box-shadow: 0 0 8px rgba(255, 138, 61, 0.55);
+  box-shadow: 0 0 8px rgba(var(--d10-accent-rgb), 0.55);
   animation: d10-pulse 1.4s ease-in-out infinite;
 }
 .lf .sd.stop {
@@ -655,7 +655,7 @@
 }
 .lf .spark span {
   flex: 1;
-  background: rgba(255, 138, 61, 0.4);
+  background: rgba(var(--d10-accent-rgb), 0.4);
   border-radius: 1px;
 }
 
@@ -720,7 +720,7 @@
   font-family: inherit;
 }
 .lf .filt .group .chip.act {
-  background: rgba(255, 138, 61, 0.2);
+  background: rgba(var(--d10-accent-rgb), 0.2);
   color: var(--d10-accent);
 }
 
@@ -1001,7 +1001,7 @@
 .lf .qt-card:hover {
   border-color: var(--d10-accent);
   transform: translateY(-2px);
-  box-shadow: 0 4px 14px -8px rgba(255, 138, 61, 0.45);
+  box-shadow: 0 4px 14px -8px rgba(var(--d10-accent-rgb), 0.45);
 }
 .lf .qt-card .qt-thumb {
   height: 72px;
@@ -1089,9 +1089,9 @@
   white-space: nowrap;
 }
 .lf .qt-card .qt-pill.ram {
-  background: rgba(255, 138, 61, 0.10);
+  background: rgba(var(--d10-accent-rgb), 0.10);
   color: var(--d10-accent);
-  border-color: rgba(255, 138, 61, 0.35);
+  border-color: rgba(var(--d10-accent-rgb), 0.35);
 }
 .lf .qt-card .qt-pill.ram strong {
   font-weight: 700;
@@ -1118,7 +1118,7 @@
 }
 .lf .v-card.selected {
   border-color: var(--d10-accent);
-  box-shadow: 0 0 0 2px rgba(255, 138, 61, 0.18);
+  box-shadow: 0 0 0 2px rgba(var(--d10-accent-rgb), 0.18);
 }
 .lf .v-card .top {
   display: flex;
@@ -1163,7 +1163,7 @@
   font-family: "JetBrains Mono", monospace;
 }
 .lf .v-card .v-chip.act {
-  background: rgba(255, 138, 61, 0.18);
+  background: rgba(var(--d10-accent-rgb), 0.18);
   color: var(--d10-accent);
 }
 

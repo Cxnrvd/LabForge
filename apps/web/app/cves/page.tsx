@@ -730,7 +730,7 @@ function CvesPageInner(): React.ReactElement {
                     style={
                       isSelected
                         ? {
-                            background: "rgba(255,138,61,0.04)",
+                            background: "rgba(var(--d10-accent-rgb), 0.04)",
                             cursor: "pointer",
                           }
                         : { cursor: "pointer" }
@@ -796,7 +796,7 @@ function CvesPageInner(): React.ReactElement {
                     width: 24,
                     height: 24,
                     borderRadius: 4,
-                    background: "rgba(255,138,61,0.15)",
+                    background: "rgba(var(--d10-accent-rgb), 0.15)",
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",

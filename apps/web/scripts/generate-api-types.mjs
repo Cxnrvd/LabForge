@@ -24,12 +24,16 @@ const outPath = resolve(__dirname, "..", "lib", "api", "generated.ts");
 const apiBase = process.env.API ?? "http://127.0.0.1:8000";
 const specUrl = `${apiBase}/openapi.json`;
 
+// Never fail an install because of this step. It runs through cmd.exe on
+// Windows, where the old `|| true` in package.json is not a command.
 async function main() {
   let spec;
   try {
-    const res = await fetch(specUrl);
+    const res = await fetch(specUrl, { signal: AbortSignal.timeout(3000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     spec = await res.text();
+    // Something else may be listening on the port (other dev servers do).
+    if (!JSON.parse(spec).openapi) throw new Error("not an OpenAPI document");
   } catch (err) {
     console.warn(
       `[generate-api-types] skipped — could not fetch ${specUrl}: ${err.message}`,
@@ -41,16 +45,28 @@ async function main() {
   }
 
   mkdirSync(dirname(outPath), { recursive: true });
+  // On Windows npx is npx.cmd, which spawn() only finds through a shell, so the
+  // path needs quoting there (it can contain spaces).
+  const isWin = process.platform === "win32";
   const result = spawnSync(
     "npx",
-    ["--yes", "openapi-typescript@^7", "-", "-o", outPath],
-    { input: spec, stdio: ["pipe", "inherit", "inherit"] },
+    ["--yes", "openapi-typescript@^7", "-o", isWin ? `"${outPath}"` : outPath],
+    {
+      input: spec,
+      stdio: ["pipe", "inherit", "inherit"],
+      shell: isWin,
+    },
   );
   if (result.status !== 0) {
-    console.error("[generate-api-types] openapi-typescript failed");
-    process.exit(result.status ?? 1);
+    console.warn(
+      "[generate-api-types] openapi-typescript failed; keeping the existing types. " +
+        "Re-run: node scripts/generate-api-types.mjs",
+    );
+    return;
   }
   console.log(`[generate-api-types] wrote ${outPath}`);
 }
 
-main();
+main().catch((err) => {
+  console.warn(`[generate-api-types] skipped: ${err?.message ?? err}`);
+});

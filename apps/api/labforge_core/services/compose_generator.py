@@ -61,6 +61,37 @@ _VM_ONLY: set[NodeType] = {
 
 _PROJECT_RE = re.compile(r"[^a-z0-9_-]+")
 
+# Windows guests run as a real Windows VM inside a container (the dockur/windows
+# image, which uses KVM). This is not a "Windows container": it has a desktop,
+# registry, event log and Defender, and it needs /dev/kvm in the Docker engine.
+WINDOWS_IMAGE = "dockurr/windows:latest"
+_WINDOWS_VERSION = {
+    "windows_10": "10",
+    "windows_11": "11",
+    "windows_server_2019": "2019",
+    "windows_server_2022": "2022",
+}
+WINDOWS_MIN_RAM_MB = 4096
+WINDOWS_DISK = "64G"
+WINDOWS_WEB_PORT = 8006  # browser console (VNC) shown in the README
+WINDOWS_RDP_PORT = 3389
+
+# Runs once inside the guest after Windows installs (dockur mounts /oem). It only
+# lays down fictional documents so a ransomware demo has something to encrypt.
+_WINDOWS_OEM_INSTALL = "\r\n".join(
+    [
+        "@echo off",
+        "rem LabForge: first-boot setup for a Windows lab guest (fictional data only).",
+        'set "D=C:\\Users\\Public\\Documents\\Finance"',
+        'mkdir "%D%" 2>nul',
+        'echo Q3 freight invoices - fictional lab data > "%D%\\invoices-q3.txt"',
+        'echo Payroll summary - fictional lab data > "%D%\\payroll-summary.txt"',
+        'echo Customer contracts - fictional lab data > "%D%\\contracts.txt"',
+        'echo LabForge guest ready > "C:\\labforge-ready.txt"',
+        "",
+    ]
+)
+
 
 def project_name(label: str) -> str:
     """Make a valid Compose project name (lowercase alnum, ``-`` and ``_``)."""
@@ -83,12 +114,23 @@ class ComposeArtifacts:
     project: str = "labforge"
     # True when the lab network has no route to the internet.
     isolated: bool = False
+    # Hostnames running as Windows guests (slow first boot, need KVM).
+    windows_hosts: list[str] = field(default_factory=list)
+
+
+def is_windows_guest(node: TopologyNode) -> bool:
+    """A Windows node that can run as a dockur/windows container (not a DC, router, ...)."""
+    return node.type not in _VM_ONLY and node.config.os.value in _WINDOWS_VERSION
+
+
+def has_windows_guests(topology: LabConfig) -> bool:
+    return any(is_windows_guest(n) for n in topology.nodes)
 
 
 def _is_container_capable(node: TopologyNode) -> bool:
     if node.type in _VM_ONLY:
         return False
-    return not node.config.os.value.startswith("windows")
+    return not node.config.os.value.startswith("windows") or is_windows_guest(node)
 
 
 def _peer_maps(topology: LabConfig) -> tuple[dict[str, str], dict[str, str]]:
@@ -149,6 +191,42 @@ def _pick_host_port(wanted: int, taken: set[int]) -> int:
     return port
 
 
+def _windows_service(
+    node: TopologyNode, warnings: list[str], extra_files: dict[str, bytes]
+) -> tuple[dict[str, object], dict[str, str]]:
+    host = node.config.hostname
+    ram = node.config.memory_mb
+    if ram < WINDOWS_MIN_RAM_MB:
+        warnings.append(
+            f"{host} asks for {ram} MB, below the {WINDOWS_MIN_RAM_MB} MB a Windows guest needs; using {WINDOWS_MIN_RAM_MB} MB"
+        )
+        ram = WINDOWS_MIN_RAM_MB
+    if node.config.roles:
+        warnings.append(
+            f"{host} is a Windows guest: roles ({', '.join(node.config.roles)}) are not applied in the docker runtime"
+        )
+    extra_files[f"oem/{host}/install.bat"] = _WINDOWS_OEM_INSTALL.encode()
+    env = {
+        "VERSION": _WINDOWS_VERSION[node.config.os.value],
+        "USERNAME": node.config.credentials.username,
+        "PASSWORD": node.config.credentials.password,
+        "RAM_SIZE": f"{ram}M",
+        "CPU_CORES": str(node.config.cpus),
+        "DISK_SIZE": WINDOWS_DISK,
+    }
+    service: dict[str, object] = {
+        "image": node.config.compose_image or WINDOWS_IMAGE,
+        "hostname": host,
+        "devices": ["/dev/kvm"],
+        "cap_add": ["NET_ADMIN"],
+        "stop_grace_period": "2m",
+        "restart": "on-failure:3",
+        "mem_limit": f"{ram + 1024}m",
+        "volumes": [f"{host}-storage:/storage", f"./oem/{host}:/oem:ro"],
+    }
+    return service, env
+
+
 def render(
     topology: LabConfig,
     *,
@@ -171,6 +249,7 @@ def render(
     taken_ports: set[int] = set()
     isolated = False
     primary_by_host: dict[str, DockerRole | None] = {}
+    windows_hosts: list[str] = []
 
     # First pass: decide which primary role each node runs, so ``depends_on``
     # can tell whether a dependency exposes a healthcheck.
@@ -192,6 +271,34 @@ def render(
                 f"{host} ({node.type.value}, {node.config.os.value}) needs a full VM. "
                 "It is not started in the docker runtime; use a VM provider for it.\n"
             )
+            continue
+
+        if is_windows_guest(node):
+            service, role_env = _windows_service(node, warnings, extra_files)
+            service["labels"] = {
+                "labforge.managed": "true",
+                "labforge.project": proj,
+                "labforge.node": node.id,
+            }
+            service["networks"] = {"labforge": {"ipv4_address": node.config.ip}}
+            service["env_file"] = [f"env/{host}.env"]
+            if node.config.ip == gateway:
+                warnings.append(
+                    f"{host} uses {gateway}, which Docker reserves as the network gateway; pick another address"
+                )
+            named_volumes.add(f"{host}-storage")
+            if publish == "loopback":
+                mappings = []
+                rendered_ports = []
+                for container_port in (WINDOWS_WEB_PORT, WINDOWS_RDP_PORT):
+                    host_port = _pick_host_port(container_port, taken_ports)
+                    mappings.append((host_port, container_port))
+                    rendered_ports.append(f"127.0.0.1:{host_port}:{container_port}")
+                service["ports"] = rendered_ports
+                published[host] = mappings
+            services[host] = service
+            env_files[f"env/{host}.env"] = _env_text(node, role_env, ", ".join(node.config.roles))
+            windows_hosts.append(host)
             continue
 
         primary = primary_by_host[host]
@@ -357,6 +464,18 @@ def render(
             services[host].pop("ports", None)
         published.clear()
 
+    if windows_hosts:
+        warnings.append(
+            f"{', '.join(windows_hosts)}: Windows guests run as real VMs inside a container. They need /dev/kvm "
+            "(nested virtualization) in the Docker engine, and the first start downloads Windows and installs it "
+            "(30 to 60 minutes, several GB). Later starts reuse the stored disk until the lab is destroyed."
+        )
+        if isolated:
+            warnings.append(
+                "The lab network is internal-only, so a Windows guest cannot download Windows on first start. "
+                "Build it once on a lab without an analysis role, or provide the ISO."
+            )
+
     document: dict[str, object] = {"name": proj, "services": services, "networks": {"labforge": network}}
     if named_volumes:
         document["volumes"] = {name: {} for name in sorted(named_volumes)}
@@ -370,6 +489,7 @@ def render(
         published_ports=published,
         project=proj,
         isolated=isolated,
+        windows_hosts=windows_hosts,
     )
 
 
@@ -424,6 +544,12 @@ def render_readme(topology: LabConfig, artifacts: ComposeArtifacts) -> str:
         for host, mappings in artifacts.published_ports.items():
             node = by_host[host]
             for host_port, container_port in mappings:
+                if host in artifacts.windows_hosts:
+                    if container_port == WINDOWS_WEB_PORT:
+                        lines.append(f"- Windows console ({host}): http://127.0.0.1:{host_port}")
+                    else:
+                        lines.append(f"- Remote Desktop ({host}): 127.0.0.1:{host_port}")
+                    continue
                 role_name = next((parse_role(r)[0] for r in node.config.roles if parse_role(r)[0] in _WEB_ROLES), None)
                 if role_name and container_port in DOCKER_ROLES[role_name].ports[:1]:
                     path, label = _WEB_ROLES[role_name]

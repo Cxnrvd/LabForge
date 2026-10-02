@@ -668,7 +668,7 @@ export default function SettingsPage(): React.ReactElement {
                         cursor: "pointer",
                         color: "var(--d10-fg)",
                         boxShadow: selected
-                          ? "0 0 0 2px rgba(255,138,61,0.18)"
+                          ? "0 0 0 2px rgba(var(--d10-accent-rgb), 0.18)"
                           : undefined,
                       }}
                     >

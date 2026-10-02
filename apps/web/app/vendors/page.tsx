@@ -671,7 +671,7 @@ function VendorsIntro(): React.ReactElement | null {
         margin: "14px 14px 0",
         padding: "14px 16px 16px",
         background:
-          "linear-gradient(135deg, rgba(255,138,61,0.08), rgba(255,138,61,0.02))",
+          "linear-gradient(135deg, rgba(var(--d10-accent-rgb), 0.08), rgba(var(--d10-accent-rgb), 0.02))",
         border: "1px solid var(--d10-border)",
         borderLeft: "3px solid var(--d10-accent)",
         borderRadius: 8,
@@ -825,7 +825,7 @@ function IntroStep({
           width: 18,
           height: 18,
           borderRadius: "50%",
-          background: "rgba(255,138,61,0.15)",
+          background: "rgba(var(--d10-accent-rgb), 0.15)",
           color: "var(--d10-accent)",
           display: "flex",
           alignItems: "center",
