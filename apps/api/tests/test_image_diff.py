@@ -209,3 +209,13 @@ def test_build_preflight_reports_image_readiness_and_the_workspace(local):
     assert states[ES] == "ready" and states[KIBANA] == "ready" and states[KALI] == "missing"
     assert ES in body["images"]["present_ids"] and KALI in body["images"]["missing_ids"]
     assert TestClient(app).get("/api/v1/labs/build/preflight", params={"template_id": "nope"}).status_code == 404
+
+
+def test_every_listed_image_has_a_unique_id(local):
+    """The UI uses the id as a React key. Boxes must appear once, as vagrant-box, never also as docker."""
+    entries = images.list_images()["images"]
+    ids = [e["id"] for e in entries]
+    assert len(ids) == len(set(ids))
+    boxes = [e for e in entries if e["id"].startswith("box:")]
+    assert boxes and {e["kind"] for e in boxes} == {"vagrant-box"}
+    assert not any(s.id.startswith(("box:", "vm:")) for s in images.catalog().values())

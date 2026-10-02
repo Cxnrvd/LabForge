@@ -566,6 +566,9 @@ html.dark ::selection { background: rgba(90, 169, 224, 0.32); }
 .lf .cell-ellipsis { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lf .nowrap { white-space: nowrap; }
 .lf .tb2 { overflow-x: auto; scrollbar-width: none; }
+/* The toolbars sit in a column flex frame. overflow-x on tb2 lets it shrink to nothing when the page
+   below is tall, so none of the three rows may shrink. */
+.lf .tb1, .lf .tb2, .lf .tb3 { flex-shrink: 0; }
 .lf .tb2 .tab { white-space: nowrap; flex-shrink: 0; }
 .lf .tb3 { flex-wrap: wrap; row-gap: 8px; }
 .lf .topo-mini .n { max-width: 44%; overflow: hidden; text-overflow: ellipsis; padding: 5px 8px; }

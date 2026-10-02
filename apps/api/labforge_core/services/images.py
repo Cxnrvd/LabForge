@@ -230,8 +230,12 @@ def catalog() -> dict[str, Spec]:
 def _build_catalog() -> dict[str, Spec]:
     specs: dict[str, Spec] = {}
     for template in list_templates():
+        if template.provider.value != "docker":
+            continue  # VM boxes are listed from _box_requirements, never as Docker images
         for req in topology_images(template):
             for image_id in req["ids"]:
+                if image_id.startswith(("box:", "vm:")):
+                    continue
                 kind = "windows-base" if image_id in WINDOWS_BASES else "docker"
                 name, tag = (WINDOWS_BASES[image_id][1] + " base", "dockurr/windows") if kind == "windows-base" else _split_ref(image_id)
                 spec = specs.setdefault(image_id, Spec(image_id, kind, name, tag, custom=name.startswith("labforge/")))
