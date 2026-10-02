@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 
@@ -51,3 +52,28 @@ def test_ansi_colour_codes_are_stripped_from_the_log_tail(monkeypatch, tmp_path)
     monkeypatch.setattr(daemon.subprocess, "run", run)
     monkeypatch.setattr(daemon, "_compose_project", lambda ws: "lf1-test")
     assert daemon._compose_log_tail(tmp_path) == ["Downloading Windows 10"]
+
+
+def test_a_windows_container_is_installing_until_the_guest_answers(monkeypatch, tmp_path):
+    rows = [
+        {"Service": "elastic", "Name": "p-elastic-1", "State": "running", "Health": "healthy", "Image": "elastic:8"},
+        {"Service": "ws", "Name": "p-ws-1", "State": "running", "Health": "", "Image": "dockurr/windows:latest"},
+    ]
+
+    class Done:
+        returncode = 0
+        stdout = json.dumps(rows)
+
+    monkeypatch.setattr(daemon.subprocess, "run", lambda *a, **k: Done())
+    monkeypatch.setattr(daemon, "_compose_project", lambda ws: "p")
+    daemon._WINDOWS_READY.clear()
+    ready = {"value": False}
+    monkeypatch.setattr(daemon, "_windows_ready", lambda name: ready["value"])
+
+    status, vms = daemon._compose_status(tmp_path)
+    states = {v["hostname"]: v["state"] for v in vms}
+    assert states == {"elastic": "running", "ws": "installing"} and status == "partial"
+
+    ready["value"] = True
+    status, vms = daemon._compose_status(tmp_path)
+    assert {v["state"] for v in vms} == {"running"} and status == "running"

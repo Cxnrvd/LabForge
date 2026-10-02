@@ -76,6 +76,35 @@ def _compose_project(workspace: Path) -> str | None:
     return None
 
 
+_WINDOWS_READY: set[str] = set()
+
+
+def _windows_ready(container: str) -> bool:
+    """True once the Windows guest behind a dockurr container accepts connections on 3389."""
+    if not container:
+        return True
+    if container in _WINDOWS_READY:
+        return True
+    try:
+        nat = subprocess.run(
+            ["docker", "exec", container, "sh", "-c", "iptables -t nat -S QEMU_DNAT 2>/dev/null | tail -1"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15, check=False,
+        ).stdout
+        m = re.search(r"--to-destination (\d+\.\d+\.\d+\.\d+)", nat)
+        if not m:
+            return False
+        probe = subprocess.run(
+            ["docker", "exec", container, "bash", "-c", f"(echo > /dev/tcp/{m.group(1)}/3389) >/dev/null 2>&1"],
+            capture_output=True, timeout=15, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if probe.returncode == 0:
+        _WINDOWS_READY.add(container)
+        return True
+    return False
+
+
 def _compose_status(workspace: Path) -> tuple[str, list[dict]]:
     """``docker compose ps`` for a docker-runtime lab.
 
@@ -122,6 +151,11 @@ def _compose_status(workspace: Path) -> tuple[str, list[dict]]:
         health = (row.get("Health") or "").lower()
         if state == "running" and health in ("starting", "unhealthy"):
             state = health
+        if state == "running" and "dockurr/windows" in str(row.get("Image", "")):
+            # The container is up long before Windows is: download, setup and first boot take
+            # 10 to 45 minutes. Report "installing" until the guest answers on its RDP port.
+            if not _windows_ready(row.get("Name", "")):
+                state = "installing"
         vms.append(
             {
                 "hostname": row.get("Service") or row.get("Name", "?"),
