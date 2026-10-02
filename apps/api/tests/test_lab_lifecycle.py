@@ -70,7 +70,7 @@ def session():
 
 
 def _build(session, tmp_path) -> Lab:
-    return build_runner.start_build_detailed(get_template("ransomware-intrusion-lab"), session, tmp_path).lab
+    return build_runner.start_build_detailed(get_template("ransomware-intrusion-linux-lab"), session, tmp_path).lab
 
 
 def _finish_build(lab: Lab, code: int = 0) -> None:
@@ -252,7 +252,7 @@ def test_build_shim_drops_pull_progress_noise_and_writes_the_exit_file(tmp_path)
 def test_endpoints_are_read_back_from_a_built_workspace(tmp_path):
     from labforge_core.services.compose_generator import build_bundle, endpoints_from_workspace
 
-    files, _ = build_bundle(get_template("ransomware-intrusion-lab"), project="lf7-x", port_free=lambda p: p != 9200)
+    files, _ = build_bundle(get_template("ransomware-intrusion-linux-lab"), project="lf7-x", port_free=lambda p: p != 9200)
     for rel, content in files.items():
         target = tmp_path / rel
         target.parent.mkdir(parents=True, exist_ok=True)

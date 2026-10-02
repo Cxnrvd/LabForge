@@ -39,7 +39,7 @@ from pathlib import Path
 import yaml  # provided indirectly by uvicorn[standard] -> pyyaml
 from labforge_schema import LabConfig, NodeType, TopologyNode
 
-from labforge_core.services import hostenv
+from labforge_core.services import hostenv, windows_oem
 from labforge_core.services.docker_roles import (
     DOCKER_ROLES,
     OS_FALLBACK_IMAGE,
@@ -73,27 +73,11 @@ _WINDOWS_VERSION = {
     "windows_server_2019": "2019",
     "windows_server_2022": "2022",
 }
-WINDOWS_MIN_RAM_MB = 4096
+# dockurr/windows itself refuses less than 2 GB for Windows 10.
+WINDOWS_MIN_RAM_MB = 2048
 WINDOWS_DISK = "64G"
 WINDOWS_WEB_PORT = 8006  # browser console (VNC) shown in the README
 WINDOWS_RDP_PORT = 3389
-
-# Runs once inside the guest after Windows installs (dockur mounts /oem). It only
-# lays down fictional documents so a ransomware demo has something to encrypt.
-_WINDOWS_OEM_INSTALL = "\r\n".join(
-    [
-        "@echo off",
-        "rem LabForge: first-boot setup for a Windows lab guest (fictional data only).",
-        'set "D=C:\\Users\\Public\\Documents\\Finance"',
-        'mkdir "%D%" 2>nul',
-        'echo Q3 freight invoices - fictional lab data > "%D%\\invoices-q3.txt"',
-        'echo Payroll summary - fictional lab data > "%D%\\payroll-summary.txt"',
-        'echo Customer contracts - fictional lab data > "%D%\\contracts.txt"',
-        'echo LabForge guest ready > "C:\\labforge-ready.txt"',
-        "",
-    ]
-)
-
 
 def project_name(label: str) -> str:
     """Make a valid Compose project name (lowercase alnum, ``-`` and ``_``)."""
@@ -216,7 +200,10 @@ def host_port_free(port: int) -> bool:
 
 
 def _windows_service(
-    node: TopologyNode, warnings: list[str], extra_files: dict[str, bytes]
+    node: TopologyNode,
+    warnings: list[str],
+    extra_files: dict[str, bytes],
+    elastic_ip: str | None = None,
 ) -> tuple[dict[str, object], dict[str, str]]:
     host = node.config.hostname
     ram = node.config.memory_mb
@@ -229,12 +216,16 @@ def _windows_service(
         warnings.append(
             f"{host} is a Windows guest: roles ({', '.join(node.config.roles)}) are not applied in the docker runtime"
         )
-    extra_files[f"oem/{host}/install.bat"] = _WINDOWS_OEM_INSTALL.encode()
+    extra_files[f"oem/{host}/install.bat"] = windows_oem.install_bat(with_setup=bool(elastic_ip)).encode()
+    configs = [{"source": f"oem-{host}", "target": "/oem/install.bat", "mode": 0o444}]
+    if elastic_ip:
+        extra_files[f"oem/{host}/setup.ps1"] = windows_oem.setup_ps1(hostname=host, elastic_ip=elastic_ip).encode()
+        configs.append({"source": f"oem-{host}-setup", "target": "/oem/setup.ps1", "mode": 0o444})
     env = {
         "VERSION": _WINDOWS_VERSION[node.config.os.value],
         "USERNAME": node.config.credentials.username,
         "PASSWORD": node.config.credentials.password,
-        "RAM_SIZE": f"{ram}M",
+        "RAM_SIZE": f"{ram // 1024}G" if ram % 1024 == 0 else f"{ram}M",
         "CPU_CORES": str(node.config.cpus),
         "DISK_SIZE": WINDOWS_DISK,
         # dockurr/windows measures free memory as the cgroup limit minus memory.current, and
@@ -254,7 +245,7 @@ def _windows_service(
         "volumes": [f"{host}-storage:/storage"],
         # Injected by Compose (not a bind mount), so it also works when the API itself runs in a
         # container and the workspace path means nothing to the Docker engine.
-        "configs": [{"source": f"oem-{host}", "target": "/oem/install.bat", "mode": 0o444}],
+        "configs": configs,
     }
     return service, env
 
@@ -308,7 +299,11 @@ def render(
             continue
 
         if is_windows_guest(node):
-            service, role_env = _windows_service(node, warnings, extra_files)
+            elastic_ip = ip_by_role.get("elastic")
+            service, role_env = _windows_service(node, warnings, extra_files, elastic_ip)
+            if "elastic" in host_by_role:
+                # Winlogbeat in the guest ships to Elasticsearch, so wait for it.
+                service["depends_on"] = {host_by_role["elastic"]: {"condition": "service_healthy"}}
             service["labels"] = {
                 "labforge.managed": "true",
                 "labforge.project": proj,
@@ -321,7 +316,11 @@ def render(
                     f"{host} uses {gateway}, which Docker reserves as the network gateway; pick another address"
                 )
             named_volumes.add(f"{host}-storage")
-            config_docs[f"oem-{host}"] = {"content": _WINDOWS_OEM_INSTALL}
+            config_docs[f"oem-{host}"] = {"content": windows_oem.install_bat(with_setup=bool(elastic_ip))}
+            if elastic_ip:
+                config_docs[f"oem-{host}-setup"] = {
+                    "content": windows_oem.setup_ps1(hostname=host, elastic_ip=elastic_ip)
+                }
             if publish == "loopback":
                 mappings = []
                 rendered_ports = []
@@ -515,7 +514,7 @@ def render(
         for host_port, container_port in mappings:
             if host_port != container_port:
                 warnings.append(
-                    f"{host}: port {container_port} is not available (another service or program uses it), "
+                    f"{host}: port {container_port} is already taken (by another service in this lab or a program on this computer), "
                     f"so it is published on 127.0.0.1:{host_port} instead."
                 )
 

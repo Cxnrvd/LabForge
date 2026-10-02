@@ -14,7 +14,7 @@ from labforge_core.services import docker_roles
 from labforge_core.services.compose_generator import build_bundle
 from labforge_core.services.template_loader import get_template
 
-LAB_TEMPLATES = ["ransomware-intrusion-lab", "malware-triage-lab"]
+LAB_TEMPLATES = ["ransomware-intrusion-lab", "ransomware-intrusion-linux-lab", "malware-triage-lab"]
 ROLES_DIR = Path(docker_roles.__file__).resolve().parents[1] / "docker_roles"
 
 

@@ -1,7 +1,7 @@
 {
-  "id": "ransomware-intrusion-lab",
-  "name": "Ransomware Intrusion Hunt (Docker, Windows)",
-  "description": "Elasticsearch + Kibana preloaded with about 24k synthetic Harborline Logistics events (a full double extortion intrusion, VPN to encryption), 17 saved searches, an answer key, an analyst shell, a Kali attacker and two real Windows 10 workstations that ship Sysmon and Windows logs to Elasticsearch with Winlogbeat. The Windows guests download Windows on first boot (about 35 to 45 minutes once, then kept in a local volume). All data is fictional. A Linux only version is the fallback.",
+  "id": "ransomware-intrusion-linux-lab",
+  "name": "Ransomware Intrusion Hunt (Docker, Linux only)",
+  "description": "Elasticsearch + Kibana preloaded with ~24k synthetic Harborline Logistics events containing a full double-extortion ransomware intrusion (VPN to encryption). 17 saved searches, an answer key, and an analyst shell. Linux only fallback with no Windows guests (small, fast, no KVM needed). Runs in Docker; all data is fictional.",
   "network_cidr": "10.250.10.0/24",
   "provider": "docker",
   "version": "1.0",
@@ -109,78 +109,6 @@
         "vlan": null,
         "gateway": "10.250.10.1"
       }
-    },
-    {
-      "id": "kali",
-      "type": "attacker",
-      "label": "Kali attacker",
-      "position": {
-        "x": 0,
-        "y": 260
-      },
-      "config": {
-        "os": "kali_rolling",
-        "ip": "10.250.10.30",
-        "hostname": "kali",
-        "cves": [],
-        "roles": [],
-        "memory_mb": 1024,
-        "cpus": 1,
-        "credentials": {
-          "username": "kali",
-          "password": "LabForge!2026"
-        },
-        "vlan": null,
-        "gateway": "10.250.10.1"
-      }
-    },
-    {
-      "id": "ws-acc-014",
-      "type": "workstation",
-      "label": "WS-ACC-014 (Windows 10)",
-      "position": {
-        "x": -450,
-        "y": -260
-      },
-      "config": {
-        "os": "windows_10",
-        "ip": "10.250.10.31",
-        "hostname": "ws-acc-014",
-        "cves": [],
-        "roles": [],
-        "memory_mb": 3072,
-        "cpus": 1,
-        "credentials": {
-          "username": "labadmin",
-          "password": "LabForge!2026"
-        },
-        "vlan": null,
-        "gateway": "10.250.10.1"
-      }
-    },
-    {
-      "id": "ws-ops-003",
-      "type": "workstation",
-      "label": "WS-OPS-003 (Windows 10)",
-      "position": {
-        "x": 0,
-        "y": -260
-      },
-      "config": {
-        "os": "windows_10",
-        "ip": "10.250.10.32",
-        "hostname": "ws-ops-003",
-        "cves": [],
-        "roles": [],
-        "memory_mb": 3072,
-        "cpus": 1,
-        "credentials": {
-          "username": "labadmin",
-          "password": "LabForge!2026"
-        },
-        "vlan": null,
-        "gateway": "10.250.10.1"
-      }
     }
   ],
   "edges": [
@@ -207,30 +135,6 @@
       "protocol": "tcp",
       "port": 9200,
       "label": "esq"
-    },
-    {
-      "id": "e4",
-      "source": "ws-acc-014",
-      "target": "elastic",
-      "protocol": "tcp",
-      "port": 9200,
-      "label": "winlogbeat"
-    },
-    {
-      "id": "e5",
-      "source": "ws-ops-003",
-      "target": "elastic",
-      "protocol": "tcp",
-      "port": 9200,
-      "label": "winlogbeat"
-    },
-    {
-      "id": "e6",
-      "source": "kali",
-      "target": "ws-acc-014",
-      "protocol": "tcp",
-      "port": 3389,
-      "label": "rdp"
     }
   ]
 }

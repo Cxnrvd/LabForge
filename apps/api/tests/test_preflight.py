@@ -56,7 +56,7 @@ def test_host_port_free_sees_a_listener():
 
 
 def test_build_moves_a_busy_port_and_says_so():
-    topology = get_template("ransomware-intrusion-lab")
+    topology = get_template("ransomware-intrusion-linux-lab")
     art = compose_generator.render(topology, port_free=lambda p: p != 9200)
     assert any(host_port == 10200 for ports in art.published_ports.values() for host_port, _ in ports)
     assert any("10200" in w for w in art.warnings)
@@ -130,13 +130,13 @@ def test_ports_published_by_our_own_labs_are_not_conflicts(healthy, monkeypatch)
 
 def test_blocking_problem_names_the_check(healthy, monkeypatch):
     monkeypatch.setattr(preflight, "docker_memory_mb", lambda: 2048)
-    code, message = preflight.blocking_problem(get_template("ransomware-intrusion-lab"))
+    code, message = preflight.blocking_problem(get_template("ransomware-intrusion-linux-lab"))
     assert code == "preflight_docker_memory"
     assert "wsl --shutdown" in message
 
 
 def test_blocking_problem_is_none_when_ready(healthy):
-    assert preflight.blocking_problem(get_template("ransomware-intrusion-lab")) is None
+    assert preflight.blocking_problem(get_template("ransomware-intrusion-linux-lab")) is None
 
 
 def test_preflight_route(healthy):

@@ -70,3 +70,15 @@ catalog deletion, mass encryption (`.hlq1x`, ransom note), then log clearing.
 - 42-45 Detections you would write, and what would have stopped it at stage 01 to 03.
 
 Have the lab running 15 minutes before you go live. Keep the answer key tab closed.
+
+## Windows version and the Linux fallback
+
+`ransomware-intrusion-lab` now also starts a Kali attacker and two real Windows 10 workstations
+(`ws-acc-014`, `ws-ops-003`, 3 GB RAM, 1 CPU, 64 GB disk each). On first boot each guest creates the
+fictional finance files, installs Sysmon and installs Winlogbeat, which ships Windows, Sysmon and
+PowerShell events to Elasticsearch (`winlogbeat-labforge-*`). The downloads need internet inside the
+guest and are best effort: see `C:\labforge-setup.log` in the guest if something is missing.
+Each guest has its own console and RDP port on 127.0.0.1 (see the lab README for the exact ports).
+
+The first start downloads Windows and takes about 35 to 45 minutes once. If you need a small, fast
+lab without KVM, use `ransomware-intrusion-linux-lab`, which is the previous Linux only version.
