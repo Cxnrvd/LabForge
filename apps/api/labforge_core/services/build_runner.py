@@ -430,7 +430,7 @@ def _vagrant_teardown(workspace: Path) -> str | None:
             ["vagrant", "destroy", "-f"],
             cwd=str(workspace),
             capture_output=True,
-            text=True,
+            text=True, errors="replace",
             timeout=600,
             check=False,
         )
@@ -627,7 +627,7 @@ def _provider_vms_running(workspace: Path) -> int:
         out = subprocess.run(
             [*_vboxmanage_command(), "list", "runningvms"],
             capture_output=True,
-            text=True,
+            text=True, errors="replace",
             timeout=5,
             check=False,
         )

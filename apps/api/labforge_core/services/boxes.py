@@ -81,7 +81,7 @@ def cached_boxes() -> set[tuple[str, str]]:
     """``{(box, provider)}`` already downloaded."""
     try:
         proc = subprocess.run(
-            ["vagrant", "box", "list"], capture_output=True, text=True, timeout=30, check=False
+            ["vagrant", "box", "list"], capture_output=True, text=True, errors="replace", timeout=30, check=False
         )
     except (OSError, subprocess.SubprocessError):
         return set()

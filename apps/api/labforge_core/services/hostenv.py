@@ -121,7 +121,7 @@ def host_memory_mb() -> int | None:
             ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status))  # type: ignore[attr-defined]
             return int(status.ullTotalPhys // (1024 * 1024))
         if is_macos():
-            out = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=5, check=False)
+            out = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, errors="replace", timeout=5, check=False)
             return int(out.stdout.strip()) // (1024 * 1024)
         for line in Path("/proc/meminfo").read_text().splitlines():
             if line.startswith("MemTotal:"):
@@ -189,7 +189,7 @@ def host_ip_conflicts(cidr: str) -> list[str]:
 
 def _run(args: list[str], timeout: float = 15) -> subprocess.CompletedProcess[str] | None:
     try:
-        return subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
+        return subprocess.run(args, capture_output=True, text=True, errors="replace", timeout=timeout, check=False)
     except (OSError, subprocess.SubprocessError):
         return None
 

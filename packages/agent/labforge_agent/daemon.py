@@ -31,7 +31,7 @@ def _vagrant_status(workspace: Path) -> tuple[str, list[dict]]:
             cwd=str(workspace),
             check=False,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=15,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -94,7 +94,7 @@ def _compose_status(workspace: Path) -> tuple[str, list[dict]]:
             cwd=str(workspace),
             check=False,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=20,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -170,7 +170,7 @@ def _compose_log_tail(workspace: Path, max_lines: int = 50) -> list[str]:
             cwd=str(workspace),
             check=False,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=15,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -229,7 +229,7 @@ def _detect_capture_ifaces(ip_map: dict[str, str]) -> list[str]:
         if shutil.which("ip"):
             proc = subprocess.run(
                 ["ip", "-o", "-4", "addr"],
-                capture_output=True, text=True, check=False, timeout=5,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=5,
             )
             for line in proc.stdout.splitlines():
                 parts = line.split()
@@ -242,7 +242,7 @@ def _detect_capture_ifaces(ip_map: dict[str, str]) -> list[str]:
         # macOS / BSD: ifconfig
         if shutil.which("ifconfig"):
             proc = subprocess.run(
-                ["ifconfig"], capture_output=True, text=True, check=False, timeout=5,
+                ["ifconfig"], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=5,
             )
             current: str | None = None
             for raw in proc.stdout.splitlines():
@@ -278,7 +278,7 @@ def _capture_flows(ifaces: list[str], duration: float) -> list[dict]:
                 ["tcpdump", "-i", iface, "-nn", "-q",
                  "-G", str(int(duration)), "-W", "1",
                  "-c", "500"],
-                capture_output=True, text=True, check=False, timeout=timeout,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=timeout,
             )
         except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError):
             continue
@@ -361,28 +361,29 @@ def run(
             if not workspace.exists() or stop_file.exists():
                 break
 
-            if build_exit.exists():
-                lab_status, vms = (
-                    _compose_status(workspace) if docker_mode else _vagrant_status(workspace)
-                )
-                for vm in vms:
-                    vm["ip"] = ip_map.get(vm["hostname"])
-            else:
-                lab_status, vms = "building", []
-            flows = _capture_flows(capture_ifaces, capture_window)
-            payload = {
-                "lab_status": lab_status,
-                "vms": vms,
-                "log_tail": _compose_log_tail(workspace) if docker_mode else _tail_logs(workspace),
-                "flows": flows,
-                "captured_at": datetime.utcnow().isoformat(),
-            }
             try:
+                if build_exit.exists():
+                    lab_status, vms = (
+                        _compose_status(workspace) if docker_mode else _vagrant_status(workspace)
+                    )
+                    for vm in vms:
+                        vm["ip"] = ip_map.get(vm["hostname"])
+                else:
+                    lab_status, vms = "building", []
+                flows = _capture_flows(capture_ifaces, capture_window)
+                payload = {
+                    "lab_status": lab_status,
+                    "vms": vms,
+                    "log_tail": _compose_log_tail(workspace) if docker_mode else _tail_logs(workspace),
+                    "flows": flows,
+                    "captured_at": datetime.utcnow().isoformat(),
+                }
                 client.post(f"/api/v1/labs/{lab_id}/heartbeat", json=payload)
-            except httpx.HTTPError as exc:
-                # Silent failure — the daemon should never crash on a
-                # transient API outage. Log to stderr for debugging.
-                print(f"[daemon] heartbeat POST failed: {exc}", file=sys.stderr)
+            except Exception as exc:
+                # The daemon must outlive anything a single sample throws at it (an API outage,
+                # undecodable log bytes, a docker call that hangs). One bad sample is not the
+                # end of the monitor.
+                print(f"[daemon] heartbeat failed: {type(exc).__name__}: {exc}", file=sys.stderr)
 
             if one_shot:
                 return 0

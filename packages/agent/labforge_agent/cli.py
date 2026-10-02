@@ -431,7 +431,7 @@ def doctor(
             r = subprocess.run(
                 ["powershell", "-NoProfile", "-Command",
                  "(Get-CimInstance Win32_OptionalFeature -Filter \"Name='Microsoft-Hyper-V-All'\").InstallState"],
-                capture_output=True, text=True, timeout=10, check=False,
+                capture_output=True, text=True, errors="replace", timeout=10, check=False,
             )
             state = (r.stdout or "").strip()
             # 1 = installed/enabled, 2 = absent, 3 = disabled-but-payload-present
