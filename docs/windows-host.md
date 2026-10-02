@@ -87,13 +87,15 @@ Requirements: `/dev/kvm` must exist inside Docker. Check with
 docker run --rm --privileged alpine sh -c "ls -l /dev/kvm"
 ```
 
-* First start downloads Windows and installs it: about FIRSTBOOT. LabForge waits up to 90 minutes for it. Do this the day before. The build reports done as soon as the container is up, long before Windows is usable; watch the web console (port 8006) for the real state.
+* First start downloads Windows and installs it: about 45 minutes on a 4 MB/s connection (measured: 34 minutes downloading the 6 GB Windows 10 ISO, then about 11 minutes of setup and first boot until the desktop and the fictional Finance files existed). With the ISO already in the volume it is the 11 minutes. LabForge waits up to 90 minutes for it. Do this the day before. The build reports done as soon as the container is up, long before Windows is usable; watch the web console (port 8006) for the real state.
 * LabForge turns off dockurr's own free-memory check (`RAM_CHECK=N`) and gives the container 2 GB above the guest's RAM. Without that, the 6 GB installer ISO fills the container's page cache, dockurr counts it as used memory and stops with "requires at least 2.0 GB of RAM, but only 828 MB can be allocated".
 * Give Docker enough memory first. Docker Desktop's limit (not your PC's RAM) is what counts: `%UserProfile%\.wslconfig` with `[wsl2]` and `memory=12GB`, then `wsl --shutdown`.
 * The disk is kept in a Docker volume named `<host>-storage`, so `docker compose stop` / `start` is fast. LabForge's Destroy removes the volume, so the next build installs Windows again.
 * Open the machine in a browser at the console link in the lab README (http://127.0.0.1:8006) or with Remote Desktop on the published 3389 port. Ports bind to 127.0.0.1 only.
 * Domain controllers, routers and firewalls are still VM-only. Roles on a Windows node (Sysmon, agents) are not applied in Docker, so the first-boot script only creates fictional documents to attack.
 * Needs at least 4 GB RAM per Windows node (LabForge raises smaller values) and about 64 GB disk each.
+
+Verified on a real run (Windows 10, Docker Desktop 29, WSL2, KVM): the web console on http://127.0.0.1:8006 works and showed Setup and then the desktop; the OEM script created `C:\Users\Public\Documents\Finance` (three fictional files) and `C:\labforge-ready.txt`. Remote Desktop answers inside the lab network (checked from a helper container), but on this PC the published `127.0.0.1:3389` accepted the connection and then closed it without an RDP handshake. Use the web console until that is sorted out.
 
 ## 3. Check the machine before you build
 
