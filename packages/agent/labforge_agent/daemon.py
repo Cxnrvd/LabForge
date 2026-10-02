@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 from collections import deque
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Iterable
 
@@ -173,6 +173,24 @@ def _compose_status(workspace: Path) -> tuple[str, list[dict]]:
     else:
         lab_status = "partial"
     return lab_status, vms
+
+
+def _never_built(workspace: Path) -> list[dict]:
+    """Nodes the topology asked for that this build never attempted — read straight from the
+    notes/<hostname>.txt files the Docker generator itself writes for every skipped node
+    (compose_generator.build_bundle), so this can never drift from what the build actually did."""
+    notes_dir = workspace / "notes"
+    if not notes_dir.is_dir():
+        return []
+    out: list[dict] = []
+    for path in sorted(notes_dir.glob("*.txt")):
+        try:
+            reason = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if reason:
+            out.append({"hostname": path.stem, "reason": reason})
+    return out
 
 
 def _topology_ip_map(workspace: Path) -> dict[str, str]:
@@ -413,7 +431,8 @@ def run(
                     "vms": vms,
                     "log_tail": _compose_log_tail(workspace) if docker_mode else _tail_logs(workspace),
                     "flows": flows,
-                    "captured_at": datetime.utcnow().isoformat(),
+                    "never_built": _never_built(workspace),
+                    "captured_at": datetime.now(UTC).isoformat(),
                 }
                 client.post(f"/api/v1/labs/{lab_id}/heartbeat", json=payload)
             except Exception as exc:
@@ -462,7 +481,7 @@ def spawn_detached(
     ]
     log_path = workspace / "daemon.log"
     fh = log_path.open("a", encoding="utf-8")
-    fh.write(f"\n--- daemon start {datetime.utcnow().isoformat()} ---\n")
+    fh.write(f"\n--- daemon start {datetime.now(UTC).isoformat()} ---\n")
     fh.flush()
     env = {**os.environ}
     if api_token:

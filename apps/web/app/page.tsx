@@ -289,7 +289,7 @@ export default function Home(): React.ReactElement {
     retry: 0,
   });
   const featuredReqQ = useRequiredImages(featuredTopoQ.data, "docker");
-  const featuredStates = resolveRequirements(featuredTopoQ.data, "docker", featuredReqQ.data, imgs?.images, imgUnavailable).map((x) => x.state);
+  const featuredStates = resolveRequirements(featuredTopoQ.data, "docker", featuredReqQ.data?.requirements, imgs?.images, imgUnavailable).map((x) => x.state);
   const featuredMissing = featuredStates.filter((x) => x === "missing" || x === "outdated").length;
   const featuredRam = featuredTopoQ.data?.nodes.reduce((a, n) => a + (n.config.memory_mb ?? 0), 0) ?? 0;
 

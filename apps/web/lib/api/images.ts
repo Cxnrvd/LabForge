@@ -173,21 +173,43 @@ interface ServerRequirement extends RequiredImage {
   size_mb: number;
 }
 
+/** A node the topology asks for that this exact build would never attempt on Docker — not
+ * missing, not failed, never started (a domain controller, or a firewall/router/camera whose
+ * role has no container path). See compose_generator.coverage_from_fallback_notes. */
+export interface SkippedNode {
+  hostname: string;
+  node_id: string | null;
+  node_type: string | null;
+  reason: string;
+}
+
+export interface NodeCoverage {
+  total: number;
+  built: number;
+  skipped: SkippedNode[];
+}
+
+interface RequiredImagesResult {
+  requirements: ServerRequirement[];
+  node_coverage: NodeCoverage | null;
+}
+
 /**
  * What a topology needs and whether it is on this computer, worked out by the API from the
- * generated Compose file (so roles, not just the OS, decide the image). Docker labs only.
+ * generated Compose file (so roles, not just the OS, decide the image), plus which of the
+ * topology's nodes this exact Docker build would include at all. Docker labs only.
  */
 export function useRequiredImages(topology: LabConfig | null | undefined, provider: string) {
-  return useQuery<ServerRequirement[]>({
+  return useQuery<RequiredImagesResult>({
     queryKey: ["images-required", topology?.id, topology?.nodes.length, provider, JSON.stringify(topology?.nodes.map((n) => n.config.roles))],
     enabled: !!topology && provider === "docker",
     queryFn: async () => {
       const res = await call("/images/required", { method: "POST", body: JSON.stringify({ topology }) });
-      return ((await res.json()) as { requirements: ServerRequirement[] }).requirements;
+      return (await res.json()) as RequiredImagesResult;
     },
     retry: 0,
     staleTime: 5000,
-    refetchInterval: (q) => (q.state.data?.some((r) => r.status === "pulling") ? 2000 : false),
+    refetchInterval: (q) => (q.state.data?.requirements.some((r) => r.status === "pulling") ? 2000 : false),
   });
 }
 

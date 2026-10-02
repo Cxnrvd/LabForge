@@ -134,12 +134,25 @@ class FlowSample(BaseModel):
     protocol: str | None = None
 
 
+class NeverBuilt(BaseModel):
+    """A node the topology asked for that this lab never attempted — not down, not failed,
+    never started. On Docker: a node type with no container path (a domain controller, ICS HMI)
+    or whose role has none (see compose_generator._SOFT_VM_ONLY). The agent reads this straight
+    from the notes/<hostname>.txt files the build itself already wrote, so it can never drift
+    from what was actually skipped."""
+
+    model_config = ConfigDict(extra="forbid")
+    hostname: str
+    reason: str
+
+
 class HeartbeatPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
     lab_status: str = "unknown"
     vms: list[VmState] = Field(default_factory=list)
     log_tail: list[str] = Field(default_factory=list)
     flows: list[FlowSample] = Field(default_factory=list)
+    never_built: list[NeverBuilt] = Field(default_factory=list)
     captured_at: datetime | None = None
 
 

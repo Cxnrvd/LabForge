@@ -99,8 +99,9 @@ export function LaunchDialog(): React.ReactElement {
       : null;
 
   const requiredQ = useRequiredImages(topology, provider);
-  const imageRows = resolveRequirements(topology, provider, requiredQ.data, imagesQ.data?.images, imagesQ.data?.unavailable ?? true);
+  const imageRows = resolveRequirements(topology, provider, requiredQ.data?.requirements, imagesQ.data?.images, imagesQ.data?.unavailable ?? true);
   const missing = imageRows.filter((x) => x.state === "missing" || x.state === "outdated");
+  const nodeCoverage = provider === "docker" ? requiredQ.data?.node_coverage : null;
 
   const checks: Check[] = [];
   const p = preflight.data;
@@ -263,6 +264,26 @@ export function LaunchDialog(): React.ReactElement {
             </table>
           </div>
         </section>
+
+        {nodeCoverage && nodeCoverage.skipped.length > 0 && (
+          <section aria-label="Nodes Docker cannot run" className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3">
+            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-400">
+              {nodeCoverage.built} of {nodeCoverage.total} nodes will run on Docker
+            </h3>
+            <ul className="mt-1.5 grid gap-1 text-sm">
+              {nodeCoverage.skipped.map((s) => (
+                <li key={s.hostname} className="flex items-baseline gap-2">
+                  <span className="font-medium">{s.hostname}</span>
+                  <span className="text-xs text-muted-foreground">{s.reason}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              These nodes will not exist in the built lab at all — not downloaded, not missing, never attempted.
+              Pick VirtualBox to build them for real.
+            </p>
+          </section>
+        )}
 
         <section aria-label="Images">
           <div className="mb-2 flex items-baseline justify-between">

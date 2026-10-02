@@ -33,10 +33,18 @@ interface HeartbeatVm {
   roles?: string[];
 }
 
+/** A node the topology asked for that this lab never attempted — not down, not failed, never
+ * started (a domain controller, or a firewall/router/camera whose role has no container path). */
+interface NeverBuiltNode {
+  hostname: string;
+  reason: string;
+}
+
 interface HeartbeatPayload {
   lab_status?: string;
   vms?: HeartbeatVm[];
   log_tail?: string[];
+  never_built?: NeverBuiltNode[];
   captured_at?: string | null;
 }
 
@@ -418,6 +426,12 @@ export default function BuildMonitorPage() {
   const vms = latestHb?.vms ?? [];
   const runningVms = vms.filter((v) => v.state === "running").length;
   const totalVms = vms.length;
+  // Nodes the topology asked for that this build never attempted (Docker: a domain controller,
+  // or a firewall/router/camera whose role has no container path). These are not part of
+  // runningVms/totalVms — that ratio is honestly 100% of what was actually built — but a lab
+  // that's quietly missing nodes it was supposed to have must never just read as "N/N healthy"
+  // with no sign anything is missing.
+  const neverBuilt = latestHb?.never_built ?? [];
   const overall = phasesQ.data?.overall ?? "unknown";
   const buildFailed = phase === "failed";
   const wsHealthy = wsStatus === "open";
@@ -559,6 +573,12 @@ export default function BuildMonitorPage() {
           <div className="meta mono">
             {latestHb?.captured_at ? `last heartbeat ${shortTime(latestHb.captured_at)} · ` : ""}
             {runningVms}/{totalVms || "?"} healthy
+            {neverBuilt.length > 0 && (
+              <span style={{ color: "var(--amber, #f59e0b)" }}>
+                {" "}
+                · {neverBuilt.length} never built ({neverBuilt.map((n) => n.hostname).join(", ")})
+              </span>
+            )}
             {lab?.provider ? ` · ${lab.provider}` : ""}
             {lab?.topology_slug ? ` · ${lab.topology_slug}` : ""}
           </div>
@@ -595,6 +615,12 @@ export default function BuildMonitorPage() {
               <span className="mono" style={{ color: "var(--ink-mute)" }}>
                 {latestHb?.captured_at ? shortTime(latestHb.captured_at) : "—"}
               </span>
+              {neverBuilt.length > 0 && (
+                <span className="mono" style={{ color: "var(--amber, #f59e0b)" }}>
+                  {" "}
+                  · {neverBuilt.length} never built
+                </span>
+              )}
             </div>
           </div>
           <div className="stat">
@@ -700,6 +726,18 @@ export default function BuildMonitorPage() {
               >
                 {vms.map((vm) => (
                   <VmCard key={vm.hostname} vm={vm} />
+                ))}
+              </div>
+            )}
+            {neverBuilt.length > 0 && (
+              <div className="card-b" style={{ borderTop: "1px solid var(--line)" }}>
+                <div className="sub" style={{ marginBottom: 6, color: "var(--amber, #f59e0b)" }}>
+                  Never built — these nodes do not exist in this lab at all
+                </div>
+                {neverBuilt.map((n) => (
+                  <div key={n.hostname} className="mono" style={{ fontSize: 12.5, color: "var(--ink-mute)", padding: "2px 0" }}>
+                    <span style={{ color: "var(--ink)" }}>{n.hostname}</span> — {n.reason}
+                  </div>
                 ))}
               </div>
             )}
