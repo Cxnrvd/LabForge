@@ -36,7 +36,7 @@ class FakeDocker:
             self.volumes.add(args[-1])
         elif args[:2] == ["volume", "rm"]:
             self.volumes.discard(args[-1])
-        elif args[0] == "run" and "cp -a /from/. /to/" in args:
+        elif args[0] == "run" and "cp -a --sparse=always /from/. /to/" in args:
             rc = 1 if self.fail_copy else 0
         return subprocess.CompletedProcess(args, rc, out, "boom" if rc else "")
 
@@ -91,17 +91,22 @@ def test_requirements_report_readiness(fake):
 
 
 def test_pull_runs_in_the_background_and_reports_progress(fake, monkeypatch):
+    import threading
+
     seen = []
+    release = threading.Event()
 
     def fake_pull(job, ref):
         seen.append(ref)
         job.progress = 50.0
-        time.sleep(0.3)
+        release.wait(5)
 
     monkeypatch.setattr(images, "_pull_docker", fake_pull)
-    entry = images.pull("kalilinux/kali-rolling:latest")
-    assert (entry["status"] == "pulling" and entry["progress"] == 50.0) or entry["status"] == "pulling"
-    for _ in range(40):
+    images.pull("kalilinux/kali-rolling:latest")
+    entry = next(e for e in images.list_images()["images"] if e["id"] == "kalilinux/kali-rolling:latest")
+    assert entry["status"] == "pulling" and entry["progress"] == 50.0
+    release.set()
+    for _ in range(100):
         if images._JOBS["kalilinux/kali-rolling:latest"].status == "done":
             break
         time.sleep(0.05)
@@ -287,7 +292,7 @@ def test_seeding_from_a_base_copies_only_the_iso_and_labels_the_volume(fake):
     name = images.seed_base_volume("lf4-x", "ws-acc-014", "windows-10")
     assert name == "lf4-x_ws-acc-014-storage"
     copy = next(c for c in fake.calls if c[0] == "run")
-    assert "cp -a *.iso windows.base windows.ver /to/" in copy[-1]
+    assert "cp -a --sparse=always *.iso windows.base windows.ver /to/" in copy[-1]
     create = next(c for c in fake.calls if c[:2] == ["volume", "create"])
     assert "com.docker.compose.project=lf4-x" in create
     with pytest.raises(images.ImageError, match="not prepared"):
@@ -310,3 +315,15 @@ def test_the_build_writes_base_seeds_next_to_the_bundle(tmp_path, monkeypatch):
     build_runner._write_docker_bundle(get_template("ransomware-intrusion-lab"), tmp_path, project="lf5-x", publish="loopback")
     seeds = json.loads((tmp_path / ".labforge-seeds.json").read_text())
     assert seeds == [{"host": "ws-acc-014", "base": "windows-10", "project": "lf5-x"}]
+
+
+def test_a_failed_golden_copy_stays_visible_with_its_reason(fake):
+    fake.volumes.add("labforge-win-base-windows-10")
+    fake.fail_copy = True
+    images.create_golden("windows-10", "oops")
+    for _ in range(40):
+        if images._JOBS["golden-oops"].status != "pulling":
+            break
+        time.sleep(0.05)
+    entry = next(e for e in images.list_images()["images"] if e["id"] == "golden-oops")
+    assert entry["status"] == "missing" and "Last attempt failed" in entry["note"]

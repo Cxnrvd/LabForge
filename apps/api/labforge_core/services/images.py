@@ -61,6 +61,9 @@ KNOWN_ESTIMATE_MB = {
     "kalilinux/kali-rolling": 3200,
     "dockurr/windows": 800,
 }
+# Disk images are sparse (64 GB apparent, about 11 GB used). BusyBox cp would write all 64 GB, so
+# copies use GNU coreutils.
+COPY_IMAGE = "debian:bookworm-slim"
 BASE_USER = "labadmin"
 BASE_PASSWORD = "LabForge!2026"
 
@@ -189,6 +192,18 @@ def _parse_size_mb(text: str | None) -> float:
     return float(m.group(1)) * mult
 
 
+def _used_mb(volume: str) -> float | None:
+    """Disk actually used by a volume. ``docker system df`` reports the apparent size, which is
+    64 GB for a sparse Windows disk that uses 11 GB."""
+    proc = _docker(["run", "--rm", "-v", f"{volume}:/s:ro", COPY_IMAGE, "du", "-sm", "/s"], timeout=120)
+    if proc.returncode != 0:
+        return None
+    try:
+        return float(proc.stdout.split()[0])
+    except (ValueError, IndexError):
+        return None
+
+
 def _volumes() -> dict[str, dict[str, Any]]:
     proc = _docker(["system", "df", "-v", "--format", "json"], timeout=120)
     if proc.returncode != 0:
@@ -201,6 +216,10 @@ def _volumes() -> dict[str, dict[str, Any]]:
     for vol in data.get("Volumes") or []:
         labels = dict(p.split("=", 1) for p in (vol.get("Labels") or "").split(",") if "=" in p)
         out[vol["Name"]] = {"labels": labels, "size_mb": _parse_size_mb(vol.get("Size"))}
+        if labels.get(LABEL_GOLDEN) == "true" or labels.get(LABEL_BASE) == "true":
+            used = _used_mb(vol["Name"])
+            if used is not None:
+                out[vol["Name"]]["size_mb"] = used
     return out
 
 
@@ -250,6 +269,13 @@ def list_images() -> dict[str, Any]:
                                   "golden", vol["size_mb"], "ready", [],
                                   vol["labels"].get("labforge.golden.created"),
                                   "Local only. Windows images must not be shared."))
+    listed = {e["id"] for e in entries}
+    for job in list(_JOBS.values()):
+        # A golden image that is still being copied, or whose copy failed, has no volume yet. Show it
+        # anyway so the person sees progress or the reason.
+        if job.id.startswith("golden-") and job.id not in listed and job.status in ("pulling", "failed"):
+            entries.append(_entry(job.id, "golden", job.id[len("golden-"):], "golden", 0,
+                                  "missing", [], None, "Local only. Windows images must not be shared."))
     boxes = _vagrant_boxes()
     for tid_box, used in _box_requirements().items():
         have = boxes.get(tid_box)
@@ -446,7 +472,7 @@ def _prepare_base(job: Job, image_id: str, timeout_s: float = 10800) -> None:
 def _trim_to_iso(volume: str) -> None:
     """Keep only the installer ISO (and its marker files) in a base volume."""
     proc = _docker([
-        "run", "--rm", "-v", f"{volume}:/s", "alpine:3", "sh", "-c",
+        "run", "--rm", "-v", f"{volume}:/s", COPY_IMAGE, "sh", "-c",
         "cd /s && for f in *; do case $f in *.iso|windows.base|windows.ver) ;; *) rm -rf \"$f\";; esac; done; ls",
     ], timeout=300)
     if proc.returncode != 0 or ".iso" not in proc.stdout:
@@ -462,8 +488,8 @@ def adopt_base(source_volume: str, image_id: str) -> None:
     if _docker(["volume", "inspect", volume]).returncode == 0:
         raise ImageError("That base already exists.", "exists")
     _docker(["volume", "create", "--label", f"{LABEL_BASE}=true", "--label", f"labforge.base.os={image_id}", volume])
-    proc = _docker(["run", "--rm", "-v", f"{source_volume}:/from:ro", "-v", f"{volume}:/to", "alpine:3",
-                    "sh", "-c", f"cd /from && cp -a {ISO_FILES} /to/"], timeout=3600)
+    proc = _docker(["run", "--rm", "-v", f"{source_volume}:/from:ro", "-v", f"{volume}:/to", COPY_IMAGE,
+                    "sh", "-c", f"cd /from && cp -a --sparse=always {ISO_FILES} /to/"], timeout=3600)
     if proc.returncode != 0:
         _docker(["volume", "rm", "-f", volume])
         raise ImageError("Could not copy the ISO: " + (proc.stderr or proc.stdout).strip()[-200:])
@@ -532,8 +558,8 @@ def create_golden(source_id: str, name: str, *, project_volume_lookup=None) -> d
             created = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             _docker(["volume", "create", "--label", f"{LABEL_GOLDEN}=true", "--label", f"labforge.golden.name={slug}",
                      "--label", f"labforge.golden.created={created}", target])
-            proc = _docker(["run", "--rm", "-v", f"{source}:/from:ro", "-v", f"{target}:/to", "alpine:3",
-                            "sh", "-c", "cp -a /from/. /to/"], timeout=7200)
+            proc = _docker(["run", "--rm", "-v", f"{source}:/from:ro", "-v", f"{target}:/to", COPY_IMAGE,
+                            "sh", "-c", "cp -a --sparse=always /from/. /to/"], timeout=7200)
             if proc.returncode != 0:
                 _docker(["volume", "rm", "-f", target])
                 raise ImageError("Copy failed: " + (proc.stderr or proc.stdout).strip()[-200:])
@@ -596,7 +622,7 @@ def export_stream(image_id: str) -> tuple[str, Iterator[bytes]]:
         volume = BASE_PREFIX + image_id if image_id in WINDOWS_BASES else GOLDEN_PREFIX + image_id[len("golden-"):]
         if _docker(["volume", "inspect", volume]).returncode != 0:
             raise ImageError("That image is not on this computer.", "not_found", 404)
-        cmd = ["docker", "run", "--rm", "-v", f"{volume}:/src:ro", "alpine:3", "tar", "-C", "/src", "-cf", "-", "."]
+        cmd = ["docker", "run", "--rm", "-v", f"{volume}:/src:ro", COPY_IMAGE, "tar", "-S", "-C", "/src", "-cf", "-", "."]
         return f"{volume}.tar", _stream(cmd)
     if image_id.startswith("box:"):
         raise ImageError("Vagrant boxes are exported with `vagrant box repackage`.", "not_supported")
@@ -629,7 +655,7 @@ def import_archive(kind: str, name: str, source: Iterator[bytes]) -> dict[str, A
         created = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         _docker(["volume", "create", "--label", f"{LABEL_GOLDEN}=true", "--label", f"labforge.golden.name={slug}",
                  "--label", f"labforge.golden.created={created}", volume])
-        proc = subprocess.Popen(["docker", "run", "--rm", "-i", "-v", f"{volume}:/dst", "alpine:3", "tar", "-C", "/dst", "-xf", "-"],
+        proc = subprocess.Popen(["docker", "run", "--rm", "-i", "-v", f"{volume}:/dst", COPY_IMAGE, "tar", "-C", "/dst", "-xf", "-"],
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     else:
         raise ImageError("kind must be docker or golden.", "bad_kind", 422)
@@ -658,8 +684,8 @@ def seed_volume(project: str, host: str, golden: str) -> str:
         return volume
     _docker(["volume", "create", "--label", f"com.docker.compose.project={project}",
              "--label", f"com.docker.compose.volume={host}-storage", volume])
-    proc = _docker(["run", "--rm", "-v", f"{source}:/from:ro", "-v", f"{volume}:/to", "alpine:3",
-                    "sh", "-c", "cp -a /from/. /to/"], timeout=7200)
+    proc = _docker(["run", "--rm", "-v", f"{source}:/from:ro", "-v", f"{volume}:/to", COPY_IMAGE,
+                    "sh", "-c", "cp -a --sparse=always /from/. /to/"], timeout=7200)
     if proc.returncode != 0:
         _docker(["volume", "rm", "-f", volume])
         raise ImageError("Could not copy the golden image: " + (proc.stderr or proc.stdout).strip()[-200:])
@@ -676,8 +702,8 @@ def seed_base_volume(project: str, host: str, base_id: str) -> str:
         return volume
     _docker(["volume", "create", "--label", f"com.docker.compose.project={project}",
              "--label", f"com.docker.compose.volume={host}-storage", volume])
-    proc = _docker(["run", "--rm", "-v", f"{source}:/from:ro", "-v", f"{volume}:/to", "alpine:3",
-                    "sh", "-c", f"cd /from && cp -a {ISO_FILES} /to/"], timeout=3600)
+    proc = _docker(["run", "--rm", "-v", f"{source}:/from:ro", "-v", f"{volume}:/to", COPY_IMAGE,
+                    "sh", "-c", f"cd /from && cp -a --sparse=always {ISO_FILES} /to/"], timeout=3600)
     if proc.returncode != 0:
         _docker(["volume", "rm", "-f", volume])
         raise ImageError("Could not copy the ISO: " + (proc.stderr or proc.stdout).strip()[-200:])
