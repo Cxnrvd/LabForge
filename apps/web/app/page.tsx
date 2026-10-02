@@ -14,8 +14,12 @@ import Link from "next/link";
 import { useQuery, useQueries } from "@tanstack/react-query";
 
 import { api } from "@/lib/api/client";
-import type { HostMetrics, LabEndpoint, PreflightReport } from "@/lib/api/client";
+import type { HostMetrics, LabEndpoint, PreflightReport, TemplateSummary } from "@/lib/api/client";
+import { formatSize, requiredImages, readinessOf, useImages } from "@/lib/api/images";
+import { useLaunchStore } from "@/lib/store/launch-store";
+import { useTopologyStore } from "@/lib/store/topology-store";
 import { OS_LABELS } from "@labforge/schema";
+import { toast } from "sonner";
 
 interface Lab {
   id: number;
@@ -155,6 +159,31 @@ export default function Home(): React.ReactElement {
     refetchInterval: 15_000,
   });
 
+  const templatesQ = useQuery<TemplateSummary[]>({
+    queryKey: ["templates"],
+    queryFn: () => api.listTemplates(),
+    staleTime: 5 * 60_000,
+  });
+  const imagesQ = useImages();
+  const loadTopology = useTopologyStore((st) => st.loadTopology);
+  const showLaunch = useLaunchStore((st) => st.show);
+  const [launching, setLaunching] = React.useState(false);
+
+  const featured =
+    (templatesQ.data ?? []).find((t) => t.id === "ransomware-intrusion-lab") ?? (templatesQ.data ?? [])[0];
+  const launchFeatured = async (): Promise<void> => {
+    if (!featured) return;
+    setLaunching(true);
+    try {
+      loadTopology(await api.getTemplate(featured.id));
+      showLaunch();
+    } catch (e) {
+      toast.error("Could not load the template", { description: (e as { detail?: string }).detail ?? "Check the API log." });
+    } finally {
+      setLaunching(false);
+    }
+  };
+
   const labs = Array.isArray(labsQ.data) ? labsQ.data : [];
   const running = labs.filter((l) => l.status === "running" || l.status === "partial");
   const live = running[0];
@@ -235,7 +264,33 @@ export default function Home(): React.ReactElement {
   });
   const liveEndpoints = endpointsQ.data;
 
+  const imgs = imagesQ.data;
+  const imgSample = imgs?.sample ?? true;
+  const imgMissing = (imgs?.images ?? []).filter((i) => i.status === "missing").length;
+  const imgReady = (imgs?.images ?? []).filter((i) => i.status === "ready").length;
+  const imgUpdates = (imgs?.images ?? []).filter((i) => i.status === "outdated").length;
+
+  const featuredTopoQ = useQuery({
+    queryKey: ["template", featured?.id],
+    queryFn: () => api.getTemplate(featured!.id),
+    enabled: !!featured,
+    staleTime: 5 * 60_000,
+    retry: 0,
+  });
+  const featuredReqs = featuredTopoQ.data ? requiredImages(featuredTopoQ.data, "docker") : [];
+  const featuredStates = featuredReqs.map((r) => readinessOf(r, imgs?.images, imgSample));
+  const featuredMissing = featuredStates.filter((x) => x === "missing").length;
+  const featuredRam = featuredTopoQ.data?.nodes.reduce((a, n) => a + (n.config.memory_mb ?? 0), 0) ?? 0;
+
   const eng = m?.engine;
+
+  const steps = [
+    { done: !!eng?.docker_daemon, label: "Docker is running" },
+    { done: !imgSample && imgMissing === 0 && imgReady > 0, label: "Images are downloaded" },
+    { done: labs.length > 0, label: "Build your first lab" },
+    { done: running.length > 0, label: "See a lab running" },
+  ];
+  const stepsDone = steps.filter((x) => x.done).length;
   const histBars = hist.length ? hist : [];
 
   return (
@@ -265,6 +320,32 @@ export default function Home(): React.ReactElement {
         <Link href="/settings" className="btn">Host settings</Link>
         <Link href="/build" className="btn primary">New lab</Link>
       </div>
+
+      {featured && (
+        <div className="scard" style={{ flexDirection: "row", flexWrap: "wrap", gap: 24, alignItems: "center" }}>
+          <div style={{ flex: "1 1 340px", minWidth: 0 }}>
+            <div className="eyebrow">Featured lab</div>
+            <div style={{ fontSize: 22, fontWeight: 600, margin: "6px 0 4px" }}>{featured.name}</div>
+            <div className="home-sub" style={{ maxWidth: 560 }}>
+              {featured.description.length > 170 ? `${featured.description.slice(0, 170)}...` : featured.description}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 28 }}>
+            <div><div className="eyebrow">Machines</div><div style={{ fontSize: 20, fontWeight: 600 }}>{featured.node_count}</div></div>
+            <div><div className="eyebrow">Memory</div><div style={{ fontSize: 20, fontWeight: 600 }}>{featuredRam ? formatSize(featuredRam) : "n/a"}</div></div>
+            <div><div className="eyebrow">Images</div>
+              <div style={{ fontSize: 20, fontWeight: 600 }}>
+                {imgSample ? "not checked" : featuredMissing === 0 ? "ready" : `${featuredMissing} to download`}
+              </div></div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <Link href="/images" className="btn">Prepare images</Link>
+            <button type="button" className="btn primary" onClick={() => void launchFeatured()} disabled={launching}>
+              {launching ? "Loading" : "Launch lab"}
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="home-grid">
         {/* Column 1 */}
@@ -383,9 +464,23 @@ export default function Home(): React.ReactElement {
               </table>
             </div>
           </div>
+          <div className="scard">
+            <div className="eyebrow">Recent activity</div>
+            <div className="rows" style={{ marginTop: 6 }}>
+              {(activityQ.data ?? []).slice(0, 6).length === 0 && <div className="home-sub">No activity yet. Launch a lab and it will show up here.</div>}
+              {(activityQ.data ?? []).slice(0, 6).map((e, i) => (
+                <div key={i} className="r">
+                  <span className="k"><span className="mono">{hms(e.captured_at)}</span> &nbsp; {e.lab_name}</span>
+                  <span className="v" style={{ fontWeight: 400 }}>{e.log_snippet ? e.log_snippet.slice(0, 48) : `${e.running_vms}/${e.total_vms} up`}</span>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
 
-        {/* Column 3: floating live card */}
+
+        {/* Column 3 */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 14, minWidth: 0 }}>
         <div className="scard float-card" style={{ gridRow: "auto", gridColumn: "auto" }}>
           <div style={{ display: "flex", alignItems: "center" }}>
             <div className="eyebrow" style={{ flex: 1 }}>Live now</div>
@@ -430,6 +525,41 @@ export default function Home(): React.ReactElement {
               </div>
             </>
           )}
+        </div>
+
+        <div className="scard">
+          <div style={{ display: "flex", alignItems: "center" }}>
+            <div className="eyebrow" style={{ flex: 1 }}>Images</div>
+            <Link href="/images" className="eyebrow" style={{ color: "var(--d10-accent)" }}>Library</Link>
+          </div>
+          {imgSample ? (
+            <div className="home-sub" style={{ marginTop: 8 }}>The image library is not connected yet.</div>
+          ) : (
+            <div className="rows" style={{ marginTop: 6 }}>
+              <div className="r"><span className="k">Ready</span><span className="v">{imgReady}</span></div>
+              <div className="r"><span className="k">Not downloaded</span><span className="v">{imgMissing}</span></div>
+              <div className="r"><span className="k">Updates</span><span className="v">{imgUpdates}</span></div>
+              <div className="r"><span className="k">On disk</span><span className="v">{formatSize(imgs?.total_mb ?? 0)}</span></div>
+            </div>
+          )}
+        </div>
+
+        {stepsDone < steps.length && (
+          <div className="scard">
+            <div style={{ display: "flex" }}>
+              <div className="eyebrow" style={{ flex: 1 }}>Getting started</div>
+              <div className="eyebrow">{stepsDone} of {steps.length}</div>
+            </div>
+            <div className="rows" style={{ marginTop: 6 }}>
+              {steps.map((st, i) => (
+                <div key={i} className="r">
+                  <span className="k" style={{ color: st.done ? "var(--d10-fg-strong)" : undefined }}>{st.label}</span>
+                  <span className={`chip ${st.done ? "ok" : ""}`}>{st.done ? "Done" : "To do"}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         </div>
       </div>
     </div>

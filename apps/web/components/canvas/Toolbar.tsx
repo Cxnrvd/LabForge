@@ -51,6 +51,7 @@ import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import { TopologyMetaPopover } from "@/components/canvas/TopologyMetaPopover";
+import { useLaunchStore } from "@/lib/store/launch-store";
 import { useGenerateZip, useValidateTopology } from "@/lib/api/hooks";
 import { isZone, useTopologyStore } from "@/lib/store/topology-store";
 import { downloadBlob, downloadJson } from "@/lib/utils/download";
@@ -110,11 +111,6 @@ export function Toolbar() {
   const generate = useGenerateZip();
   const router = useRouter();
   const qc = useQueryClient();
-  const build = useMutation<
-    Awaited<ReturnType<typeof api.buildLab>>,
-    ApiError,
-    Parameters<typeof api.buildLab>[0]
-  >({ mutationFn: (topology) => api.buildLabConfirmed(topology) });
   const save = useMutation<
     Awaited<ReturnType<typeof api.saveTopology>>,
     ApiError,
@@ -228,29 +224,13 @@ export function Toolbar() {
     }
   };
 
-  const handleBuild = async (): Promise<void> => {
-    const topology = toTopology();
-    if (topology.nodes.length === 0) {
+  const showLaunch = useLaunchStore((st) => st.show);
+  const handleBuild = (): void => {
+    if (toTopology().nodes.length === 0) {
       toast.error("Canvas is empty", { description: "Add at least one node first." });
       return;
     }
-    try {
-      const result = await build.mutateAsync(topology);
-      toast.success("Build started", {
-        description:
-          topology.provider === "docker"
-            ? "Starting the containers. Follow progress in the monitor."
-            : `vagrant up running in ${result.workspace_path}`,
-      });
-      router.push(`/monitor/${result.lab_id}`);
-    } catch (err) {
-      const e = err as ApiError;
-      const description =
-        e.code === "vagrant_missing"
-          ? "Install Vagrant 2.4+ on the API host, then retry."
-          : e.detail ?? "Check API logs.";
-      toast.error("Build failed to start", { description });
-    }
+    showLaunch();
   };
 
   return (
@@ -375,19 +355,9 @@ export function Toolbar() {
           size="sm"
           className="h-8"
           onClick={handleBuild}
-          disabled={build.isPending}
         >
-          {build.isPending ? (
-            <>
-              <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-              Starting…
-            </>
-          ) : (
-            <>
-              <Play className="mr-1 h-4 w-4" />
-              Build Lab
-            </>
-          )}
+          <Play className="mr-1 h-4 w-4" />
+          Launch
         </Button>
 
         <DropdownMenu>

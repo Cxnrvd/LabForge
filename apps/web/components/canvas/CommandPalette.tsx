@@ -48,6 +48,7 @@ import {
 } from "@/components/ui/command";
 import { api, type ApiError } from "@/lib/api/client";
 import { useTopologyStore, isZone } from "@/lib/store/topology-store";
+import { useLaunchStore } from "@/lib/store/launch-store";
 import { layoutTopology } from "@/lib/canvas/auto-layout";
 import { downloadBlob, downloadJson } from "@/lib/utils/download";
 import {
@@ -98,12 +99,6 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const validate = useValidateTopology();
   const generate = useGenerateZip();
   const templatesQ = useTemplates();
-  const build = useMutation<
-    Awaited<ReturnType<typeof api.buildLab>>,
-    ApiError,
-    LabConfig
-  >({ mutationFn: (topology) => api.buildLabConfirmed(topology) });
-
   const close = (): void => onOpenChange(false);
 
   /**
@@ -174,25 +169,13 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     toast.success("Exported topology.json");
   };
 
-  const runBuild = async (): Promise<void> => {
-    const topology = toTopology();
-    if (topology.nodes.length === 0) {
+  const showLaunch = useLaunchStore((st) => st.show);
+  const runBuild = (): void => {
+    if (toTopology().nodes.length === 0) {
       toast.error("Canvas is empty");
       return;
     }
-    try {
-      const result = await build.mutateAsync(topology);
-      toast.success("Build started");
-      router.push(`/monitor/${result.lab_id}`);
-    } catch (err) {
-      const e = err as ApiError;
-      toast.error("Build failed to start", {
-        description:
-          e.code === "vagrant_missing"
-            ? "Install Vagrant on the API host."
-            : e.detail ?? "Check API logs.",
-      });
-    }
+    showLaunch();
   };
 
   const loadTemplate = async (id: string): Promise<void> => {
@@ -265,17 +248,17 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             <FileJson />
             <span>Export JSON</span>
           </CommandItem>
-          <CommandItem value="generate lab download zip" onSelect={select(runGenerate)}>
+          <CommandItem value="export package download zip" onSelect={select(runGenerate)}>
             <Download />
-            <span>Generate Lab (download .zip)</span>
+            <span>Export package (.zip)</span>
           </CommandItem>
           <CommandItem
-            value="build lab vagrant up"
+            value="launch lab start run build"
             onSelect={select(runBuild)}
             className="text-foreground"
           >
             <Play />
-            <span>Build Lab (vagrant up)</span>
+            <span>Launch lab</span>
             <CommandShortcut>↵</CommandShortcut>
           </CommandItem>
         </CommandGroup>

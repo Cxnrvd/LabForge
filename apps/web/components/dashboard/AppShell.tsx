@@ -7,6 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 
 import { CommandPalette } from "@/components/canvas/CommandPalette";
+import { LaunchDialog } from "@/components/launch/LaunchDialog";
 import { KeybindingsHelp } from "@/components/dashboard/KeybindingsHelp";
 import { cn } from "@/lib/utils/cn";
 
@@ -33,7 +34,7 @@ interface NavEntry {
 
 type IconName =
   | "home" | "canvas" | "labs" | "monitor" | "templates" | "vendors" | "cves"
-  | "check" | "download" | "settings" | "agent" | "docs" | "sun" | "moon" | "bell" | "help";
+  | "images" | "check" | "download" | "settings" | "agent" | "docs" | "sun" | "moon" | "bell" | "help";
 
 const ICON_PATHS: Record<IconName, string> = {
   home: "M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z",
@@ -43,6 +44,7 @@ const ICON_PATHS: Record<IconName, string> = {
   templates: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z",
   vendors: "M12 2l8 4.5v9L12 20l-8-4.5v-9zM12 11v9M4 6.5l8 4.5 8-4.5",
   cves: "M12 3l10 18H2zM12 10v5M12 18v.01",
+  images: "M12 3l9 4.5-9 4.5-9-4.5zM3 12l9 4.5 9-4.5M3 16.5L12 21l9-4.5",
   check: "M5 12.5l4.5 4.5L19 7",
   download: "M12 4v11M7 11l5 5 5-5M5 20h14",
   settings: "M4 6h10M18 6h2M4 12h2M10 12h10M4 18h12M20 18h0M14 4v4M6 10v4M16 16v4",
@@ -82,12 +84,13 @@ const WORKSPACE_NAV: NavEntry[] = [
 
 const CATALOG_NAV: NavEntry[] = [
   { href: "/vendors", label: "Vendors", icon: "vendors", badge: { label: "50+" } },
+  { href: "/images", label: "Images", icon: "images" },
   { href: "/cves", label: "CVEs", icon: "cves" },
 ];
 
 const BUILD_NAV: NavEntry[] = [
   { href: "/build/validate", label: "Validation", icon: "check" },
-  { href: "/build/generate", label: "Generate", icon: "download" },
+  { href: "/build/generate", label: "Launch", icon: "download" },
 ];
 
 const SYSTEM_NAV: NavEntry[] = [
@@ -280,6 +283,7 @@ export function AppShell({ children }: { children: React.ReactNode }): React.Rea
       </div>
 
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+      <LaunchDialog />
       <KeybindingsHelp open={helpOpen} onOpenChange={setHelpOpen} />
     </div>
   );
@@ -397,7 +401,7 @@ function breadcrumbFor(pathname: string): string[] {
   switch (head) {
     case "build":
       if (segments[1] === "validate") return ["Build", "Validation"];
-      if (segments[1] === "generate") return ["Build", "Generate"];
+      if (segments[1] === "generate") return ["Build", "Launch"];
       return ["Canvas"];
     case "labs":
       return segments.length > 1
@@ -411,6 +415,8 @@ function breadcrumbFor(pathname: string): string[] {
       return ["Catalog", "Templates"];
     case "vendors":
       return ["Catalog", "Vendors"];
+    case "images":
+      return ["Catalog", "Images"];
     case "cves":
       return ["Catalog", "CVEs"];
     case "settings":
