@@ -511,11 +511,6 @@ export default function BuildMonitorPage() {
                 aria-selected={active}
                 onClick={() => setViewPersist(t.id)}
                 className={cn("btn sm", active && "act primary")}
-                style={
-                  active
-                    ? { borderColor: "var(--amber, #c87a00)", color: "var(--amber, #c87a00)" }
-                    : undefined
-                }
               >
                 {t.label}
               </button>
@@ -681,11 +676,6 @@ export default function BuildMonitorPage() {
                   type="button"
                   className={cn("btn sm", eventsFilter === lv && "act primary")}
                   onClick={() => setEventsFilter(lv)}
-                  style={
-                    eventsFilter === lv
-                      ? { borderColor: "var(--amber, #c87a00)", color: "var(--amber, #c87a00)" }
-                      : undefined
-                  }
                 >
                   {lv === "" ? "all" : lv}
                 </button>

@@ -14,7 +14,7 @@ import Link from "next/link";
 import { useQuery, useQueries } from "@tanstack/react-query";
 
 import { api } from "@/lib/api/client";
-import type { HostMetrics } from "@/lib/api/client";
+import type { HostMetrics, PreflightReport } from "@/lib/api/client";
 import { OS_LABELS } from "@labforge/schema";
 
 interface Lab {
@@ -69,11 +69,79 @@ function Svg({ d, size = 18 }: { d: string; size?: number }): React.ReactElement
 const FLASK = "M9 3h6M10 3v6L4.5 19a1.5 1.5 0 0 0 1.3 2h12.4a1.5 1.5 0 0 0 1.3-2L14 9V3M7.5 15h9";
 const PLUS = "M12 5v14M5 12h14";
 
+function PreflightCard({
+  linux,
+  windows,
+  loading,
+}: {
+  linux?: PreflightReport;
+  windows?: PreflightReport;
+  loading: boolean;
+}): React.ReactElement {
+  const problems = (linux?.checks ?? []).filter((c) => c.status !== "ok");
+  // Windows guests need more (KVM, a big disk). Show only what is different from the Linux report.
+  const winOnly = (windows?.checks ?? []).filter(
+    (c) => c.status !== "ok" && (c.id === "kvm" || (c.id === "disk" && !problems.some((p) => p.id === "disk"))),
+  );
+  const chip = loading || !linux
+    ? { cls: "", text: "Checking" }
+    : linux.status === "fail"
+      ? { cls: "err", text: "Blocked" }
+      : linux.status === "warn"
+        ? { cls: "info", text: "Heads up" }
+        : { cls: "ok", text: "Ready" };
+  return (
+    <div className="scard">
+      <div style={{ display: "flex", alignItems: "center" }}>
+        <div className="eyebrow" style={{ flex: 1 }}>Preflight</div>
+        <span className={`chip ${chip.cls}`}>{chip.text}</span>
+      </div>
+      {linux && problems.length === 0 && (
+        <div className="home-sub" style={{ marginTop: 8 }}>
+          Docker, memory, disk and ports are fine for Linux labs like the ransomware hunt.
+        </div>
+      )}
+      {problems.map((c) => (
+        <div key={c.id} style={{ marginTop: 10 }}>
+          <div style={{ fontWeight: 600 }}>{c.title}</div>
+          <div className="home-sub">{c.detail}</div>
+          {c.fix && <div className="home-sub" style={{ color: "var(--d10-fg)" }}><b>Fix:</b> {c.fix}</div>}
+        </div>
+      ))}
+      <div className="rows" style={{ marginTop: 10 }}>
+        <div className="r"><span className="k">Windows guests</span>
+          <span className="v">
+            {!windows ? "checking" : winOnly.length === 0 ? <span className="chip ok">Ready</span> : <span className="chip err">Not ready</span>}
+          </span></div>
+      </div>
+      {winOnly.map((c) => (
+        <div key={c.id} style={{ marginTop: 8 }}>
+          <div style={{ fontWeight: 600 }}>{c.title}</div>
+          <div className="home-sub">{c.detail}</div>
+          {c.fix && <div className="home-sub" style={{ color: "var(--d10-fg)" }}><b>Fix:</b> {c.fix}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function Home(): React.ReactElement {
   const metricsQ = useQuery<HostMetrics>({
     queryKey: ["host-metrics"],
     queryFn: () => api.hostMetrics(),
     refetchInterval: 5000,
+    retry: 0,
+  });
+  const preflightQ = useQuery<PreflightReport>({
+    queryKey: ["preflight"],
+    queryFn: () => api.preflight(),
+    refetchInterval: 30_000,
+    retry: 0,
+  });
+  const windowsQ = useQuery<PreflightReport>({
+    queryKey: ["preflight-windows"],
+    queryFn: () => api.preflight({ windowsGuests: 1, memoryMb: 4096 }),
+    refetchInterval: 60_000,
     retry: 0,
   });
   const labsQ = useQuery<Lab[]>({
@@ -129,7 +197,11 @@ export default function Home(): React.ReactElement {
     if (!q.data || !l) return acc;
     return acc + q.data.nodes.reduce((a, n) => a + (n.config.memory_mb ?? 0), 0);
   }, 0);
-  const guests = freeMb != null ? Math.max(0, Math.floor(freeMb / WINDOWS_GUEST_MB)) : null;
+  // Containers can only use what Docker itself was given, which is often less than the whole computer.
+  const dockerMb = m?.engine.docker_memory_mb ?? null;
+  const guestRoomMb = freeMb != null ? Math.min(freeMb, dockerMb != null ? Math.max(0, dockerMb - labMb) : freeMb) : null;
+  const guests = guestRoomMb != null ? Math.max(0, Math.floor(guestRoomMb / WINDOWS_GUEST_MB)) : null;
+  const dockerDisk = m?.engine.docker_disk?.free_gb ?? null;
 
   // Machines table rows.
   const machines: Array<{ lab: string; host: string; os: string; ip: string; mb: number; state: string }> = [];
@@ -169,7 +241,17 @@ export default function Home(): React.ReactElement {
               : "Nothing is running right now"}
           </div>
         </div>
-        <button type="button" className="btn" onClick={() => void metricsQ.refetch()}>
+        <button
+          type="button"
+          className="btn"
+          onClick={() => {
+            void metricsQ.refetch();
+            void api.preflight({ recheck: true }).then(() => {
+              void preflightQ.refetch();
+              void windowsQ.refetch();
+            });
+          }}
+        >
           Re-check host
         </button>
         <Link href="/settings" className="btn">Host settings</Link>
@@ -197,8 +279,8 @@ export default function Home(): React.ReactElement {
             <div className="rows">
               <div className="r"><span className="k">CPU</span>
                 <span className="v">{m?.cpu.percent != null ? `${m.cpu.percent.toFixed(0)}%` : "n/a"}{m?.cpu.cores ? ` of ${m.cpu.cores} threads` : ""}</span></div>
-              <div className="r"><span className="k">Disk free</span>
-                <span className="v">{m?.disk.free_gb != null ? `${m.disk.free_gb.toFixed(0)} GB` : "n/a"}</span></div>
+              <div className="r"><span className="k">{dockerDisk != null ? "Disk free (Docker)" : "Disk free"}</span>
+                <span className="v">{dockerDisk != null ? `${dockerDisk.toFixed(0)} GB` : m?.disk.free_gb != null ? `${m.disk.free_gb.toFixed(0)} GB` : "n/a"}</span></div>
               <div className="r"><span className="k">Used by labs</span>
                 <span className="v">{labMb > 0 ? `${gb(labMb)} GB` : "none"}</span></div>
               <div className="r"><span className="k">Room for Windows guests</span>
@@ -209,6 +291,8 @@ export default function Home(): React.ReactElement {
             )}
           </div>
 
+          <PreflightCard linux={preflightQ.data} windows={windowsQ.data} loading={preflightQ.isLoading} />
+
           <div className="scard">
             <div className="eyebrow">Engines</div>
             <div className="rows" style={{ marginTop: 6 }}>
@@ -218,6 +302,8 @@ export default function Home(): React.ReactElement {
                     {eng ? (eng.docker_daemon ? eng.docker_version ?? "running" : "not running") : "checking"}
                   </span></span></div>
               <div className="r"><span className="k">Compose</span><span className="v">{eng?.compose_version ?? "n/a"}</span></div>
+              <div className="r"><span className="k">Docker memory</span>
+                <span className="v">{eng?.docker_memory_mb != null ? `${(eng.docker_memory_mb / 1024).toFixed(0)} GB` : "n/a"}</span></div>
               <div className="r"><span className="k">Virtualization</span>
                 <span className="v">{eng?.hypervisor_present == null ? "n/a" : eng.hypervisor_present ? "available" : "missing"}</span></div>
               <div className="r"><span className="k">Vagrant</span><span className="v">{eng?.vagrant_version ?? "not installed"}</span></div>
@@ -271,16 +357,15 @@ export default function Home(): React.ReactElement {
             <div style={{ overflowX: "auto" }}>
               <table className="mtable">
                 <thead>
-                  <tr><th>Machine</th><th>OS</th><th>IP</th><th>RAM</th><th>State</th></tr>
+                  <tr><th>Machine</th><th>IP</th><th>RAM</th><th>State</th></tr>
                 </thead>
                 <tbody>
                   {machines.length === 0 && (
-                    <tr><td colSpan={5} style={{ color: "var(--d10-fg-dim)" }}>No machines up. Start a lab to see them here.</td></tr>
+                    <tr><td colSpan={4} style={{ color: "var(--d10-fg-dim)" }}>No machines up. Start a lab to see them here.</td></tr>
                   )}
                   {machines.slice(0, 8).map((x) => (
                     <tr key={`${x.lab}-${x.host}`}>
-                      <td className="nm">{x.host}</td>
-                      <td>{x.os}</td>
+                      <td className="nm">{x.host}<div style={{ fontWeight: 400, fontSize: 11, color: "var(--d10-fg-dim)" }}>{x.os}</div></td>
                       <td className="mono">{x.ip}</td>
                       <td>{gb(x.mb)} GB</td>
                       <td><span className={`chip ${x.state === "running" ? "ok" : "info"}`}>{x.state}</span></td>

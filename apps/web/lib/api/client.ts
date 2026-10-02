@@ -98,13 +98,37 @@ export interface HostMetrics {
     docker_daemon: boolean;
     docker_version: string | null;
     compose_version: string | null;
+    docker_memory_mb?: number | null;
+    docker_disk?: { path: string | null; free_gb: number | null; total_gb: number | null } | null;
     vagrant_version: string | null;
     virtualbox_version: string | null;
     hypervisor_present: boolean | null;
   };
 }
 
+export interface PreflightCheck {
+  id: string;
+  status: "ok" | "warn" | "fail";
+  title: string;
+  detail: string;
+  fix: string | null;
+}
+
+export interface PreflightReport {
+  status: "ok" | "warn" | "fail";
+  ready: boolean;
+  checks: PreflightCheck[];
+}
+
 export const api = {
+  preflight: (opts: { windowsGuests?: number; memoryMb?: number; recheck?: boolean } = {}) => {
+    const q = new URLSearchParams();
+    if (opts.windowsGuests) q.set("windows_guests", String(opts.windowsGuests));
+    if (opts.memoryMb) q.set("memory_mb", String(opts.memoryMb));
+    if (opts.recheck) q.set("recheck", "true");
+    const qs = q.toString();
+    return request<PreflightReport>(`/host/preflight${qs ? `?${qs}` : ""}`);
+  },
   hostMetrics: () => request<HostMetrics>("/host/metrics"),
   listTemplates: () => request<TemplateSummary[]>("/templates"),
   getTemplate: (id: string) => request<LabConfig>(`/templates/${id}`),

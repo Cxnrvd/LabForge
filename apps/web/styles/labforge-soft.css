@@ -463,10 +463,12 @@
 .lf .topo-mini .l.on { background: var(--d10-accent); }
 .lf .mtable { width: 100%; border-collapse: collapse; }
 .lf .mtable th {
-  text-align: left; padding: 10px 22px; font-size: 10.5px; letter-spacing: 0.07em; text-transform: uppercase;
+  text-align: left; padding: 10px 14px; white-space: nowrap; font-size: 10.5px; letter-spacing: 0.07em; text-transform: uppercase;
   color: var(--d10-fg-dim); font-weight: 500; border-top: 1px solid var(--d10-border); border-bottom: 1px solid var(--d10-border);
 }
-.lf .mtable td { padding: 11px 22px; font-size: 13px; color: var(--d10-fg); }
+.lf .mtable td { padding: 11px 14px; font-size: 13px; color: var(--d10-fg); white-space: nowrap; }
+.lf .mtable th:first-child, .lf .mtable td:first-child { padding-left: 22px; }
+.lf .mtable th:last-child, .lf .mtable td:last-child { padding-right: 22px; }
 .lf .mtable td.nm { font-weight: 500; color: var(--d10-fg-strong); }
 .lf .mtable tr + tr td { border-top: 1px solid var(--d10-border-soft); }
 .lf .btn-block { width: 100%; justify-content: center; padding: 10px 14px; border-radius: 8px; font-size: 13px; }

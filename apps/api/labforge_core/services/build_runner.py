@@ -47,8 +47,13 @@ from labforge_schema import LabConfig, Provider
 from sqlmodel import Session, select
 
 from labforge_core.models import Lab
-from labforge_core.services import boxes, docker_runtime, hostenv
-from labforge_core.services.compose_generator import build_bundle, has_windows_guests, project_name
+from labforge_core.services import boxes, docker_runtime, hostenv, preflight
+from labforge_core.services.compose_generator import (
+    build_bundle,
+    has_windows_guests,
+    host_port_free,
+    project_name,
+)
 from labforge_core.services.generator import BOX_MAP, generate_artifacts, vagrant_provider_name
 from labforge_core.settings import get_settings
 
@@ -147,7 +152,7 @@ def _write_docker_bundle(
     topology: LabConfig, workspace: Path, *, project: str, publish: str
 ) -> list[str]:
     """Write the compose project; returns the generator's warnings."""
-    files, artifacts = build_bundle(topology, publish=publish, project=project)
+    files, artifacts = build_bundle(topology, publish=publish, project=project, port_free=host_port_free)
     workspace.mkdir(parents=True, exist_ok=True)
     for rel, content in files.items():
         target = workspace / rel
@@ -304,7 +309,7 @@ def start_build_detailed(
 ) -> BuildResult:
     use_docker = topology.provider is Provider.DOCKER
     if use_docker:
-        problem = docker_runtime.prereq_problem()
+        problem = docker_runtime.prereq_problem() or preflight.blocking_problem(topology)
         if problem:
             raise BuildPrereqError(problem[1], problem[0])
     else:

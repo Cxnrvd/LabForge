@@ -52,6 +52,12 @@ def test_sample_returns_none_when_psutil_fails(monkeypatch):
     assert "sampled_at" in data
 
 
+def hostmetrics_preflight():
+    from labforge_core.services import preflight
+
+    return preflight
+
+
 def _patch_helpers(monkeypatch):
     calls = {"docker": 0, "vagrant": 0}
 
@@ -67,6 +73,8 @@ def _patch_helpers(monkeypatch):
     monkeypatch.setattr(hostenv, "vagrant_version", vagrant)
     monkeypatch.setattr(hostenv, "virtualbox_version", lambda: "7.0.18")
     monkeypatch.setattr(hostenv, "hypervisor_present", lambda: None)
+    monkeypatch.setattr(hostmetrics_preflight(), "docker_memory_mb", lambda: 16000)
+    monkeypatch.setattr(hostmetrics_preflight(), "docker_disk", lambda: {"path": "D:/docker", "free_gb": 100.0, "total_gb": 200.0})
     return calls
 
 
@@ -78,6 +86,8 @@ def test_engine_values_and_caching(monkeypatch):
         "docker_daemon": True,
         "docker_version": "27.0.1",
         "compose_version": "2.29.0",
+        "docker_memory_mb": 16000,
+        "docker_disk": {"path": "D:/docker", "free_gb": 100.0, "total_gb": 200.0},
         "vagrant_version": "2.4.1",
         "virtualbox_version": "7.0.18",
         "hypervisor_present": None,

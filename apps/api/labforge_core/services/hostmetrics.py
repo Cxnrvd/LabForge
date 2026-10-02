@@ -87,13 +87,15 @@ def _safe(fn: Any) -> Any:
 
 
 def _probe_engine() -> dict[str, Any]:
-    from labforge_core.services import docker_runtime, hostenv
+    from labforge_core.services import docker_runtime, hostenv, preflight
 
     status = _safe(docker_runtime.runtime_status) or {}
     return {
         "docker_daemon": bool(status.get("docker_daemon", False)),
         "docker_version": status.get("docker_version"),
         "compose_version": status.get("compose_version"),
+        "docker_memory_mb": _safe(preflight.docker_memory_mb),
+        "docker_disk": _safe(preflight.docker_disk),
         "vagrant_version": _safe(hostenv.vagrant_version),
         "virtualbox_version": _safe(hostenv.virtualbox_version),
         "hypervisor_present": _safe(hostenv.hypervisor_present),
@@ -114,6 +116,7 @@ def engine() -> dict[str, Any]:
             "docker_daemon": False,
             "docker_version": None,
             "compose_version": None,
+            "docker_memory_mb": None,
             "vagrant_version": None,
             "virtualbox_version": None,
             "hypervisor_present": None,

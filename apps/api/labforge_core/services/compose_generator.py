@@ -31,6 +31,8 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import re
+import socket
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -183,12 +185,34 @@ def _env_text(node: TopologyNode, role_env: dict[str, str], roles_label: str) ->
     return "\n".join(lines) + "\n"
 
 
-def _pick_host_port(wanted: int, taken: set[int]) -> int:
+def _pick_host_port(wanted: int, taken: set[int], port_free: Callable[[int], bool] | None = None) -> int:
+    """First port from ``wanted`` that no other service of this lab and nothing on the host uses."""
     port = wanted
-    while port in taken and port < 65000:
+    while (port in taken or (port_free is not None and not port_free(port))) and port < 65000:
         port += 1000 if port + 1000 < 65000 else 1
     taken.add(port)
     return port
+
+
+def host_port_free(port: int) -> bool:
+    """True when nothing on this computer is using ``port`` on the loopback address.
+
+    Checks by connecting (something is listening) and by an exclusive bind (also catches the
+    ranges Windows reserves for Hyper-V and WSL, which fail with WinError 10013).
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(0.25)
+        if probe.connect_ex(("127.0.0.1", port)) == 0:
+            return False
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+        if exclusive is not None:
+            sock.setsockopt(socket.SOL_SOCKET, exclusive, 1)
+        try:
+            sock.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True
 
 
 def _windows_service(
@@ -232,6 +256,7 @@ def render(
     *,
     publish: str = "loopback",
     project: str | None = None,
+    port_free: Callable[[int], bool] | None = None,
 ) -> ComposeArtifacts:
     if publish not in {"none", "loopback"}:
         raise ValueError(f"publish must be 'none' or 'loopback', got {publish!r}")
@@ -291,7 +316,7 @@ def render(
                 mappings = []
                 rendered_ports = []
                 for container_port in (WINDOWS_WEB_PORT, WINDOWS_RDP_PORT):
-                    host_port = _pick_host_port(container_port, taken_ports)
+                    host_port = _pick_host_port(container_port, taken_ports, port_free)
                     mappings.append((host_port, container_port))
                     rendered_ports.append(f"127.0.0.1:{host_port}:{container_port}")
                 service["ports"] = rendered_ports
@@ -438,7 +463,7 @@ def render(
             mappings: list[tuple[int, int]] = []
             rendered_ports: list[str] = []
             for container_port in primary.ports:
-                host_port = _pick_host_port(container_port, taken_ports)
+                host_port = _pick_host_port(container_port, taken_ports, port_free)
                 mappings.append((host_port, container_port))
                 rendered_ports.append(f"127.0.0.1:{host_port}:{container_port}")
             service["ports"] = rendered_ports
@@ -475,6 +500,14 @@ def render(
                 "The lab network is internal-only, so a Windows guest cannot download Windows on first start. "
                 "Build it once on a lab without an analysis role, or provide the ISO."
             )
+
+    for host, mappings in published.items():
+        for host_port, container_port in mappings:
+            if host_port != container_port:
+                warnings.append(
+                    f"{host}: port {container_port} is not available (another service or program uses it), "
+                    f"so it is published on 127.0.0.1:{host_port} instead."
+                )
 
     document: dict[str, object] = {"name": proj, "services": services, "networks": {"labforge": network}}
     if named_volumes:
@@ -573,9 +606,10 @@ def build_bundle(
     project: str | None = None,
     include_readme: bool = True,
     include_hosts_file: bool = True,
+    port_free: Callable[[int], bool] | None = None,
 ) -> tuple[dict[str, str | bytes], ComposeArtifacts]:
     """Everything that goes in the project directory, ready to write or zip."""
-    artifacts = render(topology, publish=publish, project=project)
+    artifacts = render(topology, publish=publish, project=project, port_free=port_free)
     files: dict[str, str | bytes] = {"docker-compose.yml": artifacts.compose_yaml}
     files.update(artifacts.env_files)
     for hostname, note in artifacts.fallback_notes.items():

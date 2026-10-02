@@ -59,5 +59,9 @@ function shutdown(code) {
 process.on("SIGINT", () => shutdown(0));
 process.on("SIGTERM", () => shutdown(0));
 
-start("api", "uv", ["run", "uvicorn", "labforge_core.api.main:app", "--reload", "--port", String(port)], path.join(root, "apps", "api"));
+// uvicorn --reload on Windows can hang on "Reloading..." forever while a keep-alive connection
+// (the browser, the heartbeat daemon) is open, so code changes silently stop applying.
+// Reload is opt-in:  LABFORGE_API_RELOAD=1 pnpm dev
+const reload = process.env.LABFORGE_API_RELOAD === "1" ? ["--reload"] : [];
+start("api", "uv", ["run", "uvicorn", "labforge_core.api.main:app", ...reload, "--timeout-graceful-shutdown", "2", "--port", String(port)], path.join(root, "apps", "api"));
 start("web", "pnpm", ["--filter", "@labforge/web", "dev"], root);
