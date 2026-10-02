@@ -104,7 +104,9 @@ export default function Home(): React.ReactElement {
       queryKey: ["heartbeat", l.id],
       queryFn: () => api.getLabHeartbeat(l.id),
       enabled: l.status === "running",
-      refetchInterval: 15_000,
+      // Poll quickly until the first heartbeat lands, then relax.
+      refetchInterval: (q: { state: { data?: { vms?: unknown[] } } }) =>
+        q.state.data?.vms?.length ? 15_000 : 3_000,
       retry: 0,
     })),
   });
@@ -309,7 +311,7 @@ export default function Home(): React.ReactElement {
               <MiniTopology topo={liveTopo} />
               <div className="rows" style={{ marginTop: 10 }}>
                 <div className="r"><span className="k">Machines up</span>
-                  <span className="v">{liveBeat ? `${liveBeat.vms.filter((v) => v.state === "running").length} / ${liveBeat.vms.length}` : "n/a"}</span></div>
+                  <span className="v">{liveBeat && liveBeat.vms.length > 0 ? `${liveBeat.vms.filter((v) => v.state === "running").length} / ${liveBeat.vms.length}` : "waiting for first heartbeat"}</span></div>
                 <div className="r"><span className="k">Provider</span><span className="v">{live.provider ?? "docker"}</span></div>
               </div>
               <div className="eyebrow" style={{ margin: "12px 0 4px" }}>Latest events</div>

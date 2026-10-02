@@ -261,7 +261,7 @@ function InnerView({ labId }: { labId: number }) {
   return (
     <div className="flex h-full flex-col">
       <div className="border-b p-2">
-        <BuildPhaseStepper perVm={phases} overall={overall} />
+        <BuildPhaseStepper perVm={phases} overall={overall} provider={topology?.provider} />
       </div>
       <div className="relative flex-1">
         <ReactFlow
