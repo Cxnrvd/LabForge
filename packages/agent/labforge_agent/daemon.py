@@ -160,7 +160,7 @@ def _topology_ip_map(workspace: Path) -> dict[str, str]:
     return out
 
 
-_ANSI = re.compile("[" + chr(27) + "][[0-9;?]*[A-Za-z]")
+_ANSI = re.compile(chr(27) + r"\[[0-9;?]*[A-Za-z]")
 
 
 def _compose_log_tail(workspace: Path, max_lines: int = 50) -> list[str]:
