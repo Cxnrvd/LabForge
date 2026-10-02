@@ -363,7 +363,7 @@ def start_build_detailed(
             warnings = _write_docker_bundle(topology, workspace, project=project, publish=publish)
             # A Windows guest downloads and installs Windows on its first start.
             wait = 5400 if has_windows_guests(topology) else 900
-            argv = docker_runtime.up_command(project, wait_timeout=wait)
+            argv = docker_runtime.up_command(project, wait_timeout=wait, workspace=workspace)
             banner = f"--- runtime=docker project={project} ---"
             env_extra = None
         else:

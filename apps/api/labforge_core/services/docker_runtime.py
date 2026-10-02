@@ -14,6 +14,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -115,11 +116,15 @@ def is_docker_workspace(workspace: Path) -> bool:
     return (workspace / COMPOSE_FILE).exists() and not (workspace / "Vagrantfile").exists()
 
 
-def up_command(project: str, *, wait_timeout: int = 900) -> list[str]:
-    return [
+def up_command(project: str, *, wait_timeout: int = 900, workspace: Path | None = None) -> list[str]:
+    """``docker compose up``. With golden images in the workspace the copy step runs first."""
+    command = [
         "docker", "compose", "-p", project, "--ansi", "never", "--progress", "plain",
         "up", "-d", "--wait", "--wait-timeout", str(wait_timeout), "--remove-orphans",
     ]
+    if workspace is not None and (workspace / ".labforge-seeds.json").exists():
+        return [sys.executable, "-m", "labforge_core.services.build_steps", str(workspace), *command]
+    return command
 
 
 # ------------------------------------------------------------------- status

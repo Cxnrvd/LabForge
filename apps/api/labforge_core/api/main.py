@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from labforge_core.api.browser_guard import BrowserGuardMiddleware
-from labforge_core.api.routers import cves, generate, host, labs, templates, topologies
+from labforge_core.api.routers import cves, generate, host, images, labs, templates, topologies
 from labforge_core.logging_setup import configure_logging
 from labforge_core.models import create_db_and_tables, get_session
 from labforge_core.provisioners.role_registry import load_plugins as _load_role_plugins
@@ -181,3 +181,4 @@ app.include_router(generate.router, prefix=API_PREFIX)
 app.include_router(cves.router, prefix=API_PREFIX)
 app.include_router(labs.router, prefix=API_PREFIX)
 app.include_router(host.router, prefix=API_PREFIX)
+app.include_router(images.router, prefix=API_PREFIX)

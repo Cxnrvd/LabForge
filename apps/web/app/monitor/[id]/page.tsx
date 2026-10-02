@@ -10,6 +10,7 @@ import type { LabConfig } from "@labforge/schema";
 import { cn } from "@/lib/utils/cn";
 import { api, type ApiError, type BuildPhasesPayload, type BuildStatusPayload, type LabEndpoint } from "@/lib/api/client";
 import { useLiveBus, type LiveBusEvent } from "@/lib/api/live-bus";
+import { useImageActions } from "@/lib/api/images";
 import { LiveTopologyView } from "@/components/monitor/LiveTopologyView";
 import { TimeScrubber, type ScrubberSample } from "@/components/monitor/TimeScrubber";
 
@@ -387,6 +388,29 @@ export default function BuildMonitorPage() {
 
   const lab = labQ.data;
   // A Docker lab that is stopped, or whose build failed or only half came up, can be started again.
+  // Windows machines whose disk can be saved as a local golden image.
+  const windowsHosts = (topologyQ.data?.nodes ?? [])
+    .filter((n) => String(n.config.os).startsWith("windows"))
+    .map((n) => n.config.hostname);
+  const { golden: goldenMut } = useImageActions();
+  const handleGolden = (): void => {
+    const hostName =
+      windowsHosts.length === 1 ? windowsHosts[0] : window.prompt(`Which machine? (${windowsHosts.join(", ")})`, windowsHosts[0]);
+    if (!hostName || !windowsHosts.includes(hostName)) return;
+    const name = window.prompt(
+      "Name for the golden image? It is a copy of this machine's disk, kept only on this computer. The machine is stopped while it is copied.",
+      `${hostName}-golden`,
+    );
+    if (!name) return;
+    goldenMut.mutate(
+      { source_id: `lab:${id}:${hostName}`, name },
+      {
+        onSuccess: () => toast.success("Saving the golden image", { description: "Follow it on the Images page." }),
+        onError: (e) => toast.error("Could not save the image", { description: e.message }),
+      },
+    );
+  };
+
   const canResume =
     lab?.provider === "docker" && ["stopped", "failed", "partial"].includes(lab.status) && phase !== "running";
   const vms = latestHb?.vms ?? [];
@@ -459,6 +483,11 @@ export default function BuildMonitorPage() {
         >
           Reload
         </button>
+        {windowsHosts.length > 0 && lab?.provider === "docker" && lab.status === "running" && (
+          <button className="btn sm" type="button" onClick={handleGolden} disabled={goldenMut.isPending}>
+            Save Windows disk
+          </button>
+        )}
         {canResume && (
           <button
             className="btn primary"

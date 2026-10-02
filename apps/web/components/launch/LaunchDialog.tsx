@@ -17,7 +17,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { api, type ApiError } from "@/lib/api/client";
-import { formatSize, readinessOf, requiredImages, useImages, type Readiness } from "@/lib/api/images";
+import { formatSize, resolveRequirements, useImages, useRequiredImages, type Readiness } from "@/lib/api/images";
 import { useLaunchStore } from "@/lib/store/launch-store";
 import { useTopologyStore } from "@/lib/store/topology-store";
 import { downloadBlob } from "@/lib/utils/download";
@@ -98,14 +98,8 @@ export function LaunchDialog(): React.ReactElement {
       ? host.data.memory.total_mb - host.data.memory.used_mb
       : null;
 
-  const required = React.useMemo(
-    () => (topology ? requiredImages(topology, provider) : []),
-    [topology, provider],
-  );
-  const imageRows = required.map((r) => ({
-    r,
-    state: readinessOf(r, imagesQ.data?.images, imagesQ.data?.sample ?? true),
-  }));
+  const requiredQ = useRequiredImages(topology, provider);
+  const imageRows = resolveRequirements(topology, provider, requiredQ.data, imagesQ.data?.images, imagesQ.data?.sample ?? true);
   const missing = imageRows.filter((x) => x.state === "missing");
 
   const checks: Check[] = [];

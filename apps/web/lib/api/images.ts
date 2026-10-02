@@ -177,3 +177,41 @@ export function formatSize(mb: number): string {
   if (mb >= 1024) return `${(mb / 1024).toFixed(mb >= 10240 ? 0 : 1)} GB`;
   return `${mb} MB`;
 }
+
+/* ---------------- Server side requirements ---------------- */
+
+interface ServerRequirement extends RequiredImage {
+  status: Readiness;
+  size_mb: number;
+}
+
+/**
+ * What a topology needs and whether it is on this computer, worked out by the API from the
+ * generated Compose file (so roles, not just the OS, decide the image). Docker labs only.
+ */
+export function useRequiredImages(topology: LabConfig | null | undefined, provider: string) {
+  return useQuery<ServerRequirement[]>({
+    queryKey: ["images-required", topology?.id, topology?.nodes.length, provider, JSON.stringify(topology?.nodes.map((n) => n.config.roles))],
+    enabled: !!topology && provider === "docker",
+    queryFn: async () => {
+      const res = await call("/images/required", { method: "POST", body: JSON.stringify({ topology }) });
+      return ((await res.json()) as { requirements: ServerRequirement[] }).requirements;
+    },
+    retry: 0,
+    staleTime: 5000,
+    refetchInterval: (q) => (q.state.data?.some((r) => r.status === "pulling") ? 2000 : false),
+  });
+}
+
+/** Rows for display: the server's answer when there is one, the local guess otherwise. */
+export function resolveRequirements(
+  topology: LabConfig | null | undefined,
+  provider: string,
+  server: ServerRequirement[] | undefined,
+  images: ImageEntry[] | undefined,
+  sample: boolean,
+): Array<{ r: RequiredImage; state: Readiness }> {
+  if (server) return server.map((r) => ({ r, state: r.status }));
+  if (!topology) return [];
+  return requiredImages(topology, provider).map((r) => ({ r, state: readinessOf(r, images, sample) }));
+}

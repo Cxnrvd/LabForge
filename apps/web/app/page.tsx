@@ -15,7 +15,7 @@ import { useQuery, useQueries } from "@tanstack/react-query";
 
 import { api } from "@/lib/api/client";
 import type { HostMetrics, LabEndpoint, PreflightReport, TemplateSummary } from "@/lib/api/client";
-import { formatSize, requiredImages, readinessOf, useImages } from "@/lib/api/images";
+import { formatSize, resolveRequirements, useImages, useRequiredImages } from "@/lib/api/images";
 import { useLaunchStore } from "@/lib/store/launch-store";
 import { useTopologyStore } from "@/lib/store/topology-store";
 import { OS_LABELS } from "@labforge/schema";
@@ -277,8 +277,8 @@ export default function Home(): React.ReactElement {
     staleTime: 5 * 60_000,
     retry: 0,
   });
-  const featuredReqs = featuredTopoQ.data ? requiredImages(featuredTopoQ.data, "docker") : [];
-  const featuredStates = featuredReqs.map((r) => readinessOf(r, imgs?.images, imgSample));
+  const featuredReqQ = useRequiredImages(featuredTopoQ.data, "docker");
+  const featuredStates = resolveRequirements(featuredTopoQ.data, "docker", featuredReqQ.data, imgs?.images, imgSample).map((x) => x.state);
   const featuredMissing = featuredStates.filter((x) => x === "missing").length;
   const featuredRam = featuredTopoQ.data?.nodes.reduce((a, n) => a + (n.config.memory_mb ?? 0), 0) ?? 0;
 

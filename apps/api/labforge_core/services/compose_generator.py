@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import json
 import re
 import socket
 from collections.abc import Callable
@@ -75,6 +76,9 @@ _WINDOWS_VERSION = {
 }
 # dockurr/windows itself refuses less than 2 GB for Windows 10.
 WINDOWS_MIN_RAM_MB = 2048
+# A Windows node with the role ``golden-image@<name>`` starts from that saved local disk
+# (see services/images.py) instead of downloading and installing Windows.
+GOLDEN_ROLE = "golden-image"
 WINDOWS_DISK = "64G"
 WINDOWS_WEB_PORT = 8006  # browser console (VNC) shown in the README
 WINDOWS_RDP_PORT = 3389
@@ -212,9 +216,10 @@ def _windows_service(
             f"{host} asks for {ram} MB, below the {WINDOWS_MIN_RAM_MB} MB a Windows guest needs; using {WINDOWS_MIN_RAM_MB} MB"
         )
         ram = WINDOWS_MIN_RAM_MB
-    if node.config.roles:
+    other_roles = [r for r in node.config.roles if parse_role(r)[0] != GOLDEN_ROLE]
+    if other_roles:
         warnings.append(
-            f"{host} is a Windows guest: roles ({', '.join(node.config.roles)}) are not applied in the docker runtime"
+            f"{host} is a Windows guest: roles ({', '.join(other_roles)}) are not applied in the docker runtime"
         )
     extra_files[f"oem/{host}/install.bat"] = windows_oem.install_bat(with_setup=bool(elastic_ip)).encode()
     configs = [{"source": f"oem-{host}", "target": "/oem/install.bat", "mode": 0o444}]
@@ -614,6 +619,19 @@ def endpoints_from_workspace(workspace: Path) -> list[dict[str, object]]:
     return endpoints(topology, published, windows_hosts)
 
 
+def golden_seeds(topology: LabConfig, project: str) -> list[dict[str, str]]:
+    """Windows nodes that start from a saved golden disk: ``[{host, golden}]``."""
+    seeds = []
+    for node in topology.nodes:
+        if not is_windows_guest(node):
+            continue
+        for raw in node.config.roles:
+            name, golden = parse_role(raw)
+            if name == GOLDEN_ROLE and golden:
+                seeds.append({"host": node.config.hostname, "golden": golden, "project": project})
+    return seeds
+
+
 def render_readme(topology: LabConfig, artifacts: ComposeArtifacts) -> str:
     proj = artifacts.project
     lines = [
@@ -686,5 +704,8 @@ def build_bundle(
     if include_readme:
         files["README.md"] = render_readme(topology, artifacts)
     files["topology.json"] = topology.model_dump_json(indent=2)
+    seeds = golden_seeds(topology, artifacts.project)
+    if seeds:
+        files[".labforge-seeds.json"] = json.dumps(seeds, indent=2)
     files[".labforge-project"] = artifacts.project + "\n"
     return files, artifacts
