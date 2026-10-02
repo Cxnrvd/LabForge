@@ -54,7 +54,9 @@ export function WorkspaceLocation(): React.JSX.Element {
   const [test, setTest] = React.useState<WorkspaceValidation | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [pending, setPending] = React.useState<Pending | null>(null);
-  const placeholder = React.useMemo(examplePath, []);
+  // The OS-specific example is chosen after mount so the server HTML and first client render match.
+  const [placeholder, setPlaceholder] = React.useState("a folder on a drive with plenty of room");
+  React.useEffect(() => setPlaceholder(examplePath()), []);
 
   const save = useMutation<WorkspaceStatus, ApiError, { path: string | null; existing?: "move" | "leave" }>({
     mutationFn: ({ path, existing }) => api.setWorkspace(path, existing),
