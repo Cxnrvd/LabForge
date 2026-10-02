@@ -293,3 +293,14 @@ def test_lifecycle_routes_are_rate_limited(fake, session, tmp_path):
     builds = [client.post("/api/v1/labs/build", json={}).status_code for _ in range(8)]
     assert builds[-1] == 429
     rate_limit.reset_for_tests()
+
+
+def test_absurd_lab_ids_are_rejected_not_a_500(fake, session):
+    app = FastAPI()
+    app.include_router(labs_router.router, prefix="/api/v1")
+    app.dependency_overrides[get_session] = lambda: session
+    client = TestClient(app)
+    for path in ("", "/build/status", "/endpoints", "/topology", "/heartbeat"):
+        assert client.get(f"/api/v1/labs/99999999999999999999{path}").status_code == 422, path
+        assert client.get(f"/api/v1/labs/0{path}").status_code == 422, path
+    assert client.post("/api/v1/labs/99999999999999999999/halt").status_code == 422

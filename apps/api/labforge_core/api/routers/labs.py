@@ -20,6 +20,7 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
+from fastapi import Path as PathParam
 from labforge_schema import LabConfig, Provider
 from sqlmodel import Session, select
 
@@ -59,6 +60,9 @@ from labforge_core.services.live_bus import bus
 _LOGGER = logging.getLogger("labforge.labs")
 
 router = APIRouter(prefix="/labs", tags=["labs"])
+# Real ids are small positive integers; anything larger overflows SQLite and used to be a 500.
+LabId = Annotated[int, PathParam(ge=1, le=2_147_483_647)]
+
 _AUTH = [Depends(require_agent_token)]
 # Lifecycle calls shell out to Docker or Vagrant, so a loop of them can pin the machine.
 _BUILD_LIMIT = [*_AUTH, rate_limited("lab_build", capacity=6, per_seconds=60.0)]
@@ -106,7 +110,7 @@ def create_lab(
 
 @router.get("/{lab_id}", response_model=LabSummary)
 def get_lab(
-    lab_id: int,
+    lab_id: LabId,
     session: Annotated[Session, Depends(get_session)],
 ) -> LabSummary:
     row = session.get(Lab, lab_id)
@@ -120,7 +124,7 @@ def get_lab(
 
 @router.patch("/{lab_id}/status", response_model=LabSummary, dependencies=_AUTH)
 def update_status(
-    lab_id: int,
+    lab_id: LabId,
     new_status: str,
     session: Annotated[Session, Depends(get_session)],
 ) -> LabSummary:
@@ -140,7 +144,7 @@ def update_status(
 
 @router.delete("/{lab_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=_LIFECYCLE_LIMIT)
 def delete_lab(
-    lab_id: int,
+    lab_id: LabId,
     session: Annotated[Session, Depends(get_session)],
     force: Annotated[
         bool,
@@ -178,7 +182,7 @@ def delete_lab(
 @limit("heartbeat", capacity=60, per_seconds=60.0)
 async def post_heartbeat(
     request: Request,
-    lab_id: int,
+    lab_id: LabId,
     payload: HeartbeatPayload,
     session: Annotated[Session, Depends(get_session)],
 ) -> LabSummary:
@@ -225,7 +229,7 @@ async def post_heartbeat(
 
 @router.get("/{lab_id}/heartbeat", response_model=HeartbeatPayload)
 def latest_heartbeat(
-    lab_id: int,
+    lab_id: LabId,
     session: Annotated[Session, Depends(get_session)],
 ) -> HeartbeatPayload:
     row = session.exec(
@@ -243,7 +247,7 @@ def latest_heartbeat(
 
 @router.get("/{lab_id}/log", response_model=list[str])
 def lab_log(
-    lab_id: int,
+    lab_id: LabId,
     session: Annotated[Session, Depends(get_session)],
     lines: int = Query(default=200, ge=1, le=2000),
 ) -> list[str]:
@@ -335,7 +339,7 @@ def _resolve_workspace(lab: Lab) -> Path:
 
 @router.get("/{lab_id}/build/log", response_model=BuildLogChunk)
 def build_log(
-    lab_id: int,
+    lab_id: LabId,
     session: Annotated[Session, Depends(get_session)],
     since: int = Query(default=0, ge=0),
 ) -> BuildLogChunk:
@@ -352,7 +356,7 @@ def build_log(
 
 @router.get("/{lab_id}/build/status", response_model=BuildStatus)
 def build_status(
-    lab_id: int,
+    lab_id: LabId,
     session: Annotated[Session, Depends(get_session)],
 ) -> BuildStatus:
     lab = session.get(Lab, lab_id)
@@ -392,7 +396,7 @@ def build_status(
 
 @router.get("/{lab_id}/build/phases", response_model=BuildPhases)
 def build_phases(
-    lab_id: int,
+    lab_id: LabId,
     session: Annotated[Session, Depends(get_session)],
 ) -> BuildPhases:
     """Per-VM phase snapshot driven by parsing ``build.log``.
@@ -415,7 +419,7 @@ def build_phases(
 
 @router.get("/{lab_id}/topology", response_model=LabConfig)
 def get_lab_topology(
-    lab_id: int,
+    lab_id: LabId,
     session: Annotated[Session, Depends(get_session)],
 ) -> LabConfig:
     """Return the topology JSON that was frozen into the workspace.
@@ -456,7 +460,7 @@ def get_lab_topology(
     dependencies=_LIFECYCLE_LIMIT,
 )
 def stop_lab_build(
-    lab_id: int,
+    lab_id: LabId,
     session: Annotated[Session, Depends(get_session)],
 ) -> BuildStatus:
     """User-initiated abort of an in-flight build.
@@ -482,7 +486,7 @@ def stop_lab_build(
 
 @router.post("/{lab_id}/halt", response_model=LabSummary, dependencies=_LIFECYCLE_LIMIT)
 def halt_lab_route(
-    lab_id: int,
+    lab_id: LabId,
     session: Annotated[Session, Depends(get_session)],
 ) -> LabSummary:
     """Stop a Docker lab's containers and keep its data, network and workspace."""
@@ -505,7 +509,7 @@ def halt_lab_route(
 
 @router.post("/{lab_id}/resume", response_model=LabSummary, dependencies=_BUILD_LIMIT)
 def resume_lab_route(
-    lab_id: int,
+    lab_id: LabId,
     session: Annotated[Session, Depends(get_session)],
 ) -> LabSummary:
     """Start a stopped Docker lab again. Progress shows up in /build/status and /build/log."""
@@ -533,7 +537,7 @@ def resume_lab_route(
 
 @router.get("/{lab_id}/endpoints")
 def lab_endpoints(
-    lab_id: int,
+    lab_id: LabId,
     session: Annotated[Session, Depends(get_session)],
 ) -> list[dict[str, object]]:
     """Addresses a running Docker lab publishes on this computer (Kibana, consoles, RDP)."""
@@ -589,7 +593,7 @@ def build_preflight(
 
 
 @router.websocket("/{lab_id}/ws")
-async def live_stream(websocket: WebSocket, lab_id: int) -> None:
+async def live_stream(websocket: WebSocket, lab_id: LabId) -> None:
     """Live telemetry stream for a single lab.
 
     The dashboard opens this on mount and consumes one JSON envelope

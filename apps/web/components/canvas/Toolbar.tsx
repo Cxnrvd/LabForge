@@ -237,7 +237,10 @@ export function Toolbar() {
     try {
       const result = await build.mutateAsync(topology);
       toast.success("Build started", {
-        description: `vagrant up running in ${result.workspace_path}`,
+        description:
+          topology.provider === "docker"
+            ? "Starting the containers. Follow progress in the monitor."
+            : `vagrant up running in ${result.workspace_path}`,
       });
       router.push(`/monitor/${result.lab_id}`);
     } catch (err) {
