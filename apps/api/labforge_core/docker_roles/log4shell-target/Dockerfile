@@ -16,9 +16,9 @@ RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends wget unzip ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-ENV JDK_URL=https://github.com/adoptium/temurin8-binaries/releases/download/jdk8u181-b13/OpenJDK8U-jdk_x64_linux_8u181b13.tar.gz
+ENV JDK_URL=https://github.com/AdoptOpenJDK/openjdk8-binaries/releases/download/jdk8u181-b13/OpenJDK8U-jdk_x64_linux_hotspot_8u181b13.tar.gz
 RUN mkdir -p /opt/jdk8u181 \
-    && wget -q "${JDK_URL}" -O /tmp/jdk8u181.tar.gz \
+    && wget "${JDK_URL}" -O /tmp/jdk8u181.tar.gz \
     && tar -xzf /tmp/jdk8u181.tar.gz -C /opt/jdk8u181 --strip-components=1 \
     && rm -f /tmp/jdk8u181.tar.gz
 ENV JAVA_HOME=/opt/jdk8u181
