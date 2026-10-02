@@ -4,8 +4,9 @@ Four kinds of entry, all identified by a stable string id:
 
 * ``docker``       a container image reference, for example ``docker.elastic.co/kibana/kibana:8.15.3``.
                    Images LabForge builds itself (``labforge/log-replay:<hash>``) are built, not pulled.
-* ``windows-base`` an installed, vanilla Windows kept in the local volume ``labforge-win-base-<id>``.
-                   Preparing one runs a Windows guest once (download plus setup) and keeps its disk.
+* ``windows-base`` the Windows installer ISO downloaded from Microsoft, kept in the local volume
+                   ``labforge-win-base-<id>``. A lab seeded from it skips the 6 GB download (the
+                   slowest part of a first boot) and still installs fresh, so its first-boot setup runs.
 * ``golden``       a saved copy of a Windows machine's disk volume (``labforge-golden-<slug>``). A new
                    lab seeded from it skips the download and the install.
 * ``vagrant-box``  a Vagrant box for the VM providers.
@@ -398,7 +399,11 @@ def guest_rdp_ready(container: str) -> bool:
     return proc.returncode == 0
 
 
-def _prepare_base(job: Job, image_id: str, timeout_s: float = 7200) -> None:
+ISO_FILES = "*.iso windows.base windows.ver"
+
+
+def _prepare_base(job: Job, image_id: str, timeout_s: float = 10800) -> None:
+    """Download the Windows ISO into the base volume by starting a guest, then keep only the ISO."""
     version, _ = WINDOWS_BASES[image_id]
     volume = BASE_PREFIX + image_id
     container = "labforge-base-" + image_id
@@ -408,34 +413,60 @@ def _prepare_base(job: Job, image_id: str, timeout_s: float = 7200) -> None:
     _docker(["rm", "-f", container])
     run = _docker([
         "run", "-d", "--name", container, "--device", "/dev/kvm", "--cap-add", "NET_ADMIN",
-        "--stop-timeout", "120", "--memory", "5g", "-v", f"{volume}:/storage",
-        "-e", f"VERSION={version}", "-e", "RAM_SIZE=3G", "-e", "CPU_CORES=2", "-e", "DISK_SIZE=64G",
-        "-e", f"USERNAME={BASE_USER}", "-e", f"PASSWORD={BASE_PASSWORD}", "-e", "RAM_CHECK=N",
-        "--label", "labforge.managed=true", WINDOWS_IMAGE,
+        "--stop-timeout", "30", "--memory", "5g", "-v", f"{volume}:/storage",
+        "-e", f"VERSION={version}", "-e", "RAM_SIZE=2G", "-e", "CPU_CORES=1", "-e", "DISK_SIZE=64G",
+        "-e", "RAM_CHECK=N", "--label", "labforge.managed=true", WINDOWS_IMAGE,
     ], timeout=300)
     if run.returncode != 0:
         _docker(["volume", "rm", "-f", volume])
-        raise ImageError("Could not start the Windows guest: " + (run.stderr or run.stdout).strip()[-200:])
+        raise ImageError("Could not start the Windows downloader: " + (run.stderr or run.stdout).strip()[-200:])
     deadline = time.time() + timeout_s
     try:
         while time.time() < deadline:
-            time.sleep(15)
-            state = _docker(["inspect", container, "--format", "{{.State.Running}}"]).stdout.strip()
-            if state != "true":
+            time.sleep(10)
+            if _docker(["inspect", container, "--format", "{{.State.Running}}"]).stdout.strip() != "true":
                 logs = _docker(["logs", "--tail", "5", container]).stdout
-                raise ImageError("The Windows guest stopped: " + logs.strip()[-200:])
-            job.progress = min(95.0, (time.time() - job.started) / timeout_s * 300)
-            if guest_rdp_ready(container):
-                time.sleep(60)  # let first logon finish
-                break
+                raise ImageError("The Windows downloader stopped: " + logs.strip()[-200:])
+            logs = _docker(["logs", "--tail", "40", container]).stdout
+            m = re.findall(r"(\d+)%", logs)
+            if m:
+                job.progress = min(95.0, float(m[-1]))
+            if "Booting Windows" in logs or "Windows started successfully" in logs:
+                break  # the ISO is complete once QEMU boots from it
         else:
-            raise ImageError("Windows did not finish setting up in time.")
-        _docker(["stop", "-t", "120", container], timeout=200)
+            raise ImageError("The Windows download did not finish in time.")
     except Exception:
         _docker(["rm", "-f", container])
         _docker(["volume", "rm", "-f", volume])
         raise
-    _docker(["rm", container])
+    _docker(["rm", "-f", container], timeout=120)
+    _trim_to_iso(volume)
+
+
+def _trim_to_iso(volume: str) -> None:
+    """Keep only the installer ISO (and its marker files) in a base volume."""
+    proc = _docker([
+        "run", "--rm", "-v", f"{volume}:/s", "alpine:3", "sh", "-c",
+        "cd /s && for f in *; do case $f in *.iso|windows.base|windows.ver) ;; *) rm -rf \"$f\";; esac; done; ls",
+    ], timeout=300)
+    if proc.returncode != 0 or ".iso" not in proc.stdout:
+        _docker(["volume", "rm", "-f", volume])
+        raise ImageError("The download did not leave an ISO behind.")
+
+
+def adopt_base(source_volume: str, image_id: str) -> None:
+    """Keep the ISO of an already booted guest's storage volume as the base for ``image_id``."""
+    if image_id not in WINDOWS_BASES:
+        raise ImageError("Unknown Windows base.", "not_found", 404)
+    volume = BASE_PREFIX + image_id
+    if _docker(["volume", "inspect", volume]).returncode == 0:
+        raise ImageError("That base already exists.", "exists")
+    _docker(["volume", "create", "--label", f"{LABEL_BASE}=true", "--label", f"labforge.base.os={image_id}", volume])
+    proc = _docker(["run", "--rm", "-v", f"{source_volume}:/from:ro", "-v", f"{volume}:/to", "alpine:3",
+                    "sh", "-c", f"cd /from && cp -a {ISO_FILES} /to/"], timeout=3600)
+    if proc.returncode != 0:
+        _docker(["volume", "rm", "-f", volume])
+        raise ImageError("Could not copy the ISO: " + (proc.stderr or proc.stdout).strip()[-200:])
 
 
 # ------------------------------------------------------------------ remove
@@ -633,3 +664,33 @@ def seed_volume(project: str, host: str, golden: str) -> str:
         _docker(["volume", "rm", "-f", volume])
         raise ImageError("Could not copy the golden image: " + (proc.stderr or proc.stdout).strip()[-200:])
     return volume
+
+
+def seed_base_volume(project: str, host: str, base_id: str) -> str:
+    """Create ``<project>_<host>-storage`` holding only the downloaded ISO, so setup skips the download."""
+    source = BASE_PREFIX + base_id
+    if _docker(["volume", "inspect", source]).returncode != 0:
+        raise ImageError(f"The {base_id} base is not prepared.", "not_ready")
+    volume = f"{project}_{host}-storage"
+    if _docker(["volume", "inspect", volume]).returncode == 0:
+        return volume
+    _docker(["volume", "create", "--label", f"com.docker.compose.project={project}",
+             "--label", f"com.docker.compose.volume={host}-storage", volume])
+    proc = _docker(["run", "--rm", "-v", f"{source}:/from:ro", "-v", f"{volume}:/to", "alpine:3",
+                    "sh", "-c", f"cd /from && cp -a {ISO_FILES} /to/"], timeout=3600)
+    if proc.returncode != 0:
+        _docker(["volume", "rm", "-f", volume])
+        raise ImageError("Could not copy the ISO: " + (proc.stderr or proc.stdout).strip()[-200:])
+    return volume
+
+
+def base_seeds(topology: LabConfig, project: str, existing: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Seeds for Windows nodes that have no golden image but whose Windows base is already downloaded."""
+    taken = {seed["host"] for seed in existing}
+    wanted = [(n.config.hostname, _OS_TO_BASE[n.config.os.value]) for n in topology.nodes
+              if is_windows_guest(n) and n.config.hostname not in taken]
+    if not wanted:
+        return []
+    have = {b for b in {base for _, base in wanted} if _docker(["volume", "inspect", BASE_PREFIX + b]).returncode == 0}
+    return [{"host": host, "base": base, "project": project} for host, base in wanted if base in have]
+

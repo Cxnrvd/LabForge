@@ -47,7 +47,7 @@ from labforge_schema import LabConfig, Provider
 from sqlmodel import Session, select
 
 from labforge_core.models import Lab
-from labforge_core.services import boxes, docker_runtime, hostenv, preflight
+from labforge_core.services import boxes, docker_runtime, hostenv, images, preflight
 from labforge_core.services.compose_generator import (
     build_bundle,
     has_windows_guests,
@@ -158,6 +158,16 @@ def _write_docker_bundle(
         target = workspace / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         hostenv.write_guest_file(target, content, rel)
+    # Windows guests whose installer is already downloaded start from a copy of it.
+    seeds_path = workspace / ".labforge-seeds.json"
+    existing = json.loads(seeds_path.read_text(encoding="utf-8")) if seeds_path.exists() else []
+    try:
+        extra = images.base_seeds(topology, project, existing)
+    except Exception:
+        _LOGGER.warning("base_seed_lookup_failed", exc_info=True)
+        extra = []
+    if extra:
+        hostenv.write_guest_file(seeds_path, json.dumps([*existing, *extra], indent=2), ".labforge-seeds.json")
     return artifacts.warnings
 
 

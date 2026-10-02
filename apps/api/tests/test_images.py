@@ -269,3 +269,44 @@ def test_export_is_a_local_download(client, fake, monkeypatch):
     assert r.status_code == 200 and r.content == b"tar-bytes"
     assert r.headers["x-labforge-local-only"] == "true"
     assert r.headers["content-disposition"].startswith("attachment")
+
+
+def test_windows_nodes_start_from_the_downloaded_installer_when_a_base_exists(fake):
+    topology = get_template("ransomware-intrusion-lab")
+    assert images.base_seeds(topology, "lf4-x", []) == []  # nothing downloaded yet
+    fake.volumes.add("labforge-win-base-windows-10")
+    seeds = images.base_seeds(topology, "lf4-x", [])
+    assert [s["host"] for s in seeds] == ["ws-acc-014", "ws-ops-003"] and seeds[0]["base"] == "windows-10"
+    # a node with a golden image keeps it
+    only = images.base_seeds(topology, "lf4-x", [{"host": "ws-acc-014", "golden": "g", "project": "lf4-x"}])
+    assert [s["host"] for s in only] == ["ws-ops-003"]
+
+
+def test_seeding_from_a_base_copies_only_the_iso_and_labels_the_volume(fake):
+    fake.volumes.add("labforge-win-base-windows-10")
+    name = images.seed_base_volume("lf4-x", "ws-acc-014", "windows-10")
+    assert name == "lf4-x_ws-acc-014-storage"
+    copy = next(c for c in fake.calls if c[0] == "run")
+    assert "cp -a *.iso windows.base windows.ver /to/" in copy[-1]
+    create = next(c for c in fake.calls if c[:2] == ["volume", "create"])
+    assert "com.docker.compose.project=lf4-x" in create
+    with pytest.raises(images.ImageError, match="not prepared"):
+        images.seed_base_volume("lf4-x", "ws", "windows-11")
+
+
+def test_adopting_an_installed_guests_iso_as_the_base(fake):
+    images.adopt_base("lf1-x_ws-storage", "windows-10")
+    assert "labforge-win-base-windows-10" in fake.volumes
+    copy = next(c for c in fake.calls if c[0] == "run")
+    assert "lf1-x_ws-storage:/from:ro" in copy
+    with pytest.raises(images.ImageError, match="already exists"):
+        images.adopt_base("lf1-x_ws-storage", "windows-10")
+
+
+def test_the_build_writes_base_seeds_next_to_the_bundle(tmp_path, monkeypatch):
+    from labforge_core.services import build_runner
+
+    monkeypatch.setattr(images, "base_seeds", lambda topology, project, existing: [{"host": "ws-acc-014", "base": "windows-10", "project": project}])
+    build_runner._write_docker_bundle(get_template("ransomware-intrusion-lab"), tmp_path, project="lf5-x", publish="loopback")
+    seeds = json.loads((tmp_path / ".labforge-seeds.json").read_text())
+    assert seeds == [{"host": "ws-acc-014", "base": "windows-10", "project": "lf5-x"}]

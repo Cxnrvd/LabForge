@@ -21,9 +21,13 @@ def main(argv: list[str]) -> int:
         from labforge_core.services import images
 
         for seed in json.loads(seeds_file.read_text(encoding="utf-8")):
-            print(f"[labforge] copying golden image {seed['golden']} for {seed['host']} ...", flush=True)
+            what = f"golden image {seed['golden']}" if "golden" in seed else f"{seed['base']} installer"
+            print(f"[labforge] copying {what} for {seed['host']} ...", flush=True)
             try:
-                volume = images.seed_volume(seed["project"], seed["host"], seed["golden"])
+                if "golden" in seed:
+                    volume = images.seed_volume(seed["project"], seed["host"], seed["golden"])
+                else:
+                    volume = images.seed_base_volume(seed["project"], seed["host"], seed["base"])
             except images.ImageError as exc:
                 print(f"[labforge] ERROR {exc}", flush=True)
                 return 1
