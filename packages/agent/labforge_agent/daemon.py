@@ -160,6 +160,9 @@ def _topology_ip_map(workspace: Path) -> dict[str, str]:
     return out
 
 
+_ANSI = re.compile("[" + chr(27) + "][[0-9;?]*[A-Za-z]")
+
+
 def _compose_log_tail(workspace: Path, max_lines: int = 50) -> list[str]:
     project = _compose_project(workspace)
     if not project:
@@ -177,7 +180,7 @@ def _compose_log_tail(workspace: Path, max_lines: int = 50) -> list[str]:
         return []
     if proc.returncode != 0:
         return []
-    return [ln for ln in proc.stdout.splitlines() if ln.strip()][-max_lines:]
+    return [_ANSI.sub("", ln) for ln in proc.stdout.splitlines() if ln.strip()][-max_lines:]
 
 
 _HOST_RE = re.compile(r'config\.vm\.define\s+"([^"]+)"')

@@ -38,3 +38,16 @@ def test_one_bad_sample_does_not_kill_the_daemon(monkeypatch, tmp_path):
     monkeypatch.setattr(daemon, "_compose_status", boom)
     monkeypatch.setattr(daemon, "_detect_capture_ifaces", lambda ip_map: [])
     assert daemon.run(lab_id=1, workspace=tmp_path, api_base="http://127.0.0.1:9", one_shot=True) == 0
+
+
+def test_ansi_colour_codes_are_stripped_from_the_log_tail(monkeypatch, tmp_path):
+    real_run = subprocess.run
+    esc = chr(27)
+    prog = f"print({esc!r} + '[1;34mDownloading Windows 10' + {esc!r} + '[0m')"
+
+    def run(cmd, **kwargs):
+        return real_run([sys.executable, "-c", prog], **kwargs)
+
+    monkeypatch.setattr(daemon.subprocess, "run", run)
+    monkeypatch.setattr(daemon, "_compose_project", lambda ws: "lf1-test")
+    assert daemon._compose_log_tail(tmp_path) == ["Downloading Windows 10"]
