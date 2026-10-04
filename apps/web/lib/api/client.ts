@@ -206,6 +206,14 @@ export interface WorkspaceValidation {
   existing: WorkspaceExisting | null;
 }
 
+export interface HostUsbDevice {
+  vendor_id: string;
+  product_id: string;
+  name?: string;
+  manufacturer?: string;
+  state?: string;
+}
+
 export const api = {
   workspace: () => request<WorkspaceStatus>("/settings/workspace"),
   validateWorkspace: (path: string) =>
@@ -229,6 +237,8 @@ export const api = {
     return request<PreflightReport>(`/host/preflight${qs ? `?${qs}` : ""}`);
   },
   hostMetrics: () => request<HostMetrics>("/host/metrics"),
+  /** USB devices VirtualBox can pass through on this host (for a device picker). Read-only. */
+  hostUsbDevices: () => request<{ devices: HostUsbDevice[] }>("/host/usb-devices"),
   listTemplates: () => request<TemplateSummary[]>("/templates"),
   getTemplate: (id: string) => request<LabConfig>(`/templates/${id}`),
   validateTopology: (topology: LabConfig) =>

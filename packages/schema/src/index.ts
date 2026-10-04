@@ -220,6 +220,12 @@ export const NodeConfig = z.object({
   // Optional Docker image hint used by the docker-compose generator.
   // When set, the compose target runs the node as a container.
   compose_image: z.string().max(256).nullable().optional(),
+  // Optional host USB device to pass through to this VM (VirtualBox only).
+  // Four hex digits each, as reported by GET /api/v1/host/usb-devices or
+  // lsusb/Device Manager. Identifies the device only — no attack tooling
+  // or network config is implied by setting this.
+  usb_vendor_id: z.string().regex(/^[0-9a-fA-F]{4}$/).nullable().optional(),
+  usb_product_id: z.string().regex(/^[0-9a-fA-F]{4}$/).nullable().optional(),
 });
 export type NodeConfig = z.infer<typeof NodeConfig>;
 

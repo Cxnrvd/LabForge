@@ -225,3 +225,74 @@ def test_dfir_lab_splunk_and_telecom_ad_rts_firewall_now_have_real_installers():
     telecom_artifacts = generate_artifacts(telecom)
     assert telecom_artifacts.warnings == []
     assert "nftables" in telecom_artifacts.provisioner_scripts["provision_fw01.sh"]
+
+
+def test_wifi_pentest_env_role_installs_no_attack_tooling():
+    """wifi-pentest-env must only install diagnostics (iw/usbutils/rfkill) for a
+    passed-through adapter — never aircrack-ng, hostapd, wifite, hcxtools, or hashcat.
+    That line is load-bearing: everything past it is the user's own, run by hand
+    inside the VM, not something LabForge pre-wires."""
+    from labforge_schema import Credentials, LabConfig, NodeConfig, NodeType, OsType, Position, Provider, TopologyNode
+    from labforge_core.services.generator import generate_artifacts
+
+    node = TopologyNode(
+        id="wifi1",
+        type=NodeType.ATTACKER,
+        label="wifi vm",
+        position=Position(x=0, y=0),
+        config=NodeConfig(
+            os=OsType.KALI_ROLLING,
+            ip="192.168.56.20",
+            hostname="wifiattacker",
+            roles=["wifi-pentest-env"],
+            credentials=Credentials(username="vagrant", password="vagrant"),
+            usb_vendor_id="0bda",
+            usb_product_id="8812",
+        ),
+    )
+    topology = LabConfig(
+        name="wifi-test",
+        network_cidr="192.168.56.0/24",
+        provider=Provider.VIRTUALBOX,
+        nodes=[node],
+    )
+    artifacts = generate_artifacts(topology)
+    assert artifacts.warnings == []
+
+    script = artifacts.provisioner_scripts["provision_wifiattacker.sh"]
+    assert "iw dev" in script
+    assert "usbutils" in script
+    for forbidden in ("aircrack", "hostapd", "wifite", "hcxdumptool", "hcxtools", "hashcat", "reaver"):
+        assert forbidden not in script.lower(), f"{forbidden!r} must never appear in wifi-pentest-env"
+
+    # The USB filter must reach the Vagrantfile so the device actually gets attached.
+    assert 'v.customize ["modifyvm", :id, "--usb", "on"]' in artifacts.vagrantfile
+    assert '"--vendorid", "0x0bda"' in artifacts.vagrantfile
+    assert '"--productid", "0x8812"' in artifacts.vagrantfile
+
+
+def test_usb_passthrough_omitted_without_both_ids():
+    """No vendor/product ID pair -> no usbfilter block at all, not a broken one."""
+    from labforge_schema import Credentials, LabConfig, NodeConfig, NodeType, OsType, Position, Provider, TopologyNode
+    from labforge_core.services.generator import generate_artifacts
+
+    node = TopologyNode(
+        id="plain1",
+        type=NodeType.SERVER,
+        label="plain vm",
+        position=Position(x=0, y=0),
+        config=NodeConfig(
+            os=OsType.UBUNTU_2204,
+            ip="192.168.56.21",
+            hostname="plainvm",
+            credentials=Credentials(username="vagrant", password="vagrant"),
+        ),
+    )
+    topology = LabConfig(
+        name="no-usb-test",
+        network_cidr="192.168.56.0/24",
+        provider=Provider.VIRTUALBOX,
+        nodes=[node],
+    )
+    artifacts = generate_artifacts(topology)
+    assert "usbfilter" not in artifacts.vagrantfile

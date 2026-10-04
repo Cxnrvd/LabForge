@@ -91,6 +91,26 @@ export function LaunchDialog(): React.ReactElement {
   });
   const imagesQ = useImages();
 
+  // Nodes that asked for a host USB device via the wifi-pentest-env role (or
+  // any role ending in "-usb-passthrough", for future device roles). Only
+  // meaningful on a VM provider — Docker doesn't go through Vagrant/VBoxManage.
+  const usbNodes = (topology?.nodes ?? []).filter((n) =>
+    (n.config.roles ?? []).some((r) => r === "wifi-pentest-env" || /-usb-passthrough(@|$)/.test(r)),
+  );
+  const usbDevicesQ = useQuery({
+    queryKey: ["host-usb-devices"],
+    queryFn: () => api.hostUsbDevices(),
+    enabled: open && provider !== "docker" && usbNodes.length > 0,
+    retry: 0,
+  });
+
+  const setUsbDevice = (nodeId: string, vendorId: string, productId: string): void => {
+    updateNodeConfig(nodeId, (n) => ({
+      ...n,
+      config: { ...n.config, usb_vendor_id: vendorId || null, usb_product_id: productId || null },
+    }));
+  };
+
   const totalRam = (topology?.nodes ?? []).reduce((a, n) => a + (n.config.memory_mb ?? 0), 0);
   const totalCpu = (topology?.nodes ?? []).reduce((a, n) => a + (n.config.cpus ?? 0), 0);
   const freeMb =
@@ -141,6 +161,21 @@ export function LaunchDialog(): React.ReactElement {
   const diskWhere = dockerDisk?.free_gb != null ? dockerDisk.path : host.data?.disk.workspace_path ?? host.data?.disk.path;
   if (diskFree != null && diskFree < 40 && missing.length > 0) {
     checks.push({ label: `Only ${diskFree.toFixed(0)} GB of disk is free${diskWhere ? ` at ${diskWhere}` : ""}`, detail: "Downloads may not fit.", tone: "warn" });
+  }
+  if (usbNodes.length > 0 && provider === "docker") {
+    checks.push({
+      label: "USB device passthrough needs a VM provider",
+      detail: "Pick VirtualBox or VMware — Docker containers can't reliably get exclusive access to a physical adapter.",
+      tone: "warn",
+    });
+  }
+  const usbNodesMissingDevice = usbNodes.filter((n) => !n.config.usb_vendor_id || !n.config.usb_product_id);
+  if (provider !== "docker" && usbNodesMissingDevice.length > 0) {
+    checks.push({
+      label: `${usbNodesMissingDevice.length} node${usbNodesMissingDevice.length === 1 ? "" : "s"} still need${usbNodesMissingDevice.length === 1 ? "s" : ""} a USB device picked`,
+      detail: "Pick the adapter in the USB device section above, or monitor mode won't have anything to attach to.",
+      tone: "warn",
+    });
   }
 
   const blocked = checks.some((c) => c.tone === "err") || !topology || topology.nodes.length === 0;
@@ -307,6 +342,63 @@ export function LaunchDialog(): React.ReactElement {
             </p>
           )}
         </section>
+
+        {usbNodes.length > 0 && (
+          <section aria-label="USB device passthrough">
+            <div className="mb-2 flex items-baseline justify-between">
+              <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">USB device</h3>
+              {usbDevicesQ.isFetching && <span className="text-xs text-muted-foreground">Scanning host…</span>}
+            </div>
+            <div className="grid gap-2">
+              {usbNodes.map((n) => {
+                const devices = usbDevicesQ.data?.devices ?? [];
+                const selected = devices.find(
+                  (d) => d.vendor_id === n.config.usb_vendor_id && d.product_id === n.config.usb_product_id,
+                );
+                return (
+                  <div key={n.id} className="flex items-center gap-3 rounded-lg border border-border px-3 py-2 text-sm">
+                    <span className="font-medium">{n.config.hostname}</span>
+                    <select
+                      className="ml-auto h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-sm sm:flex-none sm:w-64"
+                      value={selected ? `${selected.vendor_id}:${selected.product_id}` : ""}
+                      onChange={(e) => {
+                        const [vendorId, productId] = e.target.value.split(":");
+                        setUsbDevice(n.id, vendorId ?? "", productId ?? "");
+                      }}
+                      aria-label={`USB device for ${n.config.hostname}`}
+                    >
+                      <option value="">
+                        {provider === "docker"
+                          ? "Pick VirtualBox or VMware first"
+                          : usbDevicesQ.isFetching
+                            ? "Scanning…"
+                            : devices.length === 0
+                              ? "No USB devices found"
+                              : "Select a device…"}
+                      </option>
+                      {devices.map((d) => (
+                        <option key={`${d.vendor_id}:${d.product_id}`} value={`${d.vendor_id}:${d.product_id}`}>
+                          {(d.name ?? "Unknown device") + (d.manufacturer ? ` — ${d.manufacturer}` : "")} ({d.vendor_id}:{d.product_id})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              This only attaches the physical device to the VM over VirtualBox USB passthrough. It installs no
+              networking, monitor-mode, or attack tooling — the VM comes up with wireless diagnostics only
+              (<code>iw</code>, <code>rfkill</code>, <code>usbutils</code>) so you can confirm the adapter is seen,
+              then install and run whatever you need yourself inside it.
+            </p>
+            {usbDevicesQ.isError && (
+              <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                Could not list host USB devices. Is VirtualBox installed and on PATH?
+              </p>
+            )}
+          </section>
+        )}
 
         <section aria-label="Checks">
           <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Before you start</h3>

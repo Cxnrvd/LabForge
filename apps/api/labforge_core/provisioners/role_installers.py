@@ -567,6 +567,29 @@ apt-get update -y && apt-get install -y vault
         "Bind9 caching DNS resolver",
         _APT_PREAMBLE + "apt-get install -y bind9\nsystemctl enable --now named\n",
     ),
+    # Deliberately NOT an attack toolkit. This installs only what's needed to
+    # confirm a passed-through USB wireless adapter is visible to the guest
+    # and can be switched into monitor mode: driver stack, iw/wireless-tools
+    # for diagnostics, usbutils to confirm the device enumerated, and
+    # rfkill in case the guest boots with wifi soft-blocked. It does not
+    # install aircrack-ng, hostapd, wifite, hcxtools, or hashcat — the user
+    # installs and runs their own tooling on top of this once the adapter is
+    # confirmed working in monitor mode.
+    "wifi-pentest-env": _bash(
+        "wifi-pentest-env",
+        "Wireless diagnostics only (iw, usbutils, rfkill) for a passed-through "
+        "USB adapter. No attack tooling is installed by this role.",
+        _APT_PREAMBLE + (
+            "apt-get install -y iw wireless-tools usbutils rfkill "
+            "linux-firmware >/dev/null 2>&1 || true\n"
+            "rfkill unblock all || true\n"
+            "echo '--- USB devices visible to this VM ---'\n"
+            "lsusb || true\n"
+            "echo '--- Wireless interfaces visible to this VM ---'\n"
+            "iw dev || echo 'No wireless interface detected yet — check the "
+            "USB passthrough filter matches your adapter (see README).'\n"
+        ),
+    ),
 }
 
 

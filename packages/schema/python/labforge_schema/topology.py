@@ -207,6 +207,14 @@ class NodeConfig(BaseModel):
     # When set, the compose target runs the node as a container instead
     # of a VM (where the OS/role mix allows it).
     compose_image: Optional[str] = Field(default=None, max_length=256)
+    # Optional host USB device to pass through to this VM (VirtualBox only).
+    # Four hex digits each, as reported by the host adapter-listing endpoint
+    # or `lsusb`/Device Manager. Both must be set together to take effect —
+    # see docker_roles.py / generator.py for the "what this does and doesn't
+    # do" note; this field only identifies the device, it carries no
+    # attack tooling or network configuration of its own.
+    usb_vendor_id: Optional[str] = Field(default=None, pattern=r"^[0-9a-fA-F]{4}$")
+    usb_product_id: Optional[str] = Field(default=None, pattern=r"^[0-9a-fA-F]{4}$")
 
     @field_validator("ip")
     @classmethod

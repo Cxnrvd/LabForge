@@ -363,6 +363,8 @@ def generate_artifacts(
                 "cpus": node.config.cpus,
                 "provision_script": f"provision/{filename}",
                 "node_type": node.type.value,
+                "usb_vendor_id": node.config.usb_vendor_id,
+                "usb_product_id": node.config.usb_product_id,
             }
         )
 

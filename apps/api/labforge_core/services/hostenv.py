@@ -235,6 +235,59 @@ def vagrant_version() -> str | None:
     return None
 
 
+def usb_devices() -> list[dict[str, str]]:
+    """USB devices VirtualBox can see on this host, for the Launch dialog's device picker.
+
+    Parses ``VBoxManage list usbhost``, which is the same enumeration VirtualBox
+    itself uses for passthrough, so a vendor/product ID returned here is
+    guaranteed to be one ``usbfilter add`` can actually match. Read-only: this
+    does not touch, claim, or configure any device, and returns [] (never
+    raises) if VirtualBox isn't installed or the host has no USB controller
+    VirtualBox can query.
+    """
+    cmd = vboxmanage_command()
+    if cmd == ["VBoxManage"] and shutil.which("VBoxManage") is None:
+        return []
+    proc = _run([*cmd, "list", "usbhost"], timeout=10)
+    if not proc or proc.returncode != 0 or not proc.stdout.strip():
+        return []
+
+    devices: list[dict[str, str]] = []
+    current: dict[str, str] = {}
+    for raw_line in proc.stdout.splitlines():
+        line = raw_line.rstrip()
+        if not line.strip():
+            if current.get("vendor_id") and current.get("product_id"):
+                devices.append(current)
+            current = {}
+            continue
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        key = key.strip().lower()
+        value = value.strip()
+        if key == "uuid":
+            current = {}  # start of a new device block
+        elif key == "vendorid":
+            # e.g. "0x0bda (Realtek Semiconductor Corp.)" -> "0bda"
+            m = re.search(r"0x([0-9a-fA-F]{1,4})", value)
+            if m:
+                current["vendor_id"] = m.group(1).lower().zfill(4)
+        elif key == "productid":
+            m = re.search(r"0x([0-9a-fA-F]{1,4})", value)
+            if m:
+                current["product_id"] = m.group(1).lower().zfill(4)
+        elif key == "product":
+            current["name"] = value
+        elif key == "manufacturer":
+            current.setdefault("manufacturer", value)
+        elif key in ("state", "current state"):
+            current["state"] = value
+    if current.get("vendor_id") and current.get("product_id"):
+        devices.append(current)
+    return devices
+
+
 def vagrant_plugins() -> list[str]:
     proc = _run(["vagrant", "plugin", "list"], timeout=30)
     if not proc or proc.returncode != 0:

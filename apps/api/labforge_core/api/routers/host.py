@@ -6,7 +6,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Query
 
-from labforge_core.services import docker_runtime, hostmetrics, preflight
+from labforge_core.services import docker_runtime, hostenv, hostmetrics, preflight
 
 router = APIRouter(prefix="/host", tags=["host"])
 
@@ -21,6 +21,18 @@ def host_metrics() -> dict[str, Any]:
 def host_storage() -> dict[str, Any]:
     """The disks that matter: where lab folders go and where Docker keeps images and Windows disks."""
     return hostmetrics.storage()
+
+
+@router.get("/usb-devices")
+def host_usb_devices() -> dict[str, Any]:
+    """USB devices VirtualBox can pass through to a VM on this host.
+
+    Read-only enumeration (``VBoxManage list usbhost``) for the Launch
+    dialog's device picker — e.g. selecting a USB wifi adapter for a
+    ``usb_vendor_id``/``usb_product_id`` node field. Does not claim, open,
+    or configure any device; empty list if VirtualBox isn't installed.
+    """
+    return {"devices": hostenv.usb_devices()}
 
 
 @router.get("/preflight")
