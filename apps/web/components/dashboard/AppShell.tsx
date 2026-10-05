@@ -34,7 +34,7 @@ interface NavEntry {
 
 type IconName =
   | "home" | "canvas" | "labs" | "monitor" | "templates" | "vendors" | "cves"
-  | "images" | "check" | "download" | "settings" | "agent" | "docs" | "sun" | "moon" | "bell" | "help";
+  | "images" | "check" | "download" | "settings" | "agent" | "docs" | "sun" | "moon" | "bell" | "help" | "webinar";
 
 const ICON_PATHS: Record<IconName, string> = {
   home: "M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z",
@@ -54,6 +54,7 @@ const ICON_PATHS: Record<IconName, string> = {
   moon: "M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z",
   bell: "M6 16V11a6 6 0 0 1 12 0v5l2 2H4zM10 21h4",
   help: "M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1 1-1 1.7M12 17v.01M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z",
+  webinar: "M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM8 21h8M12 17v4",
 };
 
 function Icon({ name, size = 18 }: { name: IconName; size?: number }): React.ReactElement {
@@ -80,6 +81,7 @@ const WORKSPACE_NAV: NavEntry[] = [
   { href: "/labs", label: "Labs", icon: "labs" },
   { href: "/monitor", label: "Monitor", icon: "monitor" },
   { href: "/templates", label: "Templates", icon: "templates" },
+  { href: "/webinar", label: "WiFi Lab", icon: "webinar" },
 ];
 
 const CATALOG_NAV: NavEntry[] = [

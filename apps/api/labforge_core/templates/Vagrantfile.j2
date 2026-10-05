@@ -36,13 +36,29 @@ Vagrant.configure("2") do |config|
       # box costs seconds and megabytes instead of a full copy.
       v.linked_clone = true
       v.name = {{ ("labforge-" ~ (topology.name | replace(' ', '-') | lower) ~ "-" ~ n.hostname) | tojson }}
+{% if n.gui %}
+      # Visible VirtualBox window instead of headless — pair with a
+      # desktop-environment role (e.g. "desktop-xfce") or this just shows
+      # an empty console.
+      v.gui = true
+{% endif %}
 {% if n.usb_vendor_id and n.usb_product_id %}
       # USB passthrough for a host device (e.g. a USB wifi adapter), picked
       # in the Launch dialog. This only attaches the device to the guest —
       # it does not configure networking, monitor mode, or install any
       # tooling; that's the node's role installer and/or you, inside the VM.
-      # Requires the Oracle VM VirtualBox Extension Pack on the host.
       v.customize ["modifyvm", :id, "--usb", "on"]
+{% if usb_ehci_available %}
+      v.customize ["modifyvm", :id, "--usb-ehci", "on"]
+{% else %}
+      # NOTE: the VirtualBox Extension Pack is not installed on the host that
+      # generated this lab, so only a USB 1.1 (OHCI) controller is available.
+      # A USB 2.0 device (most wifi dongles) still enumerates over OHCI, but
+      # gets squeezed into full-speed mode — in practice its driver often
+      # never finishes bringing up a usable wireless interface. Install the
+      # matching Extension Pack from virtualbox.org/wiki/Downloads, then
+      # re-generate this lab, if the passed-through adapter doesn't come up.
+{% endif %}
       v.customize ["usbfilter", "add", "0",
         "--target", :id,
         "--name", {{ ("labforge-usb-" ~ n.hostname) | tojson }},

@@ -288,6 +288,26 @@ def usb_devices() -> list[dict[str, str]]:
     return devices
 
 
+def virtualbox_extpack_installed() -> bool:
+    """Whether the (proprietary, separately-licensed) Oracle VirtualBox Extension
+    Pack is installed — without it, VirtualBox only emulates a USB 1.1 (OHCI)
+    controller. A real USB 2.0 device passed through that way still enumerates
+    (it shows up in the guest's USB tree) but its endpoints get forced into
+    full-speed mode, which can leave the driver never registering a working
+    wiphy — i.e. a USB wifi dongle that appears to pass through but never
+    actually comes up as a usable wireless interface. Never raises.
+    """
+    cmd = vboxmanage_command()
+    if cmd == ["VBoxManage"] and shutil.which("VBoxManage") is None:
+        return False
+    proc = _run([*cmd, "list", "extpacks"], timeout=10)
+    if not proc or proc.returncode != 0:
+        return False
+    # First line reads "Extension Packs: <count>".
+    match = re.search(r"Extension Packs:\s*(\d+)", proc.stdout)
+    return bool(match and int(match.group(1)) > 0)
+
+
 def vagrant_plugins() -> list[str]:
     proc = _run(["vagrant", "plugin", "list"], timeout=30)
     if not proc or proc.returncode != 0:
@@ -341,6 +361,7 @@ def _vm_runtime_status_uncached() -> dict[str, object]:
         "host_arch": os.uname().machine if hasattr(os, "uname") else os.environ.get("PROCESSOR_ARCHITECTURE", ""),
         "vagrant_version": vagrant_version(),
         "virtualbox_version": virtualbox_version(),
+        "virtualbox_extpack": virtualbox_extpack_installed(),
         "vmware_vmrun": vmrun_path(),
         "vmware_plugin": "vagrant-vmware-desktop" in plugins,
         "hypervisor_present": hypervisor_present(),
@@ -383,6 +404,14 @@ def provider_warnings(provider: Provider, status: dict[str, object] | None = Non
             "VMs usually start but run slower, and sometimes fail with VERR_NEM_VM_CREATE_FAILED. "
             "If that happens, use VMware Workstation or turn Hyper-V off (bcdedit /set hypervisorlaunchtype off, "
             "then reboot). Turning it off stops Docker Desktop's WSL2 backend."
+        )
+    if provider is Provider.VIRTUALBOX and not status.get("virtualbox_extpack"):
+        out.append(
+            "The VirtualBox Extension Pack is not installed, so USB passthrough only gets a "
+            "USB 1.1 (OHCI) controller. A real USB 2.0 wifi dongle still shows up in the guest "
+            "but its driver often never brings up a usable wireless interface. If a node needs a "
+            "passed-through USB adapter, install the matching Extension Pack from "
+            "virtualbox.org/wiki/Downloads first."
         )
     return out
 

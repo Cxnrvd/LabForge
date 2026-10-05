@@ -590,6 +590,183 @@ apt-get update -y && apt-get install -y vault
             "USB passthrough filter matches your adapter (see README).'\n"
         ),
     ),
+    # Turns a passed-through USB wireless adapter into a real access point.
+    # Ships a safe default (open SSID, 2.4GHz) so the node boots to something
+    # working; the point of this role is that you then edit
+    # /etc/hostapd/hostapd.conf yourself to switch between WEP/WPA2/WPA3/WPS
+    # for each demo segment and `systemctl restart hostapd`. Logs
+    # association/deauth/EAPOL activity to syslog so a wazuh/elastic agent
+    # on this same node can ship it upstream — that's the whole point of
+    # pairing this role with a SIEM role in the same lab.
+    "hostapd": _bash(
+        "hostapd",
+        "hostapd + dnsmasq turning a passed-through USB adapter into a real AP",
+        _APT_PREAMBLE + (
+            "apt-get install -y hostapd dnsmasq iw wireless-tools rfkill\n"
+            "rfkill unblock all || true\n"
+            "systemctl unmask hostapd || true\n"
+            "systemctl stop dnsmasq || true\n"
+            # Known-bad driver workaround: cheap USB dongles using the Realtek
+            # RTL8188EU chipset (USB ID 0bda:0179) ship with Debian's bundled
+            # "r8188eu" module, which only exposes legacy Wireless Extensions
+            # — modern hostapd requires nl80211, so this chip silently can't
+            # run an AP under the stock driver. Swap in the actively
+            # maintained aircrack-ng community fork, which supports AP mode
+            # over nl80211. Building it needs a kernel/headers upgrade (the
+            # box's shipped kernel is usually older than what's in the current
+            # apt archive, which only keeps headers for recent point
+            # releases), so this builds the module for whichever kernel ends
+            # up installed rather than rebooting mid-provision — an
+            # uncoordinated reboot here would drop vagrant's SSH session and
+            # read as a failed build even though the fix worked. Idempotent:
+            # skips straight through once the driver is already built for the
+            # currently-installed kernel.\n"
+            "if lsusb 2>/dev/null | grep -qi '0bda:0179'; then\n"
+            "  apt-get install -y -qq linux-image-amd64 linux-headers-amd64 "
+            "build-essential dkms git bc >/dev/null 2>&1 || true\n"
+            "  TARGET_KERNEL=$(ls /lib/modules 2>/dev/null | sort -V | tail -1)\n"
+            "  if [ -n \"$TARGET_KERNEL\" ] && [ -d \"/lib/modules/$TARGET_KERNEL/build\" ]; then\n"
+            "    if ! dkms status 2>/dev/null | grep -q \"8188eu/5.3.9, $TARGET_KERNEL,.*installed\"; then\n"
+            "      echo \"[hostapd role] Realtek RTL8188EU (0bda:0179) detected — "
+            "the stock driver only supports legacy Wireless Extensions, which "
+            "hostapd can't use. Building the aircrack-ng nl80211 driver for "
+            "kernel $TARGET_KERNEL...\"\n"
+            "      echo 'blacklist r8188eu' > /etc/modprobe.d/blacklist-r8188eu.conf\n"
+            "      [ -d /usr/src/rtl8188eus ] || git clone -q "
+            "https://github.com/aircrack-ng/rtl8188eus.git /usr/src/rtl8188eus\n"
+            "      (cd /usr/src/rtl8188eus && bash dkms-install.sh) || true\n"
+            "    fi\n"
+            "    if dkms status 2>/dev/null | grep -q \"8188eu/5.3.9, $TARGET_KERNEL,.*installed\"; then\n"
+            "      if [ \"$(uname -r)\" != \"$TARGET_KERNEL\" ]; then\n"
+            "        echo \"[hostapd role] Driver ready for kernel $TARGET_KERNEL "
+            "(this VM is still running $(uname -r)). Reboot this VM once — "
+            "vagrant reload <hostname>, or Halt then Start from the dashboard "
+            "— then run: vagrant provision <hostname>. hostapd will then use "
+            "the adapter correctly.\"\n"
+            "      else\n"
+            "        modprobe 8188eu 2>/dev/null || true\n"
+            "      fi\n"
+            "    else\n"
+            "      echo '[hostapd role] Driver build for the Realtek adapter "
+            "did not finish — check /var/lib/dkms/8188eu/5.3.9/build/make.log "
+            "on this VM. Continuing with whatever driver is already loaded.'\n"
+            "    fi\n"
+            "  fi\n"
+            "fi\n"
+            "IFACE=$(iw dev | awk '$1==\"Interface\"{print $2; exit}')\n"
+            "if [ -z \"$IFACE\" ]; then\n"
+            "  echo 'No wireless interface found yet — pass the USB adapter through "
+            "(see README) then re-run: systemctl restart hostapd dnsmasq' \n"
+            "  exit 0\n"
+            "fi\n"
+            "cat > /etc/hostapd/hostapd.conf <<EOF\n"
+            "interface=$IFACE\n"
+            "driver=nl80211\n"
+            "ssid=LabForge-Demo-AP\n"
+            "hw_mode=g\n"
+            "channel=6\n"
+            "wpa=2\n"
+            "wpa_passphrase=LabForgeDemo123\n"
+            "wpa_key_mgmt=WPA-PSK\n"
+            "rsn_pairwise=CCMP\n"
+            "logger_syslog=-1\n"
+            "logger_syslog_level=2\n"
+            "EOF\n"
+            "sed -i 's|#DAEMON_CONF.*|DAEMON_CONF=\"/etc/hostapd/hostapd.conf\"|' "
+            "/etc/default/hostapd || true\n"
+            "cat > /etc/dnsmasq.conf <<EOF\n"
+            "interface=$IFACE\n"
+            "dhcp-range=10.50.50.10,10.50.50.100,12h\n"
+            "EOF\n"
+            "ip addr add 10.50.50.1/24 dev \"$IFACE\" 2>/dev/null || true\n"
+            "systemctl enable --now hostapd || echo '[!] hostapd failed to start — "
+            "check journalctl -u hostapd, a common cause is the adapter not "
+            "supporting AP mode (iw list | grep -A5 \"Supported interface modes\")'\n"
+            "systemctl enable --now dnsmasq || true\n"
+            # Rolling capture so a demo segment's traffic (deauth, EAPOL,
+            # association) can be downloaded and reviewed afterward, not just
+            # watched scroll by in the log. One continuous capture file is
+            # simpler and more honest than per-segment files that need
+            # the presenter to remember to restart them between segments.
+            "apt-get install -y -qq tcpdump >/dev/null 2>&1 || true\n"
+            "mkdir -p /var/log/labforge\n"
+            "cat > /etc/systemd/system/labforge-wifi-capture.service <<EOF\n"
+            "[Unit]\n"
+            "Description=LabForge rolling capture of the hostapd interface\n"
+            "After=hostapd.service\n"
+            "[Service]\n"
+            "ExecStart=/usr/bin/tcpdump -i $IFACE -w /var/log/labforge/capture.pcap "
+            "-U -Z root\n"
+            "Restart=on-failure\n"
+            "[Install]\n"
+            "WantedBy=multi-user.target\n"
+            "EOF\n"
+            "systemctl daemon-reload\n"
+            "systemctl enable --now labforge-wifi-capture || true\n"
+        ),
+    ),
+    # A second wireless adapter passed through to its own VM, configured as a
+    # plain station that associates to the hostapd role's default AP
+    # (LabForge-Demo-AP / LabForgeDemo123). Exists so a deauth/handshake-
+    # capture demo always has a real client to bite, without needing an
+    # audience member to connect their phone first. Needs its own USB
+    # adapter — if none is attached it says so and stops, same pattern as
+    # every other USB-passthrough role here, rather than silently doing
+    # nothing.
+    "wifi-client": _bash(
+        "wifi-client",
+        "wpa_supplicant station that auto-associates to the hostapd role's demo AP",
+        _APT_PREAMBLE + (
+            "apt-get install -y wpasupplicant iw wireless-tools rfkill isc-dhcp-client\n"
+            "rfkill unblock all || true\n"
+            "IFACE=$(iw dev | awk '$1==\"Interface\"{print $2; exit}')\n"
+            "if [ -z \"$IFACE\" ]; then\n"
+            "  echo 'No wireless interface found yet — pass a second USB adapter "
+            "through to this node (see README) then re-run: "
+            "wpa_supplicant -B -i <iface> -c /etc/wpa_supplicant/labforge-client.conf "
+            "&& dhclient <iface>'\n"
+            "  exit 0\n"
+            "fi\n"
+            "cat > /etc/wpa_supplicant/labforge-client.conf <<EOF\n"
+            "ctrl_interface=/var/run/wpa_supplicant\n"
+            "network={\n"
+            "  ssid=\"LabForge-Demo-AP\"\n"
+            "  psk=\"LabForgeDemo123\"\n"
+            "}\n"
+            "EOF\n"
+            "cat > /etc/systemd/system/labforge-wifi-client.service <<EOF\n"
+            "[Unit]\n"
+            "Description=LabForge auto-associating wifi station\n"
+            "After=network.target\n"
+            "[Service]\n"
+            "ExecStart=/sbin/wpa_supplicant -i $IFACE -c "
+            "/etc/wpa_supplicant/labforge-client.conf\n"
+            "ExecStartPost=/sbin/dhclient $IFACE\n"
+            "Restart=on-failure\n"
+            "RestartSec=5\n"
+            "[Install]\n"
+            "WantedBy=multi-user.target\n"
+            "EOF\n"
+            "systemctl daemon-reload\n"
+            "systemctl enable --now labforge-wifi-client || echo '[!] wpa_supplicant "
+            "failed to start — check journalctl -u labforge-wifi-client'\n"
+        ),
+    ),
+    # A visible desktop for a VM meant to be shown on a projector instead of
+    # driven over SSH — pairs with config.gui: true on the node. Deliberately
+    # lightweight (XFCE, not the full Kali desktop meta-package) so a fresh
+    # VM is still a fast first boot.
+    "desktop-xfce": _bash(
+        "desktop-xfce",
+        "XFCE desktop + VirtualBox guest X11 integration, for a node booted with gui: true",
+        _APT_PREAMBLE + (
+            "apt-get install -y xfce4 xfce4-terminal lightdm "
+            "virtualbox-guest-dkms virtualbox-guest-utils virtualbox-guest-x11 "
+            ">/dev/null 2>&1 || apt-get install -y xfce4 xfce4-terminal lightdm\n"
+            "systemctl set-default graphical.target\n"
+            "systemctl enable --now lightdm || true\n"
+        ),
+    ),
 }
 
 

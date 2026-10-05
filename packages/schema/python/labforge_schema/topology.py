@@ -215,6 +215,10 @@ class NodeConfig(BaseModel):
     # attack tooling or network configuration of its own.
     usb_vendor_id: Optional[str] = Field(default=None, pattern=r"^[0-9a-fA-F]{4}$")
     usb_product_id: Optional[str] = Field(default=None, pattern=r"^[0-9a-fA-F]{4}$")
+    # Boot this VM with a visible VirtualBox window instead of headless.
+    # Only meaningful alongside a desktop environment (e.g. the
+    # "desktop-xfce" role) — on its own it just shows an empty console.
+    gui: bool = Field(default=False)
 
     @field_validator("ip")
     @classmethod

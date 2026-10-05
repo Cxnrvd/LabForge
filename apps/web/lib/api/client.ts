@@ -291,6 +291,20 @@ export const api = {
     }>(`/labs/${labId}/heartbeat`),
   getLabLog: (labId: number, lines = 200) =>
     request<string[]>(`/labs/${labId}/log?lines=${lines}`),
+  /** Best-effort live `journalctl -u <service>` tail from inside one guest VM. */
+  getNodeLog: (labId: number, hostname: string, service = "hostapd", lines = 100) =>
+    request<string[]>(
+      `/labs/${labId}/node-log/${encodeURIComponent(hostname)}?service=${encodeURIComponent(service)}&lines=${lines}`,
+    ),
+  /** Switch a hostapd node to a named demo scenario (open/wep/wpa2/wpa3) and restart hostapd. */
+  setWifiScenario: (labId: number, hostname: string, scenario: string) =>
+    request<{ ok: boolean; message: string }>(
+      `/labs/${labId}/wifi-scenario/${encodeURIComponent(hostname)}?scenario=${encodeURIComponent(scenario)}`,
+      { method: "POST" },
+    ),
+  /** URL for downloading an allowlisted file (today: capture.pcap) out of a guest. */
+  nodeFileUrl: (labId: number, hostname: string, file: string) =>
+    `/api/v1/labs/${labId}/node-file/${encodeURIComponent(hostname)}?file=${encodeURIComponent(file)}`,
   getRecentActivity: () =>
     request<
       Array<{
@@ -369,6 +383,9 @@ export const api = {
     request<BuildStatusPayload>(`/labs/${labId}/build/stop`, { method: "POST" }),
   haltLab: (labId: number) =>
     request<{ id: number; status: string; provider: string }>(`/labs/${labId}/halt`, { method: "POST" }),
+  /** VM (Vagrant) labs only — suspends to disk, keeping RAM state for a fast resume. */
+  pauseLab: (labId: number) =>
+    request<{ id: number; status: string; provider: string }>(`/labs/${labId}/pause`, { method: "POST" }),
   resumeLab: (labId: number) =>
     request<{ id: number; status: string; provider: string }>(`/labs/${labId}/resume`, { method: "POST" }),
   buildPhases: (labId: number) =>

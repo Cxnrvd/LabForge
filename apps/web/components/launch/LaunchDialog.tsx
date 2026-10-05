@@ -95,7 +95,9 @@ export function LaunchDialog(): React.ReactElement {
   // any role ending in "-usb-passthrough", for future device roles). Only
   // meaningful on a VM provider — Docker doesn't go through Vagrant/VBoxManage.
   const usbNodes = (topology?.nodes ?? []).filter((n) =>
-    (n.config.roles ?? []).some((r) => r === "wifi-pentest-env" || /-usb-passthrough(@|$)/.test(r)),
+    (n.config.roles ?? []).some(
+      (r) => r === "wifi-pentest-env" || r === "hostapd" || /-usb-passthrough(@|$)/.test(r),
+    ),
   );
   const usbDevicesQ = useQuery({
     queryKey: ["host-usb-devices"],

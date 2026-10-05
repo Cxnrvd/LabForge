@@ -16,6 +16,7 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    Response,
     WebSocket,
     WebSocketDisconnect,
     status,
@@ -47,8 +48,14 @@ from labforge_core.services.build_runner import (
     LabExistsError,
     SubnetConflictError,
     destroy_lab,
+    NODE_FILES,
+    WIFI_SCENARIOS,
+    apply_wifi_scenario,
+    fetch_node_file,
     halt_lab,
+    node_log,
     parse_per_vm_phases,
+    pause_lab,
     read_build_status,
     read_log_chunk,
     resume_lab,
@@ -274,6 +281,73 @@ def lab_log(
     return out[-lines:]
 
 
+@router.get("/{lab_id}/node-log/{hostname}", response_model=list[str])
+def node_log_endpoint(
+    lab_id: LabId,
+    hostname: str,
+    session: Annotated[Session, Depends(get_session)],
+    service: str = Query(default="hostapd"),
+    lines: int = Query(default=100, ge=1, le=500),
+) -> list[str]:
+    """Best-effort live tail of a service's journal inside one guest VM —
+    used by the webinar dashboard to show hostapd's own log (association,
+    deauth, EAPOL activity) without wiring up a real SIEM query. Never
+    errors the request; a VM that isn't reachable yet just comes back as a
+    single explanatory line."""
+    lab = session.get(Lab, lab_id)
+    if lab is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lab not found")
+    workspace = _resolve_workspace(lab)
+    out, err = node_log(workspace, hostname, lab.provider == "docker", service, lines)
+    return out if err is None else [f"[{err}]"]
+
+
+@router.post("/{lab_id}/wifi-scenario/{hostname}")
+def wifi_scenario_endpoint(
+    lab_id: LabId,
+    hostname: str,
+    session: Annotated[Session, Depends(get_session)],
+    scenario: str = Query(description=f"One of: {', '.join(sorted(WIFI_SCENARIOS))}"),
+) -> dict[str, object]:
+    """Switch a hostapd node to a named demo scenario (open/wep/wpa2/wpa3) and
+    restart hostapd — the webinar dashboard's segment switcher. Returns
+    ``{ok, message}`` with a 200 either way; the caller checks ``ok``, since
+    a VM that isn't reachable is an expected, recoverable state here, not a
+    server error."""
+    lab = session.get(Lab, lab_id)
+    if lab is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lab not found")
+    workspace = _resolve_workspace(lab)
+    ok, message = apply_wifi_scenario(workspace, hostname, lab.provider == "docker", scenario)
+    return {"ok": ok, "message": message}
+
+
+@router.get("/{lab_id}/node-file/{hostname}")
+def node_file_endpoint(
+    lab_id: LabId,
+    hostname: str,
+    session: Annotated[Session, Depends(get_session)],
+    file: str = Query(description=f"One of: {', '.join(sorted(NODE_FILES))}"),
+) -> Response:
+    """Download one allowlisted file out of a guest VM — today, the hostapd
+    role's rolling capture.pcap, so a webinar segment's traffic can be
+    reviewed after the fact instead of only watched scroll by in the log."""
+    if file not in NODE_FILES:
+        raise HTTPException(status_code=400, detail=f"Unknown file {file!r}")
+    lab = session.get(Lab, lab_id)
+    if lab is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lab not found")
+    workspace = _resolve_workspace(lab)
+    data, err = fetch_node_file(workspace, hostname, lab.provider == "docker", NODE_FILES[file])
+    if err is not None:
+        raise HTTPException(status_code=502, detail=err)
+    return Response(
+        content=data,
+        media_type="application/vnd.tcpdump.pcap",
+        headers={"Content-Disposition": f'attachment; filename="{hostname}-{file}"'},
+    )
+
+
 # ---------------------------------------------------------------- build
 
 @router.post(
@@ -491,7 +565,10 @@ def halt_lab_route(
     lab_id: LabId,
     session: Annotated[Session, Depends(get_session)],
 ) -> LabSummary:
-    """Stop a Docker lab's containers and keep its data, network and workspace."""
+    """Stop a lab's containers/VMs and keep its data, network and workspace.
+
+    Docker: ``compose stop``. Vagrant: ``vagrant halt`` (full poweroff —
+    for a faster round-trip, use POST /{lab_id}/pause instead)."""
     lab = session.get(Lab, lab_id)
     if lab is None:
         raise HTTPException(
@@ -509,12 +586,37 @@ def halt_lab_route(
     return LabSummary.model_validate(lab, from_attributes=True)
 
 
+@router.post("/{lab_id}/pause", response_model=LabSummary, dependencies=_LIFECYCLE_LIMIT)
+def pause_lab_route(
+    lab_id: LabId,
+    session: Annotated[Session, Depends(get_session)],
+) -> LabSummary:
+    """Suspend a Vagrant lab's VMs to disk (``vagrant suspend``) — keeps RAM
+    state, so POST /{lab_id}/resume afterward is a fast restore rather than a
+    full boot. VM (Vagrant) labs only; Docker labs use Stop instead."""
+    lab = session.get(Lab, lab_id)
+    if lab is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": f"Lab {lab_id} not found", "code": "not_found"},
+        )
+    try:
+        pause_lab(lab, session)
+    except HaltFailed as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"detail": str(exc), "code": "pause_failed"},
+        ) from exc
+    session.refresh(lab)
+    return LabSummary.model_validate(lab, from_attributes=True)
+
+
 @router.post("/{lab_id}/resume", response_model=LabSummary, dependencies=_BUILD_LIMIT)
 def resume_lab_route(
     lab_id: LabId,
     session: Annotated[Session, Depends(get_session)],
 ) -> LabSummary:
-    """Start a stopped Docker lab again. Progress shows up in /build/status and /build/log."""
+    """Start a stopped or paused lab again. Progress shows up in /build/status and /build/log."""
     lab = session.get(Lab, lab_id)
     if lab is None:
         raise HTTPException(
@@ -574,6 +676,7 @@ def build_preflight(
         "vagrant_available": bool(status["vagrant_version"]),
         "vagrant_version": status["vagrant_version"],
         "virtualbox_version": status["virtualbox_version"],
+        "virtualbox_extpack": status["virtualbox_extpack"],
         "vmware_available": bool(status["vmware_vmrun"]),
         "vmware_plugin": status["vmware_plugin"],
         "hypervisor_present": status["hypervisor_present"],

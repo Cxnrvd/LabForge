@@ -288,10 +288,26 @@ export default function BuildMonitorPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["lab", id] });
       qc.invalidateQueries({ queryKey: ["labs"] });
-      toast.success("Lab stopped", { description: "Containers are stopped. Data is kept; press Start to run it again." });
+      toast.success("Lab stopped", {
+        description:
+          labQ.data?.provider === "docker"
+            ? "Containers are stopped. Data is kept; press Start to run it again."
+            : "The VMs are powered off. Data is kept; press Start to boot them again.",
+      });
     },
     onError: (err) => {
       toast.error("Could not stop the lab", { description: err.detail });
+    },
+  });
+  const pauseMut = useMutation<unknown, ApiError>({
+    mutationFn: () => api.pauseLab(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["lab", id] });
+      qc.invalidateQueries({ queryKey: ["labs"] });
+      toast.success("Lab paused", { description: "VM state is saved to disk. Press Resume for a fast restore." });
+    },
+    onError: (err) => {
+      toast.error("Could not pause the lab", { description: err.detail });
     },
   });
   const resumeMut = useMutation<unknown, ApiError>({
@@ -300,7 +316,10 @@ export default function BuildMonitorPage() {
       qc.invalidateQueries({ queryKey: ["lab", id] });
       qc.invalidateQueries({ queryKey: ["labs"] });
       qc.invalidateQueries({ queryKey: ["build-status", id] });
-      toast.success("Starting the lab", { description: "Containers are coming back up." });
+      toast.success("Starting the lab", {
+        description:
+          labQ.data?.provider === "docker" ? "Containers are coming back up." : "The VMs are booting/restoring.",
+      });
     },
     onError: (err) => {
       toast.error("Could not start the lab", { description: err.detail });
@@ -314,13 +333,22 @@ export default function BuildMonitorPage() {
       isDocker
         ? "Stop this lab?\n\nThe containers are stopped. Your data and the workspace are kept, " +
             "and you can start it again later."
-        : "Halt this lab?\n\nThe vagrant subprocess will be signalled. " +
-            "Running VMs and the workspace will be left intact so you can " +
-            "resume or destroy later.",
+        : "Stop this lab?\n\nThe VMs are powered off (vagrant halt). Your data and the workspace " +
+            "are kept, and you can start it again later. For a faster round-trip that keeps RAM " +
+            "state, use Pause instead.",
     );
     if (!ok) return;
-    if (isDocker) haltMut.mutate();
-    else stopMut.mutate();
+    haltMut.mutate();
+  };
+
+  const handlePause = (): void => {
+    if (pauseMut.isPending) return;
+    const ok = window.confirm(
+      "Pause this lab?\n\nThe VMs are suspended to disk (vagrant suspend), keeping their running " +
+        "state in memory. Resume restores them quickly rather than rebooting.",
+    );
+    if (!ok) return;
+    pauseMut.mutate();
   };
 
   // ----- Destroy action: DELETE /labs/{id} (the only backend route
@@ -422,7 +450,8 @@ export default function BuildMonitorPage() {
   };
 
   const canResume =
-    lab?.provider === "docker" && ["stopped", "failed", "partial"].includes(lab.status) && phase !== "running";
+    !!lab && ["stopped", "paused", "failed", "partial"].includes(lab.status) && phase !== "running";
+  const canPause = lab?.provider !== "docker" && lab?.status === "running" && phase !== "running";
   const vms = latestHb?.vms ?? [];
   const runningVms = vms.filter((v) => v.state === "running").length;
   const totalVms = vms.length;
@@ -512,10 +541,27 @@ export default function BuildMonitorPage() {
             disabled={resumeMut.isPending}
             aria-label="Start lab"
           >
-            {resumeMut.isPending ? "Starting…" : lab?.status === "stopped" ? "Start" : "Retry start"}
+            {resumeMut.isPending
+              ? "Starting…"
+              : lab?.status === "stopped"
+                ? "Start"
+                : lab?.status === "paused"
+                  ? "Resume"
+                  : "Retry start"}
           </button>
         )}
-        {lab?.status !== "stopped" && (
+        {canPause && (
+          <button
+            className="btn"
+            type="button"
+            onClick={handlePause}
+            disabled={pauseMut.isPending}
+            aria-label="Pause lab"
+          >
+            {pauseMut.isPending ? "Pausing…" : "Pause"}
+          </button>
+        )}
+        {lab?.status !== "stopped" && lab?.status !== "paused" && (
           <button
             className="btn"
             type="button"

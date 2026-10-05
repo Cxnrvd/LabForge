@@ -226,6 +226,10 @@ export const NodeConfig = z.object({
   // or network config is implied by setting this.
   usb_vendor_id: z.string().regex(/^[0-9a-fA-F]{4}$/).nullable().optional(),
   usb_product_id: z.string().regex(/^[0-9a-fA-F]{4}$/).nullable().optional(),
+  // Boot this VM with a visible VirtualBox window instead of headless.
+  // Only meaningful alongside a desktop environment (e.g. the
+  // "desktop-xfce" role) — on its own it just shows an empty console.
+  gui: z.boolean().default(false),
 });
 export type NodeConfig = z.infer<typeof NodeConfig>;
 

@@ -17,6 +17,7 @@ from labforge_core.provisioners.role_installers import (
     linux_snippet,
     windows_snippet,
 )
+from labforge_core.services import hostenv
 from labforge_core.services.compose_generator import build_bundle as build_compose_bundle
 from labforge_core.services.provenance import build_manifest
 from labforge_core.services.validator import is_windows
@@ -365,14 +366,23 @@ def generate_artifacts(
                 "node_type": node.type.value,
                 "usb_vendor_id": node.config.usb_vendor_id,
                 "usb_product_id": node.config.usb_product_id,
+                "gui": node.config.gui,
             }
         )
+
+    # Only matters for nodes with usb_vendor_id/usb_product_id set, but it's
+    # a single cheap probe so it's simplest to always compute: without the
+    # (separately-licensed) VirtualBox Extension Pack, USB passthrough only
+    # gets a USB 1.1 (OHCI) controller, which silently breaks USB 2.0 wifi
+    # dongles — they enumerate but their driver never brings up a wiphy.
+    usb_ehci_available = topology.provider is Provider.VIRTUALBOX and hostenv.virtualbox_extpack_installed()
 
     vagrantfile = env.get_template("Vagrantfile.j2").render(
         topology=topology,
         vagrant_nodes=vagrant_nodes,
         external_nodes=external_nodes,
         vagrant_provider=vagrant_provider_name(topology.provider),
+        usb_ehci_available=usb_ehci_available,
     )
 
     hosts_file = ""

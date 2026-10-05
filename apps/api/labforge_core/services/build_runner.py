@@ -31,6 +31,8 @@ import contextlib
 import json
 import logging
 import os
+import base64
+import binascii
 import re
 import shutil
 import signal
@@ -114,8 +116,10 @@ class DestroyFailed(RuntimeError):
 
 
 def _utcnow() -> datetime:
-    """Naive UTC now (what the DB and sentinel files already use), without the deprecated call."""
-    return datetime.now(UTC).replace(tzinfo=None)
+    """Aware UTC now, without the deprecated ``datetime.utcnow()`` call.
+
+    The DB column type (``UTCDateTime``) rejects naive datetimes, so this must stay aware."""
+    return datetime.now(UTC)
 
 
 def _slug(name: str) -> str:
@@ -237,6 +241,12 @@ def _spawn_build(workspace: Path, argv: list[str], *, banner: str, env_extra: di
 # sentinel file regardless of how the command terminates. Lives in a temp dir
 # so the workspace stays free of build scaffolding.
 _BUILD_SHIM = '''import json, os, re, subprocess, sys, time
+# Windows gives a redirected-to-file stdout the OS ANSI codepage (cp1252) by
+# default, not UTF-8 — any non-ASCII byte a child process prints (vagrant,
+# apt, dpkg locale strings, box messages) then raises UnicodeEncodeError and
+# kills the whole shim mid-build, even though provisioning itself succeeded.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 ws = sys.argv[1]
 argv = json.loads(sys.argv[2])
 exit_path = os.path.join(ws, ".build.exit")
@@ -501,6 +511,191 @@ def _vagrant_teardown(workspace: Path) -> str | None:
     return None
 
 
+# Services the webinar dashboard's live-log tab is allowed to tail inside a
+# guest. Kept to a tiny allowlist because the service name is spliced into a
+# remote shell string for ``vagrant ssh -c`` — never take it from the request
+# unchecked.
+NODE_LOG_SERVICES = {"hostapd", "dnsmasq", "wazuh-agent"}
+
+
+def node_log(
+    workspace: Path, hostname: str, use_docker: bool, service: str, tail: int,
+) -> tuple[list[str], str | None]:
+    """Best-effort ``journalctl -u <service>`` tail from inside a running guest.
+
+    Returns ``(lines, error)`` — never raises. A VM that isn't up yet, a
+    missing CLI, or a bad hostname all come back as an error string the
+    caller can surface inline instead of failing the request outright.
+    """
+    if service not in NODE_LOG_SERVICES:
+        return [], f"service {service!r} is not on the allowed list"
+    if use_docker:
+        argv = [
+            "docker", "compose", "exec", "-T", hostname,
+            "journalctl", "-u", service, "--no-pager", "-n", str(tail),
+        ]
+    else:
+        if not vagrant_available():
+            return [], "vagrant is not on PATH"
+        argv = [
+            "vagrant", "ssh", hostname, "-c",
+            # The vagrant user isn't in the adm/systemd-journal groups, so
+            # plain journalctl silently returns "No entries" for another
+            # service's logs — needs sudo (passwordless by default on every
+            # Vagrant box this generator targets).
+            f"sudo journalctl -u {service} --no-pager -n {tail} 2>&1",
+        ]
+    try:
+        proc = subprocess.run(
+            argv, cwd=str(workspace), capture_output=True, text=True,
+            # vagrant ssh pays Ruby/Vagrant's own startup cost on every call
+            # (observed ~35-40s on Windows) on top of the actual journalctl —
+            # a 20s timeout here mostly just times out before vagrant finishes
+            # booting its own process, not because anything is actually stuck.
+            errors="replace", timeout=60, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return [], "timed out reaching the guest"
+    except OSError as exc:
+        return [], str(exc)
+    if proc.returncode != 0 and not proc.stdout.strip():
+        tail_err = (proc.stderr or "").strip().splitlines()[-2:]
+        return [], f"exited {proc.returncode}: {' | '.join(tail_err) or 'no output'}"
+    return proc.stdout.splitlines(), None
+
+
+# The security-relevant tail of a hostapd.conf for each demo segment — the
+# interface/driver/ssid/logging lines come from whatever the hostapd role
+# already wrote, so switching scenarios never has to re-detect the adapter.
+WIFI_SCENARIOS: dict[str, str] = {
+    "open": "hw_mode=g\nchannel=6\n",
+    # hostapd requires an ASCII WEP key to be quoted — unquoted, it tries to
+    # parse the text as hex digits and rejects it as "invalid WEP key".
+    "wep": 'hw_mode=g\nchannel=6\nwep_default_key=0\nwep_key0="LabForgeWEP01"\n',
+    "wpa2": (
+        "hw_mode=g\nchannel=6\nwpa=2\nwpa_passphrase=LabForgeDemo123\n"
+        "wpa_key_mgmt=WPA-PSK\nrsn_pairwise=CCMP\n"
+    ),
+    "wpa3": (
+        "hw_mode=g\nchannel=6\nwpa=2\nwpa_key_mgmt=SAE\nrsn_pairwise=CCMP\n"
+        "ieee80211w=2\nsae_password=LabForgeDemo123\n"
+    ),
+}
+
+
+def apply_wifi_scenario(
+    workspace: Path, hostname: str, use_docker: bool, scenario: str,
+) -> tuple[bool, str]:
+    """Rewrite a hostapd node's security config to a named demo scenario and
+    restart hostapd — the webinar dashboard's segment switcher, so moving
+    from WEP to WPA2 to WPA3 between segments doesn't mean SSHing in and
+    hand-editing hostapd.conf on stage. Returns (ok, message); never raises.
+    """
+    if scenario not in WIFI_SCENARIOS:
+        return False, f"unknown scenario {scenario!r} — choose one of {sorted(WIFI_SCENARIOS)}"
+    if use_docker:
+        return False, "wifi scenarios only apply to VM (hostapd) nodes, not Docker containers"
+    if not vagrant_available():
+        return False, "vagrant is not on PATH"
+
+    conf_body = (
+        f"interface=$IFACE\ndriver=nl80211\nssid=LabForge-Demo-AP\n"
+        f"{WIFI_SCENARIOS[scenario]}logger_syslog=-1\nlogger_syslog_level=2\n"
+    )
+    remote = (
+        "IFACE=$(sudo grep -oP '^interface=\\K.*' /etc/hostapd/hostapd.conf 2>/dev/null || true)\n"
+        "if [ -z \"$IFACE\" ]; then echo __NO_IFACE__; exit 0; fi\n"
+        # Unquoted heredoc delimiter is deliberate — $IFACE must expand.
+        "sudo tee /etc/hostapd/hostapd.conf >/dev/null <<LFCONF\n"
+        f"{conf_body}"
+        "LFCONF\n"
+        # No `set -e`: a failed restart must still reach the status/journal
+        # checks below rather than aborting the script right there, which is
+        # all the caller would otherwise see (systemd's generic "Job failed"
+        # text) instead of hostapd's actual reason (e.g. the driver not
+        # supporting 802.11w for a WPA3 request).
+        "sudo systemctl restart hostapd\n"
+        "sleep 1\n"
+        "sudo systemctl is-active hostapd\n"
+        "sudo journalctl -u hostapd --no-pager -n 20\n"
+    )
+    try:
+        proc = subprocess.run(
+            ["vagrant", "ssh", hostname, "-c", remote],
+            cwd=str(workspace), capture_output=True, text=True,
+            errors="replace", timeout=60, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "timed out reaching the guest"
+    except OSError as exc:
+        return False, str(exc)
+    out = (proc.stdout or "").strip()
+    if "__NO_IFACE__" in out:
+        return False, (
+            "no interface found in this node's hostapd.conf yet — pass a USB "
+            "adapter through and let the hostapd role provision first"
+        )
+    out_lines = out.splitlines()
+    status_line = out_lines[0] if out_lines else ""
+    if status_line == "active":
+        return True, f"hostapd restarted in '{scenario}' mode"
+    # Lines after the is-active status are the journalctl tail. Restart=on-
+    # failure means systemd retries a few times, so the tail can be mostly
+    # "Failed to start"/"Scheduled restart" boilerplate — prefer hostapd's
+    # own log lines (its actual reason, e.g. a rejected config line or a
+    # driver that doesn't support a requested feature) when any are present.
+    journal_lines = [ln for ln in out_lines[1:] if ln.strip()]
+    hostapd_lines = [ln for ln in journal_lines if "hostapd[" in ln]
+    journal_tail = (hostapd_lines or journal_lines)[-3:]
+    reason = " | ".join(journal_tail) or (proc.stderr or "").strip() or "unknown error"
+    return False, f"hostapd did not come back up in '{scenario}' mode: {reason}"
+
+
+# Files the webinar dashboard is allowed to pull out of a guest. Like
+# NODE_LOG_SERVICES, kept to an allowlist on the caller side — this function
+# itself will fetch any path it's given.
+NODE_FILES = {"capture.pcap": "/var/log/labforge/capture.pcap"}
+
+
+def fetch_node_file(
+    workspace: Path, hostname: str, use_docker: bool, remote_path: str,
+    *, max_bytes: int = 50_000_000,
+) -> tuple[bytes | None, str | None]:
+    """Best-effort fetch of one file from inside a guest.
+
+    Piped through base64 over ``vagrant ssh`` / ``docker exec`` so binary
+    content (a pcap) survives the trip intact — these commands return text,
+    and a raw binary stream through the same channel as journalctl's text
+    output risks corruption on any newline/encoding translation along the
+    way. Returns (bytes, None) or (None, error); never raises.
+    """
+    if use_docker:
+        argv = ["docker", "compose", "exec", "-T", hostname, "sh", "-c", f"base64 '{remote_path}'"]
+    else:
+        if not vagrant_available():
+            return None, "vagrant is not on PATH"
+        argv = ["vagrant", "ssh", hostname, "-c", f"sudo base64 '{remote_path}' 2>&1"]
+    try:
+        proc = subprocess.run(
+            argv, cwd=str(workspace), capture_output=True, text=True,
+            errors="replace", timeout=90, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return None, "timed out reaching the guest"
+    except OSError as exc:
+        return None, str(exc)
+    if proc.returncode != 0 or not proc.stdout.strip():
+        tail_err = (proc.stderr or proc.stdout or "").strip().splitlines()[-2:]
+        return None, f"could not read {remote_path}: {' | '.join(tail_err) or 'no output'}"
+    try:
+        data = base64.b64decode(proc.stdout, validate=False)
+    except (binascii.Error, ValueError) as exc:
+        return None, f"could not decode file contents: {exc}"
+    if len(data) > max_bytes:
+        return None, f"file is {len(data)} bytes, over the {max_bytes} limit"
+    return data, None
+
+
 def destroy_lab(lab: Lab, session: Session, *, force: bool = False) -> None:
     """Tear down a lab for real, then delete its workspace and row.
 
@@ -534,53 +729,128 @@ def destroy_lab(lab: Lab, session: Session, *, force: bool = False) -> None:
         _LAB_LOCKS.pop(lab_id, None)
 
 
+def _run_vagrant_lifecycle(workspace: Path, verb: str, timeout: int = 180) -> None:
+    """Run a quick Vagrant lifecycle command (``halt``/``suspend``) and raise
+    ``HaltFailed`` with the real error tail on anything but a clean exit."""
+    if not vagrant_available():
+        raise HaltFailed("vagrant is not on PATH")
+    try:
+        proc = subprocess.run(
+            ["vagrant", verb], cwd=str(workspace), capture_output=True, text=True,
+            errors="replace", timeout=timeout, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        raise HaltFailed(f"vagrant {verb} timed out after {timeout}s") from None
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout).strip().splitlines()[-3:]
+        raise HaltFailed(f"vagrant {verb} exited {proc.returncode}: {' | '.join(tail)}")
+
+
 def halt_lab(lab: Lab, session: Session) -> None:
-    """Stop a Docker lab's containers and keep its data. ``resume_lab`` brings it back."""
+    """Stop a lab's VMs/containers and keep its data. ``resume_lab`` brings it back.
+
+    Docker: ``compose stop``. Vagrant: ``vagrant halt`` (clean guest shutdown,
+    full poweroff — for a faster round-trip that keeps RAM state, see
+    ``pause_lab`` instead).
+    """
     lab_id = lab.id or 0
     with _lab_lock(lab_id):
         workspace = Path(lab.workspace_path) if lab.workspace_path else None
         if workspace is None or not workspace.exists():
             raise HaltFailed("The lab workspace is gone, so there is nothing to stop. Destroy the lab instead.")
-        if runtime_of(workspace) != "docker":
-            raise HaltFailed("Stop and resume are available for Docker labs only.")
+        runtime = runtime_of(workspace)
         if read_build_status(workspace)["phase"] == "running":
             stop_build(workspace)
         _stop_daemon(workspace)
-        result = docker_runtime.halt(workspace)
-        if not result.ok:
-            raise HaltFailed(result.error or "docker compose stop failed")
+        if runtime == "docker":
+            result = docker_runtime.halt(workspace)
+            if not result.ok:
+                raise HaltFailed(result.error or "docker compose stop failed")
+        else:
+            _run_vagrant_lifecycle(workspace, "halt")
         lab.status = "stopped"
         lab.updated_at = _utcnow()
         session.add(lab)
         session.commit()
 
 
-def resume_lab(lab: Lab, session: Session) -> int:
-    """Start a stopped Docker lab again with ``compose up``. Returns the build pid."""
+def pause_lab(lab: Lab, session: Session) -> None:
+    """Suspend a Vagrant lab's VMs to disk (save RAM state) — ``vagrant suspend``.
+
+    Faster to bring back than a full halt+boot (no provisioning, no OS boot
+    sequence), at the cost of disk space for the saved-state file. Docker
+    labs don't get an equivalent here — ``docker compose pause`` only
+    freezes cgroups rather than saving real VM state, which isn't the same
+    trade-off, so this stays Vagrant-only rather than offering something
+    that looks the same but behaves differently.
+    """
     lab_id = lab.id or 0
     with _lab_lock(lab_id):
         workspace = Path(lab.workspace_path) if lab.workspace_path else None
-        if workspace is None or not (workspace / docker_runtime.COMPOSE_FILE).exists():
+        if workspace is None or not workspace.exists():
+            raise HaltFailed("The lab workspace is gone, so there is nothing to pause. Destroy the lab instead.")
+        if runtime_of(workspace) != "vagrant":
+            raise HaltFailed("Pause (suspend) is only available for VM (Vagrant) labs — use Stop for Docker labs.")
+        if read_build_status(workspace)["phase"] == "running":
+            stop_build(workspace)
+        _stop_daemon(workspace)
+        _run_vagrant_lifecycle(workspace, "suspend")
+        lab.status = "paused"
+        lab.updated_at = _utcnow()
+        session.add(lab)
+        session.commit()
+
+
+def resume_lab(lab: Lab, session: Session) -> int:
+    """Start a stopped or paused lab again. Returns the build pid.
+
+    Docker: ``compose up``. Vagrant: ``vagrant resume`` when the lab was
+    paused (fast, restores saved RAM state) or ``vagrant up`` when it was
+    halted/failed/partial (boots from poweroff — still fast, since nothing
+    needs reprovisioning, but a real boot sequence). Progress shows up in
+    the normal /build/status and /build/log endpoints either way.
+    """
+    lab_id = lab.id or 0
+    with _lab_lock(lab_id):
+        workspace = Path(lab.workspace_path) if lab.workspace_path else None
+        if workspace is None or not workspace.exists():
             raise HaltFailed("The lab workspace is gone. Build the lab again.")
-        if runtime_of(workspace) != "docker":
-            raise HaltFailed("Stop and resume are available for Docker labs only.")
-        if lab.status not in ("stopped", "failed", "partial"):
-            raise HaltFailed(f"The lab is {lab.status}, only a stopped lab can be started.")
-        problem = docker_runtime.prereq_problem()
-        if problem:
-            raise BuildPrereqError(problem[1], problem[0])
-        project = docker_runtime.read_project(workspace)
-        if not project:
-            raise HaltFailed("The lab has no .labforge-project file, build it again.")
-        for sentinel in (BUILD_EXIT, BUILD_ABORTED, BUILD_PID, ".labforge-daemon-stop"):
-            (workspace / sentinel).unlink(missing_ok=True)
-        topology = json.loads((workspace / "topology.json").read_text(encoding="utf-8"))
-        wait = 5400 if any(str(n.get("config", {}).get("os", "")).startswith("windows") for n in topology.get("nodes", [])) else 900
-        pid = _spawn_build(
-            workspace,
-            docker_runtime.up_command(project, wait_timeout=wait),
-            banner=f"--- resume runtime=docker project={project} ---",
-        )
+        runtime = runtime_of(workspace)
+        if runtime == "docker":
+            if not (workspace / docker_runtime.COMPOSE_FILE).exists():
+                raise HaltFailed("The lab workspace is gone. Build the lab again.")
+            if lab.status not in ("stopped", "failed", "partial"):
+                raise HaltFailed(f"The lab is {lab.status}, only a stopped lab can be started.")
+            problem = docker_runtime.prereq_problem()
+            if problem:
+                raise BuildPrereqError(problem[1], problem[0])
+            project = docker_runtime.read_project(workspace)
+            if not project:
+                raise HaltFailed("The lab has no .labforge-project file, build it again.")
+            for sentinel in (BUILD_EXIT, BUILD_ABORTED, BUILD_PID, ".labforge-daemon-stop"):
+                (workspace / sentinel).unlink(missing_ok=True)
+            topology = json.loads((workspace / "topology.json").read_text(encoding="utf-8"))
+            wait = 5400 if any(str(n.get("config", {}).get("os", "")).startswith("windows") for n in topology.get("nodes", [])) else 900
+            pid = _spawn_build(
+                workspace,
+                docker_runtime.up_command(project, wait_timeout=wait),
+                banner=f"--- resume runtime=docker project={project} ---",
+            )
+        else:
+            if not (workspace / "Vagrantfile").exists():
+                raise HaltFailed("The lab workspace is gone. Build the lab again.")
+            if lab.status not in ("stopped", "paused", "failed", "partial"):
+                raise HaltFailed(f"The lab is {lab.status}, only a stopped or paused lab can be started.")
+            if not vagrant_available():
+                raise BuildPrereqError("Vagrant is not installed or not on PATH.", "vagrant_missing")
+            for sentinel in (BUILD_EXIT, BUILD_ABORTED, BUILD_PID, ".labforge-daemon-stop"):
+                (workspace / sentinel).unlink(missing_ok=True)
+            verb = "resume" if lab.status == "paused" else "up"
+            pid = _spawn_build(
+                workspace,
+                ["vagrant", verb],
+                banner=f"--- resume runtime=vagrant verb={verb} ---",
+            )
         lab.status = "building"
         lab.updated_at = _utcnow()
         session.add(lab)
