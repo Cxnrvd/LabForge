@@ -1,79 +1,59 @@
 # LabForge
 
-Diagram-driven virtual lab builder for cybersecurity professionals. Draw a
-network on a canvas, attach roles (Splunk, Wazuh, Kali, OpenPLC…), click
-**Generate Lab**, and `vagrant up` boots the whole thing locally.
+On-demand virtual lab generation for cybersecurity training and research.
+Pick a template or draw your own topology, hit **Generate Lab**, and a real
+multi-VM or multi-container range boots locally — no cloud bill, no shared
+infrastructure, no waiting on a provisioning ticket.
 
 ---
 
-## For penetration testers & security researchers
+## What it is
 
-You've just discovered a CVE in the wild. Maybe you found it during a
-penetration test, maybe it's trending on Twitter, maybe it's on your backlog.
-Now what?
+LabForge is a self-hosted platform: build a lab from a catalog of pre-made
+templates (Active Directory, CVE exploitation, DFIR, ICS/OT, WiFi pentesting,
+LLM red-teaming, ransomware hunting…) or sketch a custom network on the
+canvas and attach roles (Splunk, Wazuh, Kali, OpenPLC…) node by node. One
+dashboard handles the whole lifecycle — build, pause (freeze a lab with zero
+compute cost and resume it instantly), stop, destroy — and labs that support
+it (like the WiFi range) let you switch live attack scenarios with a button
+instead of re-provisioning anything by hand.
 
-LabForge is for anyone who needs to:
-
-- **Research & develop** a CVE or vulnerability in an isolated lab without
-  disrupting production or needing physical infrastructure.
-- **Prototype & validate** exploits in a realistic network topology (AD
-  domains, segmented subnets, SIEM integration, ICS/HMI stacks, cloud
-  simulation…) from your home or office.
-- **Demo & communicate** attack paths and mitigations to stakeholders. Build
-  a reproducible proof-of-concept lab, document the topology, and hand it off
-  to your team or client.
-- **Practice & learn** with pre-built labs (Log4Shell, AD compromises, DFIRs,
-  supply-chain simulations) or design custom ones from scratch in minutes.
-
-**The workflow is simple:** sketch a network on the canvas, attach vendors
-and roles (Splunk for detection, Kali for attack, OpenPLC for ICS…), tag
-nodes with CVEs for documentation, hit **Generate Lab**, and `vagrant up`
-spins up everything locally. All topology is code—version it, share it,
-fork it.
-
-No cloud bills. No shared infrastructure. No waiting for provisioning. Just
-click, generate, and explore.
+Every generated lab is real infrastructure — actual VMs (Vagrant + VirtualBox
+or VMware) or actual containers (Docker Compose) running the genuine
+software each scenario calls for, not a simulation of it. Topology is just
+JSON: version it, share it, fork it.
 
 ---
 
 ## Screenshots
 
-### Dashboard — Mission Control
-Track active labs, resource usage, recent activity, and quick-launch templates
-from one place.
-
+**Dashboard** — active labs, host resource usage, and quick-launch templates
+in one place.
 ![Dashboard](docs/screenshots/dashboard.png)
 
-### Template Gallery
-8 pre-built lab topologies covering AD, CVE exploitation, DFIR, ICS/OT, LLM
-red-teaming, and WAN simulation. Pick one and the canvas pre-populates.
-
+**Templates** — a growing catalog across AD, CVE labs, DFIR, OT/ICS,
+LLM/AI, and network simulation.
 ![Templates](docs/screenshots/templates.png)
 
-### Canvas — Diagram-Driven Lab Builder
-Drag nodes from the left palette, draw edges, pin CVEs to machines, and let
-the attack-path heuristic score your topology automatically.
-
+**Canvas** — drag nodes from the palette, draw edges, and get an
+attack-path heuristic as you build.
 ![Canvas](docs/screenshots/canvas.png)
 
-### Labs — Provisioned Lab Manager
-See every lab that's been built, with live vagrant status, provider, uptime,
-and a live log tail so you can watch `vagrant up` in real time.
-
+**Labs** — every lab you've built, its provider, status, and a one-click
+path into its live monitor.
 ![Labs](docs/screenshots/labs.png)
 
-### Monitor — Live Lab Telemetry
-Per-lab heartbeat view showing VM health, network flows, and build-phase
-progress as the lab provisions.
-
+**Monitor** — live build/heartbeat telemetry per lab, including a real-time
+topology view once it's up.
 ![Monitor](docs/screenshots/monitor.png)
 
 ---
 
 ## Quick start (under 2 minutes)
 
-Prerequisites: **Node 20+**, **pnpm 9+**, **Python 3.12+**, **uv** (Python package installer), **Vagrant 2.4+**,
-**VirtualBox 7+** (or VMware / libvirt).
+Prerequisites: **Node 20+**, **pnpm 9+**, **Python 3.12+**, **uv** (Python package installer).
+Vagrant + VirtualBox/VMware are only needed for VM-based labs — the Docker-only
+labs (ransomware hunt, malware triage, Log4Shell) run with just Docker.
 
 ```bash
 # 1. Install Node dependencies
@@ -85,12 +65,12 @@ uv venv                   # create a virtual environment (.venv)
 pnpm run setup            # installs API + agent Python deps via uv
 
 # 3. Start both services
-pnpm dev                  # → API on :8000, web on :3000
+pnpm dev                  # → API on :8010, web on :3000
 ```
 
 > No `concurrently`? Run `pnpm dev:api` and `pnpm dev:web` in two terminals.
 >
-> On Windows (VirtualBox/VMware VMs and Docker labs), follow [docs/windows-host.md](docs/windows-host.md).
+> On Windows (VM-based and Docker labs), follow [docs/windows-host.md](docs/windows-host.md).
 
 Open <http://127.0.0.1:3000>, pick a template, hit **Generate Lab**.
 
@@ -108,10 +88,10 @@ Same two ports, no Python toolchain on your host.
 
 | Path                 | What                                                              |
 |----------------------|-------------------------------------------------------------------|
-| `apps/web/`          | Next.js 15 canvas + dashboard                                     |
-| `apps/api/`          | FastAPI backend (validate · NVD · Vagrantfile generator)          |
+| `apps/web/`          | Next.js 15 dashboard, canvas builder, and live monitor            |
+| `apps/api/`          | FastAPI backend (validate · NVD · Vagrantfile/Compose generator)  |
 | `packages/schema/`   | Shared topology schema (Zod + Pydantic)                           |
-| `packages/agent/`    | `labforge` CLI that drives `vagrant up`                           |
+| `packages/agent/`    | `labforge` CLI that drives `vagrant up` / `docker compose up`     |
 
 The CLI is optional — everything you can do from the web UI you can do
 from the API.
@@ -122,13 +102,18 @@ from the API.
 
 Loaded from `packages/schema/templates/`:
 
-- `basic-ad` — DC + workstations + Kali (~10 GB)
-- `cve-lab-log4shell` — Apache + Log4j 2.14 + Kali (~6 GB)
-- `red-team-range` — Full DMZ + AD (~15 GB)
-- `dfir-lab` — Sysmon + Winlogbeat + Splunk (~14 GB)
-- `wan-sim` — Multi-subnet routing (~7 GB)
-- `smart-factory` — OpenPLC + HMI + cameras + Wazuh (~12 GB, all Linux)
-- `llm-red-team-range` — Ollama + LangChain + garak (~15 GB, all Linux)
+- `basic-ad` — DC + 2 Windows 10 workstations + Kali attacker (~10 GB)
+- `cve-lab-log4shell` — Apache + Log4j 2.14 + Kali, Docker-only (~4 GB)
+- `dfir-lab` — Windows endpoint + Sysmon/Winlogbeat → Splunk + Kali (~10 GB)
+- `llm-red-team-range` — Ollama + LangChain RAG agent + Kali, prompt-injection/jailbreak practice (~15 GB)
+- `malware-triage-lab` — isolated analysis container + fake-internet sandbox, Docker-only (~1 GB)
+- `ransomware-intrusion-lab` — Elastic/Kibana SIEM hunt over a synthetic double-extortion intrusion, plus 2 real Windows victims, Docker-only (~10 GB)
+- `ransomware-intrusion-linux-lab` — same hunt, Linux-only fallback with no Windows guests, Docker-only (~3 GB)
+- `red-team-range` — DMZ + AD + firewall, full kill-chain practice (~15 GB)
+- `smart-factory` — OpenPLC + HMI + IP cameras + Wazuh, all Linux (~12 GB)
+- `telecom-ad-rts` — AD Red Team Specialist-style telecom range: perimeter FW, IIS, DNS, AD forest + MSSQL (~17 GB)
+- `wan-sim` — 3-branch multi-subnet routing simulation (~5 GB)
+- `wifi-lab` — real `hostapd` AP on passed-through hardware; switch live between open/WEP/WPA2/WPA3/WPS/hidden-SSID/MAC-filter/Enterprise scenarios from the dashboard, with a Wazuh SIEM watching (~11 GB, VMware)
 
 Each template is just a JSON file; drop your own next to them.
 
@@ -136,7 +121,7 @@ Each template is just a JSON file; drop your own next to them.
 
 ## API
 
-All routes under `/api/v1/`. Live OpenAPI at <http://127.0.0.1:8000/docs>.
+All routes under `/api/v1/`. Live OpenAPI at <http://127.0.0.1:8010/docs>.
 
 Common endpoints:
 
@@ -146,7 +131,7 @@ POST   /api/v1/topologies/validate
 POST   /api/v1/generate            → zip with Vagrantfile + provisioners
 GET    /api/v1/cves/search?q=…     → NVD search
 GET    /api/v1/labs                → provisioned-lab state
-POST   /api/v1/labs/build          → kick off `vagrant up` in background
+POST   /api/v1/labs/build          → kick off a build in the background
 ```
 
 ---

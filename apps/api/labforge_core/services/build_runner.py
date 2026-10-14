@@ -514,8 +514,92 @@ def _vagrant_teardown(workspace: Path) -> str | None:
 # Services the webinar dashboard's live-log tab is allowed to tail inside a
 # guest. Kept to a tiny allowlist because the service name is spliced into a
 # remote shell string for ``vagrant ssh -c`` — never take it from the request
-# unchecked.
-NODE_LOG_SERVICES = {"hostapd", "dnsmasq", "wazuh-agent"}
+# unchecked. freeradius and labforge-captive-portal were added alongside
+# those roles — found missing here (silently rejecting the dashboard's own
+# RADIUS log panel) during a real end-to-end run against actual VMs.
+NODE_LOG_SERVICES = {"hostapd", "dnsmasq", "wazuh-agent", "freeradius", "labforge-captive-portal"}
+
+
+# ---------------------------------------------------------------- fast guest exec
+#
+# `vagrant ssh` pays Ruby/Vagrant startup (plus the VMware plugin's own probes)
+# on every call: ~25s per scenario click on this host. The VM's SSH endpoint is
+# a stable NAT forward, so resolve it once with `vagrant ssh-config`, cache it,
+# and talk to the guest with plain ssh (~0.3s). Any failure falls back to
+# `vagrant ssh`, so this is purely an accelerator.
+
+_SSH_CACHE_FILE = ".labforge-ssh.json"
+
+
+def _ssh_info(workspace: Path, hostname: str, *, refresh: bool = False) -> dict | None:
+    cache_path = workspace / _SSH_CACHE_FILE
+    cache: dict = {}
+    if cache_path.exists() and not refresh:
+        try:
+            cache = json.loads(cache_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            cache = {}
+        if hostname in cache:
+            return cache[hostname]
+    if not vagrant_available():
+        return None
+    try:
+        proc = subprocess.run(
+            ["vagrant", "ssh-config", hostname], cwd=str(workspace), capture_output=True,
+            text=True, errors="replace", timeout=90, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    fields: dict[str, str] = {}
+    for line in proc.stdout.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) == 2:
+            fields[parts[0]] = parts[1].strip().strip('"')
+    if not {"HostName", "Port", "User", "IdentityFile"} <= fields.keys():
+        return None
+    info = {k: fields[k] for k in ("HostName", "Port", "User", "IdentityFile")}
+    cache[hostname] = info
+    try:
+        cache_path.write_text(json.dumps(cache), encoding="utf-8")
+    except OSError:
+        pass
+    return info
+
+
+def guest_exec(workspace: Path, hostname: str, script: str, timeout: int = 60) -> subprocess.CompletedProcess:
+    """Run a bash script in a guest. Fast direct ssh first, `vagrant ssh` as the fallback."""
+    ssh = shutil.which("ssh")
+    if ssh:
+        for attempt in (0, 1):
+            info = _ssh_info(workspace, hostname, refresh=bool(attempt))
+            if not info:
+                break
+            argv = [
+                ssh, "-i", info["IdentityFile"], "-p", info["Port"],
+                "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=NUL",
+                "-o", "BatchMode=yes", "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=5",
+                f"{info['User']}@{info['HostName']}",
+                # Script travels as one base64 argument, not on stdin: commands
+                # inside it (sudo tee ...) would otherwise swallow the rest of it.
+                f"bash -c \"$(echo {base64.b64encode(script.encode()).decode()} | base64 -d)\"",
+            ]
+            try:
+                proc = subprocess.run(
+                    argv, capture_output=True, text=True,
+                    errors="replace", timeout=timeout, check=False,
+                )
+            except subprocess.TimeoutExpired:
+                raise
+            except OSError:
+                break
+            if proc.returncode != 255:  # 255 = ssh itself could not connect
+                return proc
+    return subprocess.run(
+        ["vagrant", "ssh", hostname, "-c", script], cwd=str(workspace), capture_output=True,
+        text=True, errors="replace", timeout=max(timeout, 90), check=False,
+    )
 
 
 def node_log(
@@ -537,23 +621,21 @@ def node_log(
     else:
         if not vagrant_available():
             return [], "vagrant is not on PATH"
-        argv = [
-            "vagrant", "ssh", hostname, "-c",
+        argv = None
+    try:
+        if argv is None:
             # The vagrant user isn't in the adm/systemd-journal groups, so
             # plain journalctl silently returns "No entries" for another
             # service's logs — needs sudo (passwordless by default on every
             # Vagrant box this generator targets).
-            f"sudo journalctl -u {service} --no-pager -n {tail} 2>&1",
-        ]
-    try:
-        proc = subprocess.run(
-            argv, cwd=str(workspace), capture_output=True, text=True,
-            # vagrant ssh pays Ruby/Vagrant's own startup cost on every call
-            # (observed ~35-40s on Windows) on top of the actual journalctl —
-            # a 20s timeout here mostly just times out before vagrant finishes
-            # booting its own process, not because anything is actually stuck.
-            errors="replace", timeout=60, check=False,
-        )
+            proc = guest_exec(
+                workspace, hostname, f"sudo journalctl -u {service} --no-pager -n {tail} 2>&1", timeout=60
+            )
+        else:
+            proc = subprocess.run(
+                argv, cwd=str(workspace), capture_output=True, text=True,
+                errors="replace", timeout=60, check=False,
+            )
     except subprocess.TimeoutExpired:
         return [], "timed out reaching the guest"
     except OSError as exc:
@@ -564,6 +646,42 @@ def node_log(
     return proc.stdout.splitlines(), None
 
 
+def fetch_wazuh_password(workspace: Path, hostname: str, use_docker: bool) -> tuple[str | None, str | None]:
+    """Read the Wazuh dashboard admin password straight off the manager VM.
+
+    Returns ``(password, error)`` — never raises. Deliberately NOT a log
+    search: the wazuh-manager role's install step only ever runs once (the
+    VM's first `vagrant up`), so a password that only ever reached
+    build.log is unrecoverable the moment that one-time output scrolls
+    past or the log gets rotated/truncated by a later pause/resume. This
+    instead re-reads the fixed file the role also drops on disk
+    (/var/log/labforge-wazuh-password), which exists for as long as the
+    VM itself does — fetchable on demand, not dependent on anything
+    having been logged at all.
+    """
+    cat_cmd = "sudo cat /var/log/labforge-wazuh-password 2>&1"
+    if use_docker:
+        argv = ["docker", "compose", "exec", "-T", hostname, "sh", "-c", cat_cmd]
+        try:
+            proc = subprocess.run(
+                argv, cwd=str(workspace), capture_output=True, text=True,
+                errors="replace", timeout=20, check=False,
+            )
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            return None, str(exc)
+    else:
+        if not vagrant_available():
+            return None, "vagrant is not on PATH"
+        try:
+            proc = guest_exec(workspace, hostname, cat_cmd, timeout=20)
+        except subprocess.TimeoutExpired:
+            return None, "timed out reaching the guest"
+    out = (proc.stdout or "").strip()
+    if proc.returncode != 0 or not out:
+        return None, "not available yet — the VM may still be provisioning, or isn't up"
+    return out, None
+
+
 # The security-relevant tail of a hostapd.conf for each demo segment — the
 # interface/driver/ssid/logging lines come from whatever the hostapd role
 # already wrote, so switching scenarios never has to re-detect the adapter.
@@ -572,15 +690,132 @@ WIFI_SCENARIOS: dict[str, str] = {
     # hostapd requires an ASCII WEP key to be quoted — unquoted, it tries to
     # parse the text as hex digits and rejects it as "invalid WEP key".
     "wep": 'hw_mode=g\nchannel=6\nwep_default_key=0\nwep_key0="LabForgeWEP01"\n',
+    # WPS is bundled into the WPA2 scenario rather than its own button —
+    # WPS-on-WPA2-Personal is the common real-world pairing (most
+    # consumer routers ship exactly this combo), and segment 5's WPS
+    # process needs an AP that actually advertises it to have anything to
+    # attack at all. hostapd needs the full device-identity block below for
+    # WPS to activate, not just wps_state — verified: without
+    # uuid/device_name/config_methods/eap_server, `wash` sees nothing here.
     "wpa2": (
         "hw_mode=g\nchannel=6\nwpa=2\nwpa_passphrase=LabForgeDemo123\n"
         "wpa_key_mgmt=WPA-PSK\nrsn_pairwise=CCMP\n"
+        "wps_state=2\nap_setup_locked=0\neap_server=1\n"
+        "config_methods=virtual_push_button physical_display\n"
+        "uuid=87654321-9abc-def0-1234-56789abcdef0\n"
+        "device_name=LabForge-Demo-AP\nmanufacturer=LabForge\n"
+        "model_name=LabForge-Demo-AP\nmodel_number=1\nserial_number=12345\n"
+        "device_type=6-0050F204-1\nos_version=01020300\n"
+    ),
+    # Hidden SSID — HTB's "Finding Hidden SSIDs": the AP stops broadcasting
+    # its SSID in beacons (still answers a directed probe for it), so the
+    # live angle is recovering the name from probe/association traffic
+    # rather than reading it straight off a beacon frame.
+    "hidden-ssid": (
+        "hw_mode=g\nchannel=6\nwpa=2\nwpa_passphrase=LabForgeDemo123\n"
+        "wpa_key_mgmt=WPA-PSK\nrsn_pairwise=CCMP\nignore_broadcast_ssid=1\n"
     ),
     "wpa3": (
         "hw_mode=g\nchannel=6\nwpa=2\nwpa_key_mgmt=SAE\nrsn_pairwise=CCMP\n"
         "ieee80211w=2\nsae_password=LabForgeDemo123\n"
     ),
+    # Transition mode: the AP accepts BOTH a WPA2-PSK client and an SAE
+    # client on the same BSSID (ieee80211w=1, "optional", is what the WPA3
+    # spec requires here — =2 would force PMF and break the WPA2-PSK side).
+    # This is what makes a live SAE-downgrade / Evil-Twin-against-WPA3 demo
+    # possible: an attacker clones the SSID as WPA2-only and a transition-
+    # aware client that would otherwise prefer SAE can be talked down to it.
+    "wpa3-transition": (
+        "hw_mode=g\nchannel=6\nwpa=2\nwpa_key_mgmt=WPA-PSK SAE\nrsn_pairwise=CCMP\n"
+        "ieee80211w=1\nwpa_passphrase=LabForgeDemo123\nsae_password=LabForgeDemo123\n"
+    ),
+    # Enhanced Open (OWE) — no PSK at all, so there's nothing to crack; the
+    # live angle here is OWE's lack of AP authentication (any adapter can
+    # clone this SSID open or OWE, same signal strength, and a client has no
+    # way to tell which is real).
+    "owe": "hw_mode=g\nchannel=6\nwpa=2\nwpa_key_mgmt=OWE\nrsn_pairwise=CCMP\nieee80211w=2\n",
+    # MAC filtering — HTB's "Bypassing MAC Filtering": the AP only accepts
+    # associations from one fixed, documented "allowed" MAC
+    # (AA:BB:CC:DD:EE:FF, written to hostapd.accept below), not tied to any
+    # real device in this lab. The live demo is spoofing *to* that address
+    # (macchanger/ip link) after an initial attempt from the attacker's own
+    # MAC is rejected — the point is the bypass technique, not who the
+    # allowed address actually belongs to.
+    "mac-filter": (
+        "hw_mode=g\nchannel=6\nwpa=2\nwpa_passphrase=LabForgeDemo123\n"
+        "wpa_key_mgmt=WPA-PSK\nrsn_pairwise=CCMP\nmacaddr_acl=1\n"
+        "accept_mac_file=/etc/hostapd/hostapd.accept\n"
+    ),
 }
+
+# The one fixed "allowed" address for the mac-filter scenario — not a real
+# device, just the address a presenter spoofs to during the demo.
+_MAC_FILTER_ALLOWED = "AA:BB:CC:DD:EE:FF"
+
+# Real OWE transition mode needs TWO BSSIDs (one Open, one OWE, each
+# advertising the other's address/SSID) — unlike SAE's transition mode,
+# which is a single BSS. The hostapd role attempts to bring up a second
+# AP-mode VIF ($IFACE + "1") for exactly this; $SECOND_IFACE/$IFACE_MAC/
+# $SECOND_MAC are bash variables the remote script below fills in from
+# whatever that attempt produced, expanded by the unquoted heredoc same as
+# $IFACE already is for every other scenario.
+WIFI_MULTI_BSS_SCENARIOS: dict[str, str] = {
+    "owe-transition": (
+        "hw_mode=g\nchannel=6\nwpa=2\nwpa_key_mgmt=OWE\nrsn_pairwise=CCMP\n"
+        "ieee80211w=2\nowe_transition_bssid=$SECOND_MAC\n"
+        'owe_transition_ssid="LabForge-Open"\n'
+        "\nbss=$SECOND_IFACE\nssid=LabForge-Open\nowe_transition_bssid=$IFACE_MAC\n"
+        'owe_transition_ssid="LabForge-Demo-AP"\n'
+    ),
+}
+
+# Scenarios that hand off authentication to a RADIUS server instead of a
+# local PSK/SAE secret — the auth_server_* lines get the freeradius role's
+# node IP spliced in at apply time (see _find_role_ip below), not baked in
+# here, since which node runs that role is a per-lab topology choice.
+WIFI_ENTERPRISE_SCENARIOS: dict[str, str] = {
+    "wpa2-enterprise": (
+        "hw_mode=g\nchannel=6\nwpa=2\nieee8021x=1\nwpa_key_mgmt=WPA-EAP\n"
+        "rsn_pairwise=CCMP\n"
+    ),
+    "wpa3-enterprise": (
+        "hw_mode=g\nchannel=6\nwpa=2\nieee8021x=1\nwpa_key_mgmt=WPA-EAP-SHA256\n"
+        "rsn_pairwise=CCMP\nieee80211w=2\n"
+    ),
+}
+
+# All valid scenario names — used for the Query() description in labs.py and
+# the "unknown scenario" validation below; the two dicts stay separate since
+# WIFI_ENTERPRISE_SCENARIOS needs the extra radius_ip lookup the others don't.
+ALL_WIFI_SCENARIOS: frozenset[str] = (
+    frozenset(WIFI_SCENARIOS) | frozenset(WIFI_ENTERPRISE_SCENARIOS) | frozenset(WIFI_MULTI_BSS_SCENARIOS)
+)
+
+# Shared secret between every hostapd node's wpa2/3-enterprise scenario and
+# the freeradius role's NAS client entry (see role_installers.py) — fixed,
+# like the rest of this lab's default credentials, so switching scenarios
+# never needs a secret passed around by hand.
+_RADIUS_SHARED_SECRET = "LabForgeRadius123"
+
+
+def _find_role_ip(workspace: Path, role: str) -> str | None:
+    """Look up the IP of the (first) node carrying ``role`` in this lab's
+    frozen topology.json — used to wire the hostapd role's enterprise
+    scenarios to wherever the freeradius role actually landed, without the
+    webinar dashboard having to know or pass that IP itself."""
+    topo_file = workspace / "topology.json"
+    if not topo_file.exists():
+        return None
+    try:
+        topo = LabConfig.model_validate_json(topo_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    for node in topo.nodes:
+        for configured_role in node.config.roles:
+            bare = configured_role.split("@", 1)[0]
+            if bare == role:
+                return node.config.ip
+    return None
 
 
 def apply_wifi_scenario(
@@ -591,40 +826,79 @@ def apply_wifi_scenario(
     from WEP to WPA2 to WPA3 between segments doesn't mean SSHing in and
     hand-editing hostapd.conf on stage. Returns (ok, message); never raises.
     """
-    if scenario not in WIFI_SCENARIOS:
-        return False, f"unknown scenario {scenario!r} — choose one of {sorted(WIFI_SCENARIOS)}"
+    if scenario not in ALL_WIFI_SCENARIOS:
+        return False, f"unknown scenario {scenario!r} — choose one of {sorted(ALL_WIFI_SCENARIOS)}"
     if use_docker:
         return False, "wifi scenarios only apply to VM (hostapd) nodes, not Docker containers"
     if not vagrant_available():
         return False, "vagrant is not on PATH"
 
+    if scenario in WIFI_ENTERPRISE_SCENARIOS:
+        radius_ip = _find_role_ip(workspace, "freeradius")
+        if radius_ip is None:
+            return False, (
+                f"scenario {scenario!r} needs a node with the 'freeradius' role "
+                "in this lab's topology — none found"
+            )
+        scenario_lines = (
+            f"{WIFI_ENTERPRISE_SCENARIOS[scenario]}"
+            f"auth_server_addr={radius_ip}\nauth_server_port=1812\n"
+            f"auth_server_shared_secret={_RADIUS_SHARED_SECRET}\n"
+        )
+    elif scenario in WIFI_MULTI_BSS_SCENARIOS:
+        scenario_lines = WIFI_MULTI_BSS_SCENARIOS[scenario]
+    else:
+        scenario_lines = WIFI_SCENARIOS[scenario]
+
     conf_body = (
         f"interface=$IFACE\ndriver=nl80211\nssid=LabForge-Demo-AP\n"
-        f"{WIFI_SCENARIOS[scenario]}logger_syslog=-1\nlogger_syslog_level=2\n"
+        f"{scenario_lines}logger_syslog=-1\nlogger_syslog_level=2\n"
     )
+    needs_second_bss = scenario in WIFI_MULTI_BSS_SCENARIOS
     remote = (
         "IFACE=$(sudo grep -oP '^interface=\\K.*' /etc/hostapd/hostapd.conf 2>/dev/null || true)\n"
         "if [ -z \"$IFACE\" ]; then echo __NO_IFACE__; exit 0; fi\n"
-        # Unquoted heredoc delimiter is deliberate — $IFACE must expand.
-        "sudo tee /etc/hostapd/hostapd.conf >/dev/null <<LFCONF\n"
+        + (
+            # Only computed for the OWE-transition scenario — every other
+            # scenario's config text has no $SECOND_IFACE/$IFACE_MAC/
+            # $SECOND_MAC references, so this is a no-op for them.
+            "SECOND_IFACE=\"${IFACE}1\"\n"
+            "if ! iw dev | grep -q \"$SECOND_IFACE\"; then echo __NO_SECOND_IFACE__; exit 0; fi\n"
+            "IFACE_MAC=$(cat /sys/class/net/$IFACE/address 2>/dev/null)\n"
+            "SECOND_MAC=$(cat /sys/class/net/$SECOND_IFACE/address 2>/dev/null)\n"
+            if needs_second_bss
+            else ""
+        )
+        # Unquoted heredoc delimiter is deliberate — $IFACE (and, for
+        # owe-transition, $SECOND_IFACE/$IFACE_MAC/$SECOND_MAC) must expand.
+        + "sudo tee /etc/hostapd/hostapd.conf >/dev/null <<LFCONF\n"
         f"{conf_body}"
         "LFCONF\n"
+        + (
+            f"sudo sh -c 'echo {_MAC_FILTER_ALLOWED} > /etc/hostapd/hostapd.accept'\n"
+            if scenario == "mac-filter"
+            else ""
+        )
         # No `set -e`: a failed restart must still reach the status/journal
         # checks below rather than aborting the script right there, which is
         # all the caller would otherwise see (systemd's generic "Job failed"
         # text) instead of hostapd's actual reason (e.g. the driver not
         # supporting 802.11w for a WPA3 request).
+        + "T=$(date '+%Y-%m-%d %H:%M:%S')\n"
         "sudo systemctl restart hostapd\n"
-        "sleep 1\n"
-        "sudo systemctl is-active hostapd\n"
+        # Poll instead of a fixed sleep: done as soon as hostapd logs AP-ENABLED
+        # for this restart, or as soon as systemd reports it failed.
+        "for i in $(seq 1 40); do\n"
+        "  st=$(systemctl is-active hostapd)\n"
+        "  if [ \"$st\" = active ] && sudo journalctl -u hostapd --since \"$T\" --no-pager | grep -q AP-ENABLED; then break; fi\n"
+        "  [ \"$st\" = failed ] && break\n"
+        "  sleep 0.25\n"
+        "done\n"
+        "echo \"$st\"\n"
         "sudo journalctl -u hostapd --no-pager -n 20\n"
     )
     try:
-        proc = subprocess.run(
-            ["vagrant", "ssh", hostname, "-c", remote],
-            cwd=str(workspace), capture_output=True, text=True,
-            errors="replace", timeout=60, check=False,
-        )
+        proc = guest_exec(workspace, hostname, remote, timeout=60)
     except subprocess.TimeoutExpired:
         return False, "timed out reaching the guest"
     except OSError as exc:
@@ -634,6 +908,13 @@ def apply_wifi_scenario(
         return False, (
             "no interface found in this node's hostapd.conf yet — pass a USB "
             "adapter through and let the hostapd role provision first"
+        )
+    if "__NO_SECOND_IFACE__" in out:
+        return False, (
+            f"scenario {scenario!r} needs a second AP-mode interface on this adapter "
+            "(real OWE-transition is two BSSIDs, unlike SAE's single-BSS transition "
+            "mode) — this adapter/driver only brought up one AP VIF, see the hostapd "
+            "role's provision log for what it tried"
         )
     out_lines = out.splitlines()
     status_line = out_lines[0] if out_lines else ""
@@ -746,6 +1027,46 @@ def _run_vagrant_lifecycle(workspace: Path, verb: str, timeout: int = 180) -> No
         raise HaltFailed(f"vagrant {verb} exited {proc.returncode}: {' | '.join(tail)}")
 
 
+def _usb_radio_hosts(workspace: Path) -> list[str]:
+    """Hostnames of nodes running the AltoBeam driver role."""
+    try:
+        topo = json.loads((workspace / "topology.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [
+        n["config"]["hostname"]
+        for n in topo.get("nodes", [])
+        if any(str(r).split("@")[0] == "atbm-wifi-driver" for r in n.get("config", {}).get("roles", []))
+    ]
+
+
+def _release_usb_radios(workspace: Path) -> None:
+    """Cleanly unload the AltoBeam driver before a suspend.
+
+    Suspending drops the passed-through dongle mid-session, and these chips'
+    firmware hangs when the host side vanishes under a loaded driver (seen
+    repeatedly, see docs/labs/altobeam). Stop the AP and unload the module
+    first so the device is idle when VMware detaches it. Best effort: a
+    failure here must not block the pause.
+    """
+    try:
+        topo = json.loads((workspace / "topology.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    for node in topo.get("nodes", []):
+        cfg = node.get("config", {})
+        if any(str(r).split("@")[0] == "atbm-wifi-driver" for r in cfg.get("roles", [])):
+            try:
+                subprocess.run(
+                    ["vagrant", "ssh", cfg.get("hostname", ""), "-c",
+                     "sudo systemctl stop hostapd dnsmasq; sudo rmmod atbm6012bx; sync"],
+                    cwd=str(workspace), capture_output=True, text=True, errors="replace",
+                    timeout=90, check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+
+
 def halt_lab(lab: Lab, session: Session) -> None:
     """Stop a lab's VMs/containers and keep its data. ``resume_lab`` brings it back.
 
@@ -775,26 +1096,33 @@ def halt_lab(lab: Lab, session: Session) -> None:
 
 
 def pause_lab(lab: Lab, session: Session) -> None:
-    """Suspend a Vagrant lab's VMs to disk (save RAM state) — ``vagrant suspend``.
+    """Pause a lab without tearing it down.
 
-    Faster to bring back than a full halt+boot (no provisioning, no OS boot
-    sequence), at the cost of disk space for the saved-state file. Docker
-    labs don't get an equivalent here — ``docker compose pause`` only
-    freezes cgroups rather than saving real VM state, which isn't the same
-    trade-off, so this stays Vagrant-only rather than offering something
-    that looks the same but behaves differently.
+    Vagrant: ``vagrant suspend`` — saves real guest RAM state to disk and
+    powers the VM off; ``resume`` restores exactly where it left off with
+    no boot sequence. Docker: ``docker compose pause`` — freezes every
+    container's processes in place via the cgroup freezer (no stop, no
+    restart on the way back); it uses no CPU while paused but still holds
+    its RAM, which is a different trade-off than Vagrant's suspend-to-disk
+    but still meaningfully faster/less disruptive to come back from than
+    Stop + Start.
     """
     lab_id = lab.id or 0
     with _lab_lock(lab_id):
         workspace = Path(lab.workspace_path) if lab.workspace_path else None
         if workspace is None or not workspace.exists():
             raise HaltFailed("The lab workspace is gone, so there is nothing to pause. Destroy the lab instead.")
-        if runtime_of(workspace) != "vagrant":
-            raise HaltFailed("Pause (suspend) is only available for VM (Vagrant) labs — use Stop for Docker labs.")
+        runtime = runtime_of(workspace)
         if read_build_status(workspace)["phase"] == "running":
             stop_build(workspace)
         _stop_daemon(workspace)
-        _run_vagrant_lifecycle(workspace, "suspend")
+        if runtime == "docker":
+            result = docker_runtime.pause(workspace)
+            if not result.ok:
+                raise HaltFailed(result.error or "docker compose pause failed")
+        else:
+            _release_usb_radios(workspace)
+            _run_vagrant_lifecycle(workspace, "suspend")
         lab.status = "paused"
         lab.updated_at = _utcnow()
         session.add(lab)
@@ -819,14 +1147,28 @@ def resume_lab(lab: Lab, session: Session) -> int:
         if runtime == "docker":
             if not (workspace / docker_runtime.COMPOSE_FILE).exists():
                 raise HaltFailed("The lab workspace is gone. Build the lab again.")
-            if lab.status not in ("stopped", "failed", "partial"):
-                raise HaltFailed(f"The lab is {lab.status}, only a stopped lab can be started.")
-            problem = docker_runtime.prereq_problem()
-            if problem:
-                raise BuildPrereqError(problem[1], problem[0])
+            if lab.status not in ("stopped", "paused", "failed", "partial", "unknown"):
+                raise HaltFailed(f"The lab is {lab.status}, only a stopped or paused lab can be started.")
             project = docker_runtime.read_project(workspace)
             if not project:
                 raise HaltFailed("The lab has no .labforge-project file, build it again.")
+            if lab.status == "paused":
+                # Containers are frozen, not stopped — `compose unpause` is
+                # near-instant and needs none of the cold-start machinery
+                # below (no prereq re-check, no sentinel reset, no spawned
+                # build process to wait on).
+                result = docker_runtime.unpause(workspace, project)
+                if not result.ok:
+                    raise HaltFailed(result.error or "docker compose unpause failed")
+                lab.status = "running"
+                lab.updated_at = _utcnow()
+                session.add(lab)
+                session.commit()
+                _spawn_daemon(lab, workspace)
+                return 0
+            problem = docker_runtime.prereq_problem()
+            if problem:
+                raise BuildPrereqError(problem[1], problem[0])
             for sentinel in (BUILD_EXIT, BUILD_ABORTED, BUILD_PID, ".labforge-daemon-stop"):
                 (workspace / sentinel).unlink(missing_ok=True)
             topology = json.loads((workspace / "topology.json").read_text(encoding="utf-8"))
@@ -839,16 +1181,39 @@ def resume_lab(lab: Lab, session: Session) -> int:
         else:
             if not (workspace / "Vagrantfile").exists():
                 raise HaltFailed("The lab workspace is gone. Build the lab again.")
-            if lab.status not in ("stopped", "paused", "failed", "partial"):
+            # "unknown" happens when the DB's last-known status can't be trusted —
+            # e.g. a VM process was killed outside the app (host crash, manual
+            # `taskkill`, VirtualBox itself wedging) rather than through halt/pause.
+            # `vagrant up` is the right recovery either way: idempotent against an
+            # already-running VM, and boots a genuinely stopped one.
+            if lab.status not in ("stopped", "paused", "failed", "partial", "unknown"):
                 raise HaltFailed(f"The lab is {lab.status}, only a stopped or paused lab can be started.")
             if not vagrant_available():
                 raise BuildPrereqError("Vagrant is not installed or not on PATH.", "vagrant_missing")
             for sentinel in (BUILD_EXIT, BUILD_ABORTED, BUILD_PID, ".labforge-daemon-stop"):
                 (workspace / sentinel).unlink(missing_ok=True)
-            verb = "resume" if lab.status == "paused" else "up"
+            # `vagrant up` on a suspended VM resumes it AND runs the run:"always"
+            # provisioners (USB radio recovery); a bare `vagrant resume` skips them.
+            verb = "up"
+            argv = ["vagrant", verb]
+            recover = _usb_radio_hosts(workspace)
+            if recover and verb == "up":
+                # Vagrant does not run the `run: "always"` USB recovery
+                # provisioner when it wakes a suspended VM, so chain it after
+                # the up: reload the dongle driver and bounce the AP.
+                steps = [["vagrant", "up"]] + [
+                    ["vagrant", "provision", h, "--provision-with", "usb-radio-recover"] for h in recover
+                ]
+                code = (
+                    "import subprocess, sys; rc = 0; "
+                    f"steps = {steps!r}; "
+                    "[globals().__setitem__('rc', subprocess.call(step) or rc) for step in steps]; "
+                    "sys.exit(rc)"
+                )
+                argv = [sys.executable, "-c", code]
             pid = _spawn_build(
                 workspace,
-                ["vagrant", verb],
+                argv,
                 banner=f"--- resume runtime=vagrant verb={verb} ---",
             )
         lab.status = "building"
@@ -947,6 +1312,23 @@ def _provider_vms_running(workspace: Path) -> int:
     # virsh + a session bus; bail to -1 in that case so the caller
     # doesn't make a decision on stale data.
     providers = {p for _, p, _ in expected}
+    if "vmware_desktop" in providers and "virtualbox" not in providers:
+        # `vmrun list` prints the .vmx path of each running VM; Vagrant keeps
+        # them under this workspace's .vagrant/machines tree.
+        vmrun = hostenv.vmrun_path()
+        if not vmrun:
+            return -1
+        try:
+            out = subprocess.run(
+                [vmrun, "list"], capture_output=True, text=True, errors="replace", timeout=10, check=False
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return -1
+        root = str(machines_dir).replace("/", "\\").lower()
+        return sum(
+            1 for line in (out.stdout or "").splitlines()
+            if line.strip().replace("/", "\\").lower().startswith(root)
+        )
     if "virtualbox" not in providers:
         return -1
 

@@ -27,7 +27,7 @@ from sqlmodel import Session, select
 
 from labforge_core.api.rate_limit import limit, rate_limited
 from labforge_core.api.security import require_agent_token
-from labforge_core.models import Lab, LabHeartbeat, get_session
+from labforge_core.models import Lab, LabHeartbeat, get_engine, get_session
 from labforge_core.schemas.api import (
     ActivityEntry,
     BuildLogChunk,
@@ -49,9 +49,10 @@ from labforge_core.services.build_runner import (
     SubnetConflictError,
     destroy_lab,
     NODE_FILES,
-    WIFI_SCENARIOS,
+    ALL_WIFI_SCENARIOS,
     apply_wifi_scenario,
     fetch_node_file,
+    fetch_wazuh_password,
     halt_lab,
     node_log,
     parse_per_vm_phases,
@@ -281,11 +282,26 @@ def lab_log(
     return out[-lines:]
 
 
+def _lookup_lab(lab_id: int) -> Lab:
+    """Fetch a Lab row through a short-lived session that releases its pooled
+    connection immediately, instead of one held open (via ``Depends(get_session)``)
+    for the full duration of a slow ``vagrant ssh`` call below. Holding a pool
+    connection across a 60-90s subprocess starves the shared pool (5 + 10
+    overflow) and cascades into unrelated endpoints failing with
+    ``QueuePool ... timed out`` once a couple of these stack up against an
+    unreachable VM."""
+    with Session(get_engine()) as session:
+        lab = session.get(Lab, lab_id)
+        if lab is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lab not found")
+        session.expunge(lab)
+        return lab
+
+
 @router.get("/{lab_id}/node-log/{hostname}", response_model=list[str])
 def node_log_endpoint(
     lab_id: LabId,
     hostname: str,
-    session: Annotated[Session, Depends(get_session)],
     service: str = Query(default="hostapd"),
     lines: int = Query(default=100, ge=1, le=500),
 ) -> list[str]:
@@ -294,29 +310,43 @@ def node_log_endpoint(
     deauth, EAPOL activity) without wiring up a real SIEM query. Never
     errors the request; a VM that isn't reachable yet just comes back as a
     single explanatory line."""
-    lab = session.get(Lab, lab_id)
-    if lab is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lab not found")
+    lab = _lookup_lab(lab_id)
     workspace = _resolve_workspace(lab)
     out, err = node_log(workspace, hostname, lab.provider == "docker", service, lines)
     return out if err is None else [f"[{err}]"]
+
+
+@router.get("/{lab_id}/wazuh-password/{hostname}")
+def wazuh_password_endpoint(lab_id: LabId, hostname: str) -> dict[str, object]:
+    """Read the Wazuh dashboard admin password straight off the manager VM.
+
+    Deliberately not a log lookup: the install step that generates this
+    password only ever runs once, on the VM's first `vagrant up` — asking
+    a user to go find that line in build.log breaks the moment the lab is
+    resumed/rebuilt after it already scrolled past, or the log itself was
+    rotated. This re-reads the fixed file the wazuh-manager role drops on
+    disk, live, every time it's called, so the UI's AccessPanel can just
+    offer a button instead of a "search the log" instruction that cannot
+    be guaranteed to work.
+    """
+    lab = _lookup_lab(lab_id)
+    workspace = _resolve_workspace(lab)
+    password, err = fetch_wazuh_password(workspace, hostname, lab.provider == "docker")
+    return {"ok": password is not None, "password": password, "error": err}
 
 
 @router.post("/{lab_id}/wifi-scenario/{hostname}")
 def wifi_scenario_endpoint(
     lab_id: LabId,
     hostname: str,
-    session: Annotated[Session, Depends(get_session)],
-    scenario: str = Query(description=f"One of: {', '.join(sorted(WIFI_SCENARIOS))}"),
+    scenario: str = Query(description=f"One of: {', '.join(sorted(ALL_WIFI_SCENARIOS))}"),
 ) -> dict[str, object]:
     """Switch a hostapd node to a named demo scenario (open/wep/wpa2/wpa3) and
     restart hostapd — the webinar dashboard's segment switcher. Returns
     ``{ok, message}`` with a 200 either way; the caller checks ``ok``, since
     a VM that isn't reachable is an expected, recoverable state here, not a
     server error."""
-    lab = session.get(Lab, lab_id)
-    if lab is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lab not found")
+    lab = _lookup_lab(lab_id)
     workspace = _resolve_workspace(lab)
     ok, message = apply_wifi_scenario(workspace, hostname, lab.provider == "docker", scenario)
     return {"ok": ok, "message": message}
@@ -326,7 +356,6 @@ def wifi_scenario_endpoint(
 def node_file_endpoint(
     lab_id: LabId,
     hostname: str,
-    session: Annotated[Session, Depends(get_session)],
     file: str = Query(description=f"One of: {', '.join(sorted(NODE_FILES))}"),
 ) -> Response:
     """Download one allowlisted file out of a guest VM — today, the hostapd
@@ -334,9 +363,7 @@ def node_file_endpoint(
     reviewed after the fact instead of only watched scroll by in the log."""
     if file not in NODE_FILES:
         raise HTTPException(status_code=400, detail=f"Unknown file {file!r}")
-    lab = session.get(Lab, lab_id)
-    if lab is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lab not found")
+    lab = _lookup_lab(lab_id)
     workspace = _resolve_workspace(lab)
     data, err = fetch_node_file(workspace, hostname, lab.provider == "docker", NODE_FILES[file])
     if err is not None:
@@ -591,9 +618,11 @@ def pause_lab_route(
     lab_id: LabId,
     session: Annotated[Session, Depends(get_session)],
 ) -> LabSummary:
-    """Suspend a Vagrant lab's VMs to disk (``vagrant suspend``) — keeps RAM
-    state, so POST /{lab_id}/resume afterward is a fast restore rather than a
-    full boot. VM (Vagrant) labs only; Docker labs use Stop instead."""
+    """Pause a running lab without tearing it down — available for every
+    runtime. Vagrant: ``vagrant suspend`` (RAM state saved to disk, VM
+    powered off). Docker: ``docker compose pause`` (containers frozen via
+    the cgroup freezer, stay resident in memory). Either way, POST
+    /{lab_id}/resume afterward is faster than Stop + Start."""
     lab = session.get(Lab, lab_id)
     if lab is None:
         raise HTTPException(

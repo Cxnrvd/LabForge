@@ -75,6 +75,9 @@ ignore = [
 testpaths = ["tests"]
 asyncio_mode = "auto"
 filterwarnings = ["error"]
+markers = [
+    "docker_role: renders a role's provisioner script and actually runs it in a throwaway Linux container — real package installs and service starts, not just Jinja rendering. Needs Docker; excluded from the default run (see tests/test_role_scripts_docker.py).",
+]
 
 [tool.mypy]
 python_version = "3.12"

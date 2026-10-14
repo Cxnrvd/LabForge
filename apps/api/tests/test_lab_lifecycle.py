@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -336,9 +337,20 @@ def test_heartbeat_accepts_aware_and_naive_captured_at_without_raising(fake, ses
     app.dependency_overrides[get_session] = lambda: session
     client = TestClient(app)
 
-    aware = client.post(f"/api/v1/labs/{lab.id}/heartbeat", json={"captured_at": "2026-10-02T20:00:00+00:00"})
+    # Relative to "now", not a fixed date — /activity/recent only returns the
+    # last 24h, so a hardcoded past timestamp eventually ages out of that
+    # window and starts failing for a reason unrelated to what this test
+    # actually checks (naive/aware timestamps not raising).
+    now = datetime.now(UTC)
+    aware = client.post(
+        f"/api/v1/labs/{lab.id}/heartbeat",
+        json={"captured_at": (now - timedelta(minutes=2)).isoformat()},
+    )
     assert aware.status_code == 200
-    naive = client.post(f"/api/v1/labs/{lab.id}/heartbeat", json={"captured_at": "2026-10-02T20:00:05"})
+    naive = client.post(
+        f"/api/v1/labs/{lab.id}/heartbeat",
+        json={"captured_at": (now - timedelta(minutes=1)).replace(tzinfo=None).isoformat()},
+    )
     assert naive.status_code == 200
     no_timestamp = client.post(f"/api/v1/labs/{lab.id}/heartbeat", json={})
     assert no_timestamp.status_code == 200

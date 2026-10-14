@@ -5,15 +5,16 @@ import {
   Background,
   BackgroundVariant,
   Controls,
-  MiniMap,
   ReactFlow,
   ReactFlowProvider,
+  useReactFlow,
+  useStore,
   type Edge,
   type Node as RFNode,
 } from "@xyflow/react";
 import { useQuery } from "@tanstack/react-query";
 
-import type { LabConfig, NodeType, OsType, Protocol } from "@labforge/schema";
+import type { LabConfig, NodeType, OsType, Protocol, TopologyNode } from "@labforge/schema";
 import { api, type BuildPhase, type BuildPhasesPayload } from "@/lib/api/client";
 import { useLiveBus, type LiveBusEvent } from "@/lib/api/live-bus";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -74,6 +75,191 @@ function _stateFromTelemetry(
   if (buildPhase) return "provisioning";
   if (overall === "running") return "defined";
   return "defined";
+}
+
+// ---------------------------------------------------------------- access panel
+//
+// "Where do I actually reach this thing" is scattered across role scripts and
+// README output today — the user has to SSH in and search. One role can map
+// to zero, one, or several reachable endpoints; everything else (databases,
+// log shippers, RADIUS) has no browsable UI at all, so it's left out rather
+// than padded with "no web UI" noise for every node.
+// The visible label is always "ip:port" — that's the literal ask: a user
+// should be able to read the address off this panel without opening the
+// link, not decode a prose name back into a port number themselves.
+interface AccessEndpoint {
+  ip: string;
+  port: number;
+  label: string; // what it's for, e.g. "captive portal" / "ssh" — shown as a suffix, never standing in for the address
+  scheme?: "http" | "https"; // present only for entries that are actually clickable
+}
+
+const WINDOWS_OS = new Set<OsType>([
+  "windows_10",
+  "windows_11",
+  "windows_server_2019",
+  "windows_server_2022",
+] as OsType[]);
+
+// Role (base name, "@version" suffix already stripped) -> extra endpoints
+// beyond the universal ssh/rdp line. Only roles with a confirmed, reachable
+// UI/port are listed — see role_installers.py for the source of truth on
+// each port (e.g. splunk-enterprise installs only the forwarder, no web UI,
+// so it's deliberately absent here).
+function _roleEndpoints(role: string, ip: string): AccessEndpoint[] {
+  switch (role) {
+    case "captive-portal":
+      return [{ ip, port: 80, label: "captive portal", scheme: "http" }];
+    case "wazuh-manager":
+      return [{ ip, port: 443, label: "Wazuh dashboard", scheme: "https" }];
+    case "apache":
+      return [{ ip, port: 80, label: "Apache", scheme: "http" }];
+    case "log4shell-target":
+      return [{ ip, port: 8080, label: "vuln app", scheme: "http" }];
+    default:
+      return [];
+  }
+}
+
+function accessEndpoints(node: TopologyNode): AccessEndpoint[] {
+  const ip = node.config.ip;
+  const windows = WINDOWS_OS.has(node.config.os);
+  const out: AccessEndpoint[] = [];
+  const seen = new Set<string>();
+  for (const role of node.config.roles ?? []) {
+    for (const ep of _roleEndpoints(role.split("@")[0] ?? role, ip)) {
+      const key = `${ep.port}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(ep);
+    }
+  }
+  // Universal fallback so every node still shows *something* to connect
+  // with, even one with no web role at all.
+  out.push(
+    windows
+      ? { ip, port: 3389, label: "RDP" }
+      : { ip, port: 22, label: `ssh as ${node.config.credentials.username}` },
+  );
+  return out;
+}
+
+function AccessPanel({ topology, labId }: { topology: LabConfig; labId: number }) {
+  const nodes = topology.nodes.filter((n) => n.type !== "internet");
+  if (nodes.length === 0) return null;
+  const wazuhManager = nodes.find((n) =>
+    (n.config.roles ?? []).some((r) => r.split("@")[0] === "wazuh-manager"),
+  );
+  return (
+    <div className="border-t bg-muted/30 px-3 py-2">
+      <p className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+        Accessible via
+      </p>
+      <div
+        className="grid gap-x-3 gap-y-0.5 text-[10px] leading-tight"
+        style={{ gridTemplateColumns: "max-content max-content 1fr" }}
+      >
+        {nodes.map((n) => (
+          <React.Fragment key={n.id}>
+            <span className="font-medium text-foreground">{n.config.hostname}</span>
+            <span className="font-mono text-muted-foreground">
+              {n.config.credentials.username}/{n.config.credentials.password}
+            </span>
+            <span className="flex flex-wrap gap-x-2 text-muted-foreground">
+              {accessEndpoints(n).map((ep, i) => {
+                const address = `${ep.ip}:${ep.port}`;
+                return (
+                  <React.Fragment key={`${ep.ip}:${ep.port}`}>
+                    {i > 0 && <span className="opacity-50">·</span>}
+                    {ep.scheme ? (
+                      <a
+                        href={`${ep.scheme}://${ep.ip}:${ep.port}/`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="font-mono underline decoration-dotted underline-offset-2 hover:text-foreground"
+                        title={`Opens ${ep.scheme}://${address}/ in a new tab`}
+                      >
+                        {address}
+                      </a>
+                    ) : (
+                      <code className="font-mono">{address}</code>
+                    )}
+                    <span className="opacity-70">({ep.label})</span>
+                  </React.Fragment>
+                );
+              })}
+            </span>
+          </React.Fragment>
+        ))}
+      </div>
+      {wazuhManager && (
+        <WazuhPasswordRow labId={labId} hostname={wazuhManager.config.hostname} />
+      )}
+    </div>
+  );
+}
+
+// Fetches the Wazuh dashboard admin password live, on demand, straight off
+// the manager VM — deliberately not a "search the log" pointer. The
+// install step that generates this password only runs once, on the VM's
+// very first boot, so anything that depended on log retention (a scrolled-
+// past build.log, a resumed/rebuilt lab) could never reliably find it
+// again. This re-reads the fixed file the role drops on disk instead,
+// which exists for as long as the VM does.
+function WazuhPasswordRow({ labId, hostname }: { labId: number; hostname: string }) {
+  const [state, setState] = React.useState<
+    { status: "idle" } | { status: "loading" } | { status: "ok"; password: string } | { status: "error"; message: string }
+  >({ status: "idle" });
+
+  const reveal = async () => {
+    setState({ status: "loading" });
+    try {
+      const res = await api.getWazuhPassword(labId, hostname);
+      if (res.ok && res.password) {
+        setState({ status: "ok", password: res.password });
+      } else {
+        setState({ status: "error", message: res.error ?? "not available" });
+      }
+    } catch (err) {
+      setState({ status: "error", message: err instanceof Error ? err.message : "request failed" });
+    }
+  };
+
+  return (
+    <p className="mt-1 flex flex-wrap items-center gap-1.5 text-[9px] text-muted-foreground">
+      <span>
+        The credentials above are the OS login — the Wazuh dashboard uses a
+        separate, randomly-generated admin password:
+      </span>
+      {state.status === "idle" && (
+        <button
+          type="button"
+          onClick={reveal}
+          className="rounded border px-1.5 py-0.5 font-sans text-[9px] font-medium text-foreground hover:bg-muted"
+        >
+          Reveal password
+        </button>
+      )}
+      {state.status === "loading" && <span>loading…</span>}
+      {state.status === "ok" && (
+        <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-foreground">
+          admin / {state.password}
+        </code>
+      )}
+      {state.status === "error" && (
+        <>
+          <span className="text-amber-600 dark:text-amber-400">{state.message}</span>
+          <button
+            type="button"
+            onClick={reveal}
+            className="rounded border px-1.5 py-0.5 font-sans text-[9px] font-medium text-foreground hover:bg-muted"
+          >
+            Retry
+          </button>
+        </>
+      )}
+    </p>
+  );
 }
 
 function InnerView({ labId }: { labId: number }) {
@@ -168,6 +354,10 @@ function InnerView({ labId }: { labId: number }) {
           roles: n.config.roles,
           state,
           buildPhase,
+          // Same endpoint list the AccessPanel shows below the canvas —
+          // computed once here so the node itself is clickable too,
+          // instead of a dead `<code>` tag with no link at all.
+          endpoints: accessEndpoints(n),
         },
         draggable: false,
         selectable: false,
@@ -263,7 +453,7 @@ function InnerView({ labId }: { labId: number }) {
       <div className="border-b p-2">
         <BuildPhaseStepper perVm={phases} overall={overall} provider={topology?.provider} />
       </div>
-      <div className="relative flex-1">
+      <div className="relative flex-1" style={{ touchAction: "none" }}>
         <ReactFlow
           nodes={flowNodes}
           edges={flowEdges}
@@ -273,17 +463,65 @@ function InnerView({ labId }: { labId: number }) {
           nodesConnectable={false}
           elementsSelectable={false}
           panOnDrag
+          panOnScroll={false}
           zoomOnScroll
+          zoomOnPinch
+          zoomOnDoubleClick
+          preventScrolling
           minZoom={0.2}
           maxZoom={2}
           proOptions={{ hideAttribution: true }}
         >
           <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
           <Controls position="bottom-left" showInteractive={false} />
-          <MiniMap position="bottom-right" pannable zoomable />
         </ReactFlow>
         <Legend />
+        <ZoomToolbar />
       </div>
+      {topology && <AccessPanel topology={topology} labId={labId} />}
+    </div>
+  );
+}
+
+// Click-only zoom, deliberately independent of wheel/trackpad gesture
+// handling (scroll-to-zoom can be unreliable depending on the OS/browser/
+// input-device combination — this always works because it never depends on
+// a gesture being recognized, only a click). `useStore` re-renders this on
+// every zoom change so the percentage stays live whether the zoom came from
+// these buttons, the scroll wheel, or a pinch gesture.
+function ZoomToolbar() {
+  const { zoomIn, zoomOut, fitView } = useReactFlow();
+  const zoom = useStore((s) => s.transform[2]);
+  return (
+    <div className="absolute top-4 right-4 flex items-center gap-0.5 rounded-md border bg-card/90 p-1 text-xs shadow backdrop-blur">
+      <button
+        type="button"
+        onClick={() => zoomOut({ duration: 150 })}
+        className="flex h-6 w-6 items-center justify-center rounded hover:bg-muted"
+        title="Zoom out"
+      >
+        −
+      </button>
+      <span className="w-10 text-center font-mono text-[10px] text-muted-foreground">
+        {Math.round(zoom * 100)}%
+      </span>
+      <button
+        type="button"
+        onClick={() => zoomIn({ duration: 150 })}
+        className="flex h-6 w-6 items-center justify-center rounded hover:bg-muted"
+        title="Zoom in"
+      >
+        +
+      </button>
+      <span className="mx-0.5 h-4 w-px bg-border" />
+      <button
+        type="button"
+        onClick={() => fitView({ duration: 200 })}
+        className="flex h-6 items-center justify-center rounded px-1.5 text-[10px] hover:bg-muted"
+        title="Fit the whole topology in view"
+      >
+        Fit
+      </button>
     </div>
   );
 }

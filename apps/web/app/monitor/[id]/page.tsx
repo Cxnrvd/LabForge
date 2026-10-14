@@ -113,6 +113,12 @@ export default function BuildMonitorPage() {
   const offsetRef = React.useRef(0);
   const [autoScroll, setAutoScroll] = React.useState(true);
   const scrollRef = React.useRef<HTMLPreElement | null>(null);
+  // Build log can run thousands of lines across every node's provisioning
+  // output in one blob (e.g. the Wazuh dashboard password only ever gets
+  // printed once, buried in the middle of it) — a client-side filter is the
+  // only way to find a specific line without scrolling the whole thing by
+  // eye. Filtering is free: `lines` is already fully buffered in state.
+  const [logFilter, setLogFilter] = React.useState("");
 
   // Tab state, persisted in ?view= so refresh keeps the selection.
   const initialView = React.useMemo(
@@ -140,6 +146,11 @@ export default function BuildMonitorPage() {
 
   // SSH modal + Events filter local state.
   const [sshOpen, setSshOpen] = React.useState(false);
+  const [sshFocusHost, setSshFocusHost] = React.useState<string | null>(null);
+  const handleSshFocus = React.useCallback((hostname: string) => {
+    setSshFocusHost(hostname);
+    setSshOpen(true);
+  }, []);
   const [eventsFilter, setEventsFilter] = React.useState<"" | "op" | "warn" | "err">("");
 
   // Heartbeat-derived feed (live event log) — populated from WS.
@@ -343,9 +354,14 @@ export default function BuildMonitorPage() {
 
   const handlePause = (): void => {
     if (pauseMut.isPending) return;
+    const isDocker = labQ.data?.provider === "docker";
     const ok = window.confirm(
-      "Pause this lab?\n\nThe VMs are suspended to disk (vagrant suspend), keeping their running " +
-        "state in memory. Resume restores them quickly rather than rebooting.",
+      isDocker
+        ? "Pause this lab?\n\nThe containers are frozen in place (docker compose pause) — no CPU " +
+            "use, but they stay fully resident in memory. Resume unfreezes them instantly, with no " +
+            "restart."
+        : "Pause this lab?\n\nThe VMs are suspended to disk (vagrant suspend), keeping their running " +
+            "state in memory. Resume restores them quickly rather than rebooting.",
     );
     if (!ok) return;
     pauseMut.mutate();
@@ -451,7 +467,11 @@ export default function BuildMonitorPage() {
 
   const canResume =
     !!lab && ["stopped", "paused", "failed", "partial"].includes(lab.status) && phase !== "running";
-  const canPause = lab?.provider !== "docker" && lab?.status === "running" && phase !== "running";
+  // Vagrant pause = vagrant suspend (RAM state saved to disk, VM powered
+  // off). Docker pause = docker compose pause (cgroup-freeze, containers
+  // stay resident in memory) — a different mechanism, but available for
+  // every lab either way.
+  const canPause = lab?.status === "running" && phase !== "running";
   const vms = latestHb?.vms ?? [];
   const runningVms = vms.filter((v) => v.state === "running").length;
   const totalVms = vms.length;
@@ -515,7 +535,10 @@ export default function BuildMonitorPage() {
         <button
           className="btn sm"
           type="button"
-          onClick={() => setSshOpen(true)}
+          onClick={() => {
+            setSshFocusHost(null);
+            setSshOpen(true);
+          }}
           aria-label={lab?.provider === "docker" ? "Show container shell commands" : "Show SSH commands"}
         >
           {lab?.provider === "docker" ? "Shell" : "SSH"}
@@ -592,6 +615,7 @@ export default function BuildMonitorPage() {
           topologyHostnames={
             topologyQ.data?.nodes.map((n) => n.config.hostname) ?? []
           }
+          focusHost={sshFocusHost}
           onClose={() => setSshOpen(false)}
         />
       )}
@@ -771,7 +795,7 @@ export default function BuildMonitorPage() {
                 }}
               >
                 {vms.map((vm) => (
-                  <VmCard key={vm.hostname} vm={vm} />
+                  <VmCard key={vm.hostname} vm={vm} labId={id} onSsh={handleSshFocus} />
                 ))}
               </div>
             )}
@@ -901,7 +925,7 @@ export default function BuildMonitorPage() {
                         }}
                       >
                         {snapVms.map((vm) => (
-                          <VmCard key={vm.hostname} vm={vm} />
+                          <VmCard key={vm.hostname} vm={vm} labId={id} onSsh={handleSshFocus} />
                         ))}
                       </div>
                     );
@@ -922,7 +946,11 @@ export default function BuildMonitorPage() {
           <div className="card s8">
             <div className="card-h">
               <h3>Build log</h3>
-              <div className="sub mono">{lines.length} lines</div>
+              <div className="sub mono">
+                {logFilter
+                  ? `${lines.filter((ln) => ln.toLowerCase().includes(logFilter.toLowerCase())).length} / ${lines.length} lines`
+                  : `${lines.length} lines`}
+              </div>
               <div className="grow" />
               <button
                 className="btn sm"
@@ -931,6 +959,25 @@ export default function BuildMonitorPage() {
               >
                 {autoScroll ? "Auto-scroll on" : "Auto-scroll off"}
               </button>
+            </div>
+            <div style={{ padding: "0 14px 10px" }}>
+              <input
+                type="text"
+                value={logFilter}
+                onChange={(e) => setLogFilter(e.target.value)}
+                placeholder='Search this log (e.g. "dashboard login", "error", a hostname)'
+                className="mono"
+                style={{
+                  width: "100%",
+                  boxSizing: "border-box",
+                  padding: "6px 10px",
+                  fontSize: 12,
+                  borderRadius: 6,
+                  border: "1px solid var(--line)",
+                  background: "var(--bg)",
+                  color: "var(--ink)",
+                }}
+              />
             </div>
             <pre
               ref={scrollRef}
@@ -955,8 +1002,21 @@ export default function BuildMonitorPage() {
                       ? "Waiting for docker compose up to start…"
                       : "Waiting for vagrant up to start…"}
                 </span>
-              ) : (
-                lines.map((ln, idx) => {
+              ) : (() => {
+                const needle = logFilter.trim().toLowerCase();
+                const visible = needle
+                  ? lines
+                      .map((ln, idx) => ({ ln, idx }))
+                      .filter(({ ln }) => ln.toLowerCase().includes(needle))
+                  : lines.map((ln, idx) => ({ ln, idx }));
+                if (visible.length === 0) {
+                  return (
+                    <span style={{ color: "var(--ink-faint)" }}>
+                      No lines match &quot;{logFilter}&quot;.
+                    </span>
+                  );
+                }
+                return visible.map(({ ln, idx }) => {
                   const lower = ln.toLowerCase();
                   let color: string | undefined;
                   if (lower.includes("error")) color = "var(--red)";
@@ -968,8 +1028,8 @@ export default function BuildMonitorPage() {
                       {ln || " "}
                     </div>
                   );
-                })
-              )}
+                });
+              })()}
             </pre>
           </div>
           <SidePanel
@@ -1009,8 +1069,28 @@ export default function BuildMonitorPage() {
   );
 }
 
-function VmCard({ vm }: { vm: HeartbeatVm }) {
+// Service to tail by default per role tag — falls back to the first
+// allowlisted service the API will actually accept (see NODE_LOG_SERVICES
+// in build_runner.py) rather than guessing something it'll just 400 on.
+function defaultLogService(roles: string[] | undefined): string {
+  const r = roles ?? [];
+  if (r.includes("freeradius") || r.includes("radius")) return "freeradius";
+  if (r.includes("wazuh-manager") || r.includes("wazuh-agent") || r.includes("siem")) return "wazuh-agent";
+  if (r.includes("captive-portal")) return "labforge-captive-portal";
+  return "hostapd";
+}
+
+function VmCard({
+  vm,
+  labId,
+  onSsh,
+}: {
+  vm: HeartbeatVm;
+  labId: number;
+  onSsh: (hostname: string) => void;
+}) {
   const up = vm.state === "running";
+  const [logsOpen, setLogsOpen] = React.useState(false);
   return (
     <div style={{ background: "var(--bg)", padding: 16 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
@@ -1045,15 +1125,158 @@ function VmCard({ vm }: { vm: HeartbeatVm }) {
         </div>
       )}
       <div style={{ display: "flex", gap: 4, marginTop: 10 }}>
-        <button className="btn sm" type="button" disabled style={{ flex: 1, justifyContent: "center" }}>
+        <button
+          className="btn sm"
+          type="button"
+          style={{ flex: 1, justifyContent: "center" }}
+          onClick={() => onSsh(vm.hostname)}
+        >
           SSH
         </button>
-        <button className="btn sm" type="button" disabled style={{ flex: 1, justifyContent: "center" }}>
-          Web
-        </button>
-        <button className="btn sm" type="button" disabled style={{ flex: 1, justifyContent: "center" }}>
+        {vm.ip ? (
+          <a
+            className="btn sm"
+            href={`http://${vm.ip}/`}
+            target="_blank"
+            rel="noreferrer"
+            style={{ flex: 1, justifyContent: "center" }}
+            title="Opens the node's IP on port 80 in a new tab — not every role serves a web UI, so a connection error here just means this node doesn't"
+          >
+            Web
+          </a>
+        ) : (
+          <button
+            className="btn sm"
+            type="button"
+            disabled
+            style={{ flex: 1, justifyContent: "center" }}
+            title="No IP yet — waiting on a heartbeat"
+          >
+            Web
+          </button>
+        )}
+        <button
+          className="btn sm"
+          type="button"
+          disabled={!up}
+          style={{ flex: 1, justifyContent: "center" }}
+          onClick={() => setLogsOpen(true)}
+          title={up ? undefined : "VM isn't running"}
+        >
           Logs
         </button>
+      </div>
+      {logsOpen && (
+        <NodeLogModal
+          labId={labId}
+          hostname={vm.hostname}
+          defaultService={defaultLogService(vm.roles)}
+          onClose={() => setLogsOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+const LOG_SERVICES = ["hostapd", "dnsmasq", "wazuh-agent", "freeradius", "labforge-captive-portal"] as const;
+
+function NodeLogModal({
+  labId,
+  hostname,
+  defaultService,
+  onClose,
+}: {
+  labId: number;
+  hostname: string;
+  defaultService: string;
+  onClose: () => void;
+}) {
+  const [service, setService] = React.useState(defaultService);
+  const logQ = useQuery<string[]>({
+    queryKey: ["node-log", labId, hostname, service],
+    queryFn: () => api.getNodeLog(labId, hostname, service, 200),
+    refetchInterval: 4000,
+  });
+
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${hostname} logs`}
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.45)",
+        zIndex: 1000,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 24,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "var(--bg)",
+          border: "1px solid var(--line)",
+          borderRadius: 6,
+          maxWidth: 760,
+          width: "100%",
+          maxHeight: "80vh",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        <div className="card-h" style={{ borderBottom: "1px solid var(--line)" }}>
+          <h3>{hostname} — logs</h3>
+          <select
+            className="btn sm"
+            value={service}
+            onChange={(e) => setService(e.target.value)}
+            aria-label="Service to tail"
+          >
+            {LOG_SERVICES.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+          <div className="sub mono">
+            {logQ.isFetching ? "refreshing…" : logQ.dataUpdatedAt ? "live · every 4s" : ""}
+          </div>
+          <div className="grow" />
+          <button className="btn sm" type="button" onClick={onClose}>
+            Close
+          </button>
+        </div>
+        <pre
+          className="mono"
+          style={{
+            margin: 0,
+            padding: 14,
+            fontSize: 12,
+            overflow: "auto",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-all",
+            color: "var(--ink-mute)",
+            flex: 1,
+          }}
+        >
+          {logQ.isLoading
+            ? "Loading…"
+            : (logQ.data ?? []).length === 0
+              ? "No output — the guest may not be reachable, or this service hasn't logged anything yet."
+              : logQ.data!.join("\n")}
+        </pre>
       </div>
     </div>
   );
@@ -1115,17 +1338,21 @@ function SshModal({
   provider,
   vms,
   topologyHostnames,
+  focusHost,
   onClose,
 }: {
   provider: string;
   vms: HeartbeatVm[];
   topologyHostnames: string[];
+  focusHost?: string | null;
   onClose: () => void;
 }) {
   // Prefer running VMs; if none are up yet, fall back to topology
   // hostnames so the user at least sees what the lab WILL expose.
   const upHosts = vms.filter((v) => v.state === "running").map((v) => v.hostname);
-  const hosts = upHosts.length > 0 ? upHosts : topologyHostnames;
+  const allHosts = upHosts.length > 0 ? upHosts : topologyHostnames;
+  const [showAll, setShowAll] = React.useState(!focusHost);
+  const hosts = !showAll && focusHost ? allHosts.filter((h) => h === focusHost) : allHosts;
   const stillBuilding = upHosts.length === 0;
   const isDocker = provider === "docker";
 
@@ -1185,9 +1412,21 @@ function SshModal({
           </button>
         </div>
         <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ color: "var(--ink-mute)", fontSize: 12 }}>
-            Run from this lab&apos;s workspace folder (shown on this page), the folder holding{" "}
-            <code className="mono">{isDocker ? "docker-compose.yml" : "Vagrantfile"}</code>.
+          <div style={{ color: "var(--ink-mute)", fontSize: 12, display: "flex", alignItems: "center", gap: 8 }}>
+            <span>
+              Run from this lab&apos;s workspace folder (shown on this page), the folder holding{" "}
+              <code className="mono">{isDocker ? "docker-compose.yml" : "Vagrantfile"}</code>.
+            </span>
+            {!showAll && focusHost && (
+              <button
+                className="btn sm"
+                type="button"
+                style={{ flexShrink: 0 }}
+                onClick={() => setShowAll(true)}
+              >
+                Show all hosts
+              </button>
+            )}
           </div>
           {stillBuilding && (
             <div className="banner warn">

@@ -21,6 +21,13 @@ Vagrant.configure("2") do |config|
 {% for n in vagrant_nodes %}
   config.vm.define {{ n.hostname | tojson }} do |m|
     m.vm.box = {{ n.box | tojson }}
+{% if vagrant_provider == "vmware_desktop" %}
+    # Vagrant's auto-detected architecture can hide every box version newer
+    # than the 2023 ones (Vagrant Cloud tags current builds "amd64" and old
+    # ones "unknown"); that handed us a 2023.4 Kali years behind the archive,
+    # so a stale index and unsatisfiable desktop packages.
+    m.vm.box_architecture = "amd64"
+{% endif %}
     m.vm.hostname = {{ n.hostname | tojson }}
     # Provisioners are uploaded over SSH/WinRM, so the shared folder is not
     # needed. Disabling it avoids SMB (needs admin on Windows hosts) and
@@ -29,8 +36,44 @@ Vagrant.configure("2") do |config|
     m.vm.network "private_network", ip: {{ n.ip | tojson }}
 
     m.vm.provider :{{ vagrant_provider }} do |v|
+{% if vagrant_provider == "vmware_desktop" %}
+      # The VMware provider has no memory/cpus attributes; they are vmx keys.
+      v.vmx["memsize"] = {{ n.memory_mb | string | tojson }}
+      v.vmx["numvcpus"] = {{ n.cpus | string | tojson }}
+      v.vmx["displayName"] = {{ ("labforge-" ~ (topology.name | replace(' ', '-') | lower) ~ "-" ~ n.hostname) | tojson }}
+      # Always show the VM in the VMware Workstation window: headless VMs are
+      # never added to its library, so they would run invisibly. Server nodes
+      # still boot to a text console; only {{ "gui" }} nodes get a desktop.
+      v.gui = true
+{% if n.gui %}
+      # Known VMware Workstation + Linux-guest bug (confirmed on this lab's
+      # kalilinux/rolling + Xfce node, matches community reports of the same
+      # modesetting/vmwgfx driver pairing): the guest's hardware cursor plane
+      # doesn't composite correctly, so the pointer goes invisible (but
+      # stays clickable) crossing from host to guest. Neither host-side vmx
+      # setting alone was enough; both are needed:
+      #   - mks.enable3d off: 2D-only SVGA, since the bug is in the 3D cursor path.
+      #   - mks.noHostCursor: stop trying to sync to the host's own cursor and
+      #     have VMware draw the guest cursor into the window itself.
+      # The guest side also needs the matching fix (see desktop-xfce role,
+      # which drops /etc/X11/xorg.conf.d/20-swcursor.conf to force a software
+      # cursor instead of the modesetting driver's broken hardware one).
+      v.vmx["mks.enable3d"] = "FALSE"
+      v.vmx["mks.noHostCursor"] = "TRUE"
+{% endif %}
+{% if n.usb_vendor_id and n.usb_product_id %}
+      # USB passthrough for a host device (e.g. a USB wifi adapter). VMware
+      # connects it to this VM at power-on; unlike VirtualBox it can hand over
+      # chips that re-enumerate or mishandle capture probing (the AltoBeam
+      # 007a:888b never reaches a VirtualBox guest).
+      v.vmx["usb.present"] = "TRUE"
+      v.vmx["ehci.present"] = "TRUE"
+      v.vmx["usb.autoConnect.device0"] = {{ ("0x" ~ n.usb_vendor_id ~ ":0x" ~ n.usb_product_id) | tojson }}
+{% endif %}
+{% else %}
       v.memory = {{ n.memory_mb }}
       v.cpus = {{ n.cpus }}
+{% endif %}
 {% if vagrant_provider == "virtualbox" %}
       # Linked clones share the box's base disk, so a second VM from the same
       # box costs seconds and megabytes instead of a full copy.
@@ -82,9 +125,39 @@ Vagrant.configure("2") do |config|
       path: {{ n.provision_script | tojson }},
       privileged: true
 {% else %}
+{% if n.needs_kernel_upgrade %}
+    # Newest kernel + matching headers, then reboot, so the driver role can
+    # build an out-of-tree module against the kernel that is actually running.
+    m.vm.provision "kernel-upgrade", type: "shell", privileged: true, reboot: true, inline: <<-'SCRIPT'
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -y
+      apt-get install -y linux-image-amd64 linux-headers-amd64 build-essential git bc usbutils
+    SCRIPT
+{% endif %}
     m.vm.provision "shell",
       path: {{ n.provision_script | tojson }},
       privileged: true
+{% if n.needs_kernel_upgrade %}
+    # Runs on every up / reload / resume. After a pause (suspend) VMware
+    # reconnects the USB dongle with fresh firmware state, so reload the driver
+    # and bounce the AP; harmless when nothing changed.
+    # Also covers a race we've hit on this node specifically: the
+    # kernel-upgrade provisioner above reboots mid-provision (`reboot: true`),
+    # and that reboot happens outside Vagrant's own boot sequence — so
+    # Vagrant never re-runs the step that brings up the private_network
+    # interface (eth1) after it. ifupdown's "auto eth1" entry is still in
+    # /etc/network/interfaces, it just never got `ifup`'d, so eth1 sits
+    # configured-but-down and the node becomes unreachable at its lab IP
+    # until someone notices and runs `ifup eth1` by hand. `ifup -a` is a
+    # no-op for interfaces already up, so this is safe to run every time.
+    m.vm.provision "usb-radio-recover", type: "shell", run: "always", privileged: true, inline: <<-'SCRIPT'
+      ifup -a 2>/dev/null || true
+      for i in $(seq 1 30); do lsusb | grep -qi '007a:888b' && break; sleep 1; done
+      lsmod | grep -q '^atbm6012bx' || modprobe atbm6012bx || true
+      for i in $(seq 1 30); do [ -e /sys/class/net/wlan0 ] && break; sleep 1; done
+      systemctl restart hostapd dnsmasq 2>/dev/null || true
+    SCRIPT
+{% endif %}
 {% endif %}
   end
 

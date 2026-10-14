@@ -296,15 +296,48 @@ export const api = {
     request<string[]>(
       `/labs/${labId}/node-log/${encodeURIComponent(hostname)}?service=${encodeURIComponent(service)}&lines=${lines}`,
     ),
+  /** Reads the Wazuh dashboard admin password straight off the manager VM
+   * (live, via SSH) rather than a log search — the install step that
+   * generates it only ever runs once on the VM's first boot, so anything
+   * depending on build.log retention can't be relied on to still have it. */
+  getWazuhPassword: (labId: number, hostname: string) =>
+    request<{ ok: boolean; password: string | null; error: string | null }>(
+      `/labs/${labId}/wazuh-password/${encodeURIComponent(hostname)}`,
+    ),
   /** Switch a hostapd node to a named demo scenario (open/wep/wpa2/wpa3) and restart hostapd. */
   setWifiScenario: (labId: number, hostname: string, scenario: string) =>
     request<{ ok: boolean; message: string }>(
       `/labs/${labId}/wifi-scenario/${encodeURIComponent(hostname)}?scenario=${encodeURIComponent(scenario)}`,
       { method: "POST" },
     ),
-  /** URL for downloading an allowlisted file (today: capture.pcap) out of a guest. */
+  /** URL for downloading an allowlisted file (today: capture.pcap) out of a guest.
+   * Kept for reference/links elsewhere, but prefer `fetchNodeFile` for an actual
+   * download button: a bare `<a href>` on this endpoint shows the browser's raw
+   * error page on a cold guest (502) instead of a toast. */
   nodeFileUrl: (labId: number, hostname: string, file: string) =>
     `/api/v1/labs/${labId}/node-file/${encodeURIComponent(hostname)}?file=${encodeURIComponent(file)}`,
+  /** Fetches an allowlisted guest file as a Blob, throwing ApiError on failure
+   * (502 when the guest isn't reachable, 400 for an unlisted file) so callers
+   * can show a toast instead of letting the browser navigate to a raw error. */
+  fetchNodeFile: async (labId: number, hostname: string, file: string): Promise<Blob> => {
+    const response = await fetch(
+      `${API_PREFIX}/labs/${labId}/node-file/${encodeURIComponent(hostname)}?file=${encodeURIComponent(file)}`,
+      { headers: authHeaders() },
+    );
+    if (!response.ok) {
+      let detail = `${response.status} ${response.statusText}`;
+      let code = "request_failed";
+      try {
+        const body = (await response.json()) as { detail?: string; code?: string };
+        if (body.detail) detail = body.detail;
+        if (body.code) code = body.code;
+      } catch {
+        // ignore parse failure
+      }
+      throw { detail, code } satisfies ApiError;
+    }
+    return await response.blob();
+  },
   getRecentActivity: () =>
     request<
       Array<{

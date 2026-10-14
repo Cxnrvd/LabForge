@@ -178,6 +178,7 @@ function defaultNodeFor(
       credentials: DEFAULT_CREDS_PER_TYPE[type] ?? { username: "vagrant", password: "vagrant" },
       vlan: null,
       gateway: null,
+      gui: false,
     },
     attack_tags: [],
   };

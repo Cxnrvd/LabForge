@@ -81,7 +81,7 @@ const WORKSPACE_NAV: NavEntry[] = [
   { href: "/labs", label: "Labs", icon: "labs" },
   { href: "/monitor", label: "Monitor", icon: "monitor" },
   { href: "/templates", label: "Templates", icon: "templates" },
-  { href: "/webinar", label: "WiFi Lab", icon: "webinar" },
+  { href: "/wifi-lab", label: "WiFi Lab", icon: "webinar" },
 ];
 
 const CATALOG_NAV: NavEntry[] = [

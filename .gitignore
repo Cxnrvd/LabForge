@@ -55,6 +55,7 @@ design.md
 designs/
 dashboard-proposals.html
 labforge-designs.html
+docs/ui-proposal.html
 
 # Claude Code session data (per-machine).
 .claude/
@@ -78,3 +79,24 @@ apps/web/lib/api/generated.ts
 .audit-shots/
 docs/CLAUDE-QA-PROMPT.md
 .claude/
+
+# Instructor-only / answer-key material for live scenarios — these spell out
+# exact lab credentials, full step-by-step attack procedures, Wazuh rule
+# internals, and the AP role's hardware bring-up details. They're prep
+# material for whoever is presenting, not something to ship in a repo
+# students/attendees (or the public) can browse — keeping them out of the
+# commit is the whole point, not an oversight. Stays on disk locally; just
+# never tracked.
+docs/labs/wifi-lab-walkthroughs/
+docs/labs/wifi-lab-presenter-guide.md
+docs/labs/wifi-lab-session-walkthrough.md
+docs/labs/wifi-pentest-slide-content.md
+docs/labs/wifi-pentest-slide-deck.md
+docs/labs/wifi-pentest-slide-titles.md
+docs/labs/wifi-pentest-study-content.md
+docs/labs/assets/
+docs/labs/altobeam/
+docs/labs/wifi-pentest-webinar.md
+docs/labs/wifi-adapter-compatibility.md
+docs/labs/ransomware-intrusion.md
+docs/labs/malware-triage.md

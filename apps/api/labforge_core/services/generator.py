@@ -60,11 +60,14 @@ BOX_MAP: dict[OsType, str] = {
     OsType.MACOS_SONOMA: SAFE_FALLBACK_BOX,
     OsType.MACOS_SEQUOIA: SAFE_FALLBACK_BOX,
     # ---- Offensive / privacy
-    # The official kalilinux/rolling box is ~3 GB and isn't always in the
-    # local cache; bootstrap an Ubuntu base instead and let the role
-    # installers (nmap, metasploit, impacket, etc.) add the offensive
-    # toolchain on top. Same VM, faster first build.
-    OsType.KALI_ROLLING: "bento/ubuntu-22.04",
+    # Official box (kalilinux/rolling on Vagrant Cloud — verified: ships
+    # virtualbox/vmware_desktop/libvirt/hyperv providers, actively
+    # maintained, currently 2026.2.0). ~3-4 GB first download, but it's the
+    # real Kali: full offensive toolchain (aircrack-ng, wifite, hcxtools,
+    # hashcat, Wireshark, Metasploit, ...) already present, so role
+    # installers don't need to re-stage any of it. No public Vagrant box
+    # exists for Parrot OS, so it still bootstraps on Ubuntu.
+    OsType.KALI_ROLLING: "kalilinux/rolling",
     OsType.PARROT_SECURITY: "bento/ubuntu-22.04",
     OsType.BLACKARCH_ROLLING: "archlinux/archlinux",
     OsType.TAILS_6: "debian/bookworm64",
@@ -91,14 +94,18 @@ BOX_MAP: dict[OsType, str] = {
 }
 
 # Whether a given OsType has a "real" Vagrant box (used to flag emulated
-# nodes in the generated README).
+# nodes in the generated README). PARROT_SECURITY still boots on
+# bento/ubuntu-22.04 (no public Parrot box exists) and is correctly flagged
+# emulated for that. KALI_ROLLING now boots the real kalilinux/rolling box
+# (see BOX_MAP) and belongs here.
 _REAL_BOX_OSES = {
     OsType.WINDOWS_10, OsType.WINDOWS_11,
     OsType.WINDOWS_SERVER_2019, OsType.WINDOWS_SERVER_2022,
     OsType.UBUNTU_2204, OsType.UBUNTU_2404,
     OsType.DEBIAN_12, OsType.CENTOS_STREAM_9,
     OsType.ALPINE_LATEST, OsType.FREEBSD_14,
-    OsType.KALI_ROLLING, OsType.ARCH_ROLLING,
+    OsType.KALI_ROLLING,
+    OsType.ARCH_ROLLING,
     OsType.RASPBIAN_12,
 }
 
@@ -194,8 +201,16 @@ def _compute_endpoints(topology: LabConfig) -> dict[str, str]:
     can wire agents up automatically (Wazuh agent → Wazuh manager, etc.)."""
     endpoints: dict[str, str] = {}
     role_to_endpoint = {
+        # Only the manager role should populate this key. "wazuh" (the
+        # agent role) must NOT map here too: it previously did, under the
+        # assumption that only the manager node ever carries it — but an
+        # agent node processed earlier than the manager (e.g. ap-target
+        # before siem in the WiFi lab) would then claim this slot with
+        # its own IP first, pointing every agent's enrollment at itself
+        # instead of the real manager. Confirmed in the wild: ap-target's
+        # wazuh-agent was stuck retrying enrollment against 10.71.0.20
+        # (itself) instead of siem's 10.71.0.30.
         "wazuh-manager": "wazuh_manager_ip",
-        "wazuh": "wazuh_manager_ip",  # the first node carrying wazuh wins
         "splunk-enterprise": "splunk_indexer_ip",
         "splunk-uf-receiver": "splunk_indexer_ip",
         "elasticstack": "elastic_ip",
@@ -206,6 +221,7 @@ def _compute_endpoints(topology: LabConfig) -> dict[str, str]:
         "mongodb": "mongodb_ip",
         "openplc": "openplc_ip",
         "mediamtx": "mediamtx_ip",
+        "freeradius": "radius_server_ip",
     }
     for node in topology.nodes:
         if node.type == NodeType.INTERNET:
@@ -311,6 +327,7 @@ def _render_node(
     contents = env.get_template(template_name).render(
         node=node,
         is_dc=node.type == NodeType.DOMAIN_CONTROLLER,
+        prefix_len=topology.network_cidr.split("/")[-1],
         cve_blocks=cve_blocks,
         install_blocks=install_blocks,
         endpoints=endpoints,
@@ -367,6 +384,13 @@ def generate_artifacts(
                 "usb_vendor_id": node.config.usb_vendor_id,
                 "usb_product_id": node.config.usb_product_id,
                 "gui": node.config.gui,
+                # Out-of-tree kernel modules need headers for the running kernel;
+                # the box's own kernel is usually gone from the apt archive, so
+                # these nodes get a kernel upgrade + reboot before provisioning.
+                "needs_kernel_upgrade": any(
+                    _parse_role(r)[0] == "atbm-wifi-driver" for r in node.config.roles
+                )
+                and not is_windows(node),
             }
         )
 

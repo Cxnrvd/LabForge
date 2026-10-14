@@ -400,3 +400,65 @@ def halt(workspace: Path, project: str | None = None, *, timeout: float = 240) -
         return result
     result.ok = True
     return result
+
+
+def pause(workspace: Path, project: str | None = None, *, timeout: float = 60) -> TeardownResult:
+    """Freeze every container's processes in place (SIGSTOP via the cgroup
+    freezer) without stopping them — ``docker compose pause``.
+
+    This is a different trade-off than a Vagrant VM's ``suspend`` (which
+    saves real guest RAM state to disk and powers the VM off): a paused
+    container stays fully resident in memory the whole time, using no CPU
+    but still holding its RAM, and ``unpause`` is near-instant since
+    nothing has to reboot or restore anything. Still meaningfully
+    different from ``stop``+``up`` (no container restart, no re-attach,
+    processes resume exactly where they were, mid-syscall and all).
+    """
+    project = project or read_project(workspace)
+    result = TeardownResult(ok=False)
+    if not project:
+        result.error = "no .labforge-project file in the workspace, cannot tell which Compose project to pause"
+        return result
+    if not docker_available():
+        result.error = "docker is not on PATH on the API host"
+        return result
+    try:
+        proc = _run(["docker", "compose", "-p", project, "pause"], cwd=workspace, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        result.error = "docker compose pause timed out"
+        return result
+    except OSError as exc:
+        result.error = f"could not run docker: {exc}"
+        return result
+    result.steps.append(f"compose pause exit {proc.returncode}")
+    if proc.returncode != 0:
+        result.error = (proc.stderr or proc.stdout).strip()[-300:] or "docker compose pause failed"
+        return result
+    result.ok = True
+    return result
+
+
+def unpause(workspace: Path, project: str | None = None, *, timeout: float = 60) -> TeardownResult:
+    """Resume containers frozen by ``pause`` — ``docker compose unpause``."""
+    project = project or read_project(workspace)
+    result = TeardownResult(ok=False)
+    if not project:
+        result.error = "no .labforge-project file in the workspace, cannot tell which Compose project to resume"
+        return result
+    if not docker_available():
+        result.error = "docker is not on PATH on the API host"
+        return result
+    try:
+        proc = _run(["docker", "compose", "-p", project, "unpause"], cwd=workspace, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        result.error = "docker compose unpause timed out"
+        return result
+    except OSError as exc:
+        result.error = f"could not run docker: {exc}"
+        return result
+    result.steps.append(f"compose unpause exit {proc.returncode}")
+    if proc.returncode != 0:
+        result.error = (proc.stderr or proc.stdout).strip()[-300:] or "docker compose unpause failed"
+        return result
+    result.ok = True
+    return result

@@ -64,10 +64,20 @@ class LabHeartbeat(SQLModel, table=True):
 @lru_cache(maxsize=1)
 def get_engine():
     settings = get_settings()
-    connect_args = (
-        {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
-    )
-    return create_engine(settings.database_url, echo=False, connect_args=connect_args)
+    is_sqlite = settings.database_url.startswith("sqlite")
+    connect_args = {"check_same_thread": False} if is_sqlite else {}
+    # The dashboard polls several endpoints (labs list, heartbeat, build/log,
+    # node-log x N, wifi-scenario) every few seconds across multiple open
+    # tabs. SQLAlchemy's default pool (5 + 10 overflow = 15) is sized for a
+    # typical web app's DB-bound requests, not this poll volume — raised here
+    # as a safety margin. The real fix for the pool actually running out
+    # (QueuePool ... timed out cascading into unrelated endpoints) is that
+    # slow subprocess-backed endpoints must not hold a pooled connection open
+    # across a 60-90s `vagrant ssh` call; see `_lookup_lab` in
+    # api/routers/labs.py. SQLite file connections are cheap, so a larger
+    # pool here costs little even when unused.
+    pool_kwargs = {"pool_size": 20, "max_overflow": 20} if is_sqlite else {}
+    return create_engine(settings.database_url, echo=False, connect_args=connect_args, **pool_kwargs)
 
 
 def create_db_and_tables() -> None:

@@ -92,7 +92,11 @@ def test_downloaded_box_wins_without_touching_the_network():
 
     result = boxes.resolve_boxes(
         _topology(), "virtualbox", BOX_MAP, fetch=boom, verify=True,
-        cached=lambda: {("StefanScherer/windows_10", "virtualbox"), ("bento/ubuntu-22.04", "virtualbox")},
+        cached=lambda: {
+            ("StefanScherer/windows_10", "virtualbox"),
+            ("bento/ubuntu-22.04", "virtualbox"),
+            ("kalilinux/rolling", "virtualbox"),
+        },
     )
     assert not result.warnings
     assert OsType.WINDOWS_10 not in result.overrides  # default box is already local
@@ -150,6 +154,7 @@ def test_user_override_is_tried_first(monkeypatch):
 BASE = {
     "vagrant_version": "2.4.1",
     "virtualbox_version": "7.0.18r1",
+    "virtualbox_extpack": True,
     "vmware_vmrun": None,
     "vmware_plugin": False,
     "hypervisor_present": False,

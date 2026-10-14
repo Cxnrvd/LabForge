@@ -59,6 +59,7 @@ KNOWN_ESTIMATE_MB = {
     "docker.elastic.co/elasticsearch/elasticsearch": 1960,
     "docker.elastic.co/kibana/kibana": 1850,
     "kalilinux/kali-rolling": 3200,
+    "kalilinux/rolling": 3500,
     "dockurr/windows": 800,
 }
 # Disk images are sparse (64 GB apparent, about 11 GB used). BusyBox cp would write all 64 GB, so

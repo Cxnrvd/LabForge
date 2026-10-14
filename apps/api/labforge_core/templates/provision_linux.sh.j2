@@ -20,6 +20,21 @@ hostnamectl set-hostname {{ node.config.hostname | bash_q }} 2>/dev/null || true
 # shlex-quoted values can't break out of the chpasswd line.
 printf '%s\n' "vagrant:"{{ node.config.credentials.password | bash_q }} | chpasswd 2>/dev/null || true
 
+# NetworkManager guests (Kali) ignore the /etc/network/interfaces entry Vagrant
+# writes for the private network, leaving the lab NIC without its address.
+# If the topology IP is missing and NetworkManager is running, give the second
+# NIC that address through nmcli.
+if ! ip -4 -o addr show | grep -qF " {{ node.config.ip }}/" && systemctl is-active --quiet NetworkManager 2>/dev/null; then
+    LAB_NIC=$(ls /sys/class/net | grep -E '^(eth|ens|enp)' | sed -n 2p)
+    if [ -n "$LAB_NIC" ]; then
+        nmcli connection delete labforge-lan >/dev/null 2>&1 || true
+        nmcli connection add type ethernet ifname "$LAB_NIC" con-name labforge-lan \
+            ipv4.method manual ipv4.addresses {{ node.config.ip }}/{{ prefix_len | default(24) }} >/dev/null 2>&1 \
+            && nmcli connection up labforge-lan >/dev/null 2>&1 \
+            && echo "[+] set {{ node.config.ip }}/{{ prefix_len | default(24) }} on $LAB_NIC via NetworkManager" || true
+    fi
+fi
+
 {% if install_blocks %}
 echo "[+] Applying {{ install_blocks | length }} role install block(s)..."
 {% for block in install_blocks %}

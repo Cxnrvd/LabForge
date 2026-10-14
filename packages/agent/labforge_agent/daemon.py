@@ -212,6 +212,140 @@ def _topology_ip_map(workspace: Path) -> dict[str, str]:
     return out
 
 
+_VMX_IFACE_RE = re.compile(r'^ethernet(\d+)\.(connectiontype|vnet)\s*=\s*"([^"]+)"', re.IGNORECASE)
+
+
+def _vmware_private_vnets(workspace: Path) -> set[str]:
+    """``vmnetN`` names backing this workspace's VMware ``private_network``
+    adapters (the "custom" ethernet, as opposed to the NAT one each node
+    also gets for internet access)."""
+    vnets: set[str] = set()
+    for vmx in workspace.glob(".vagrant/machines/*/vmware_desktop/*/*.vmx"):
+        try:
+            lines = vmx.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except OSError:
+            continue
+        per_iface: dict[str, dict[str, str]] = {}
+        for line in lines:
+            m = _VMX_IFACE_RE.match(line.strip())
+            if m:
+                idx, key, val = m.groups()
+                per_iface.setdefault(idx, {})[key] = val
+        for iface in per_iface.values():
+            if iface.get("connectiontype") == "custom" and iface.get("vnet", "").startswith("vmnet"):
+                vnets.add(iface["vnet"])
+    return vnets
+
+
+def _ensure_vmware_private_network(workspace: Path) -> list[str]:
+    """Self-heal the known VMware-on-Windows gap this platform can hit: a
+    lab's ``private_network`` (e.g. 10.71.0.0/24) rides a host-only
+    ``vmnetN`` adapter that Windows/VMware sometimes leaves on a DHCP-less
+    APIPA (169.254.x.x) address instead of a static IP in the lab's
+    subnet — the guest VMs come up fine, but the host can never route to
+    them, and that's only discoverable by clicking a dead link after the
+    lab is already "running". This runs once per lab, right after the
+    first heartbeat reports it running, and fixes the host adapter itself
+    instead of leaving that for someone to find later.
+
+    Windows + Vagrant/VMware only; no-op everywhere else. Returns log
+    lines (success or failure) meant to be appended to build.log so the
+    fix (or the reason it couldn't happen) is visible in the Logs tab
+    immediately rather than silently.
+    """
+    import ipaddress
+    import json
+
+    if not sys.platform.startswith("win"):
+        return []
+    topo_path = workspace / "topology.json"
+    if not topo_path.exists():
+        return []
+    try:
+        topo = json.loads(topo_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    cidr = topo.get("network_cidr")
+    if not cidr:
+        return []
+    try:
+        net = ipaddress.ip_network(cidr, strict=False)
+    except ValueError:
+        return []
+    gateway = None
+    for node in topo.get("nodes", []):
+        gw = node.get("config", {}).get("gateway")
+        if gw:
+            gateway = gw
+            break
+    gateway = gateway or str(next(net.hosts()))
+
+    vnets = _vmware_private_vnets(workspace)
+    if not vnets:
+        return []
+
+    lines: list[str] = []
+    for vnet in sorted(vnets):
+        alias = f"VMware Network Adapter VMnet{vnet[len('vmnet'):]}"
+        ps_check = (
+            f"(Get-NetIPAddress -InterfaceAlias '{alias}' -AddressFamily IPv4 "
+            "-ErrorAction SilentlyContinue | Select-Object -ExpandProperty IPAddress) -join ','"
+        )
+        try:
+            check = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-Command", ps_check],
+                capture_output=True, text=True, errors="replace", timeout=15, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            lines.append(f"[labforge] network: could not query host adapter '{alias}': {exc}")
+            continue
+        current_addrs = [a.strip() for a in (check.stdout or "").split(",") if a.strip()]
+        already_ok = any(ipaddress.ip_address(a) in net for a in current_addrs if _is_ip(a))
+        if already_ok:
+            continue  # host can already route to this subnet — nothing to fix
+        ps_fix = (
+            f"Get-NetIPAddress -InterfaceAlias '{alias}' -AddressFamily IPv4 "
+            "-ErrorAction SilentlyContinue | Remove-NetIPAddress -Confirm:$false "
+            f"-ErrorAction SilentlyContinue; New-NetIPAddress -InterfaceAlias '{alias}' "
+            f"-IPAddress {gateway} -PrefixLength {net.prefixlen} -ErrorAction Stop | Out-Null"
+        )
+        try:
+            fix = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-Command", ps_fix],
+                capture_output=True, text=True, errors="replace", timeout=20, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            lines.append(f"[labforge] network: could not fix host adapter '{alias}' for {cidr}: {exc}")
+            continue
+        if fix.returncode == 0:
+            was = ", ".join(current_addrs) if current_addrs else "none / APIPA"
+            lines.append(
+                f"[labforge] network: host adapter '{alias}' had no address in {cidr} "
+                f"(was: {was}) — set it to {gateway}/{net.prefixlen} so this lab's nodes "
+                "are reachable from this PC."
+            )
+        else:
+            err = (fix.stderr or fix.stdout or "").strip().splitlines()
+            lines.append(
+                f"[labforge] network: '{alias}' is not routable to {cidr} and auto-fix failed "
+                f"({err[-1] if err else 'unknown error'}). Node links in the monitor view won't "
+                "load until this is fixed — this usually needs Administrator privileges. Open "
+                f"VMware Virtual Network Editor and give {alias} a static IP of "
+                f"{gateway}/{net.prefixlen}, or re-run LabForge elevated."
+            )
+    return lines
+
+
+def _is_ip(s: str) -> bool:
+    import ipaddress
+
+    try:
+        ipaddress.ip_address(s)
+        return True
+    except ValueError:
+        return False
+
+
 _ANSI = re.compile(chr(27) + r"\[[0-9;?]*[A-Za-z]")
 
 
@@ -410,6 +544,7 @@ def run(
     # sentinel lands; until then, surface a placeholder so the dashboard
     # still gets heartbeats with log_tail + flows for telemetry.
     build_exit = workspace / ".build.exit"
+    network_checked = False
 
     try:
         while True:
@@ -423,6 +558,12 @@ def run(
                     )
                     for vm in vms:
                         vm["ip"] = ip_map.get(vm["hostname"])
+                    if not network_checked and not docker_mode and lab_status in ("running", "partial"):
+                        network_checked = True
+                        net_lines = _ensure_vmware_private_network(workspace)
+                        if net_lines:
+                            with (workspace / "build.log").open("a", encoding="utf-8") as fh:
+                                fh.write("\n".join(net_lines) + "\n")
                 else:
                     lab_status, vms = "building", []
                 flows = _capture_flows(capture_ifaces, capture_window)
@@ -480,8 +621,14 @@ def spawn_detached(
         str(int(interval)),
     ]
     log_path = workspace / "daemon.log"
-    fh = log_path.open("a", encoding="utf-8")
-    fh.write(f"\n--- daemon start {datetime.now(UTC).isoformat()} ---\n")
+    # Truncated, not appended: this file is live operational telemetry read
+    # by the Monitor page's log tail, not a durable record — heartbeat
+    # history already lives in the `lab_heartbeats` DB table. Appending let a
+    # dead daemon's stale "heartbeat failed" lines from a prior session
+    # (sometimes a day old, after the VM was killed outside the app) sit at
+    # the head of every fresh tail, reading as a live failure.
+    fh = log_path.open("w", encoding="utf-8")
+    fh.write(f"--- daemon start {datetime.now(UTC).isoformat()} ---\n")
     fh.flush()
     env = {**os.environ}
     if api_token:

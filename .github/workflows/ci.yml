@@ -44,7 +44,30 @@ jobs:
         # in the generator/templates doesn't reach main.
         run: cd apps/api && mypy labforge_core
       - name: Tests
-        run: cd apps/api && pytest -q
+        run: cd apps/api && pytest -q -m "not docker_role"
+
+  role-scripts:
+    name: Role scripts (actually run in a container)
+    runs-on: ubuntu-latest
+    # Renders each role's provisioner script through the real generator and
+    # runs it in a throwaway Linux container — real apt installs, real
+    # service starts. Catches the class of bug a template-rendering test
+    # can't: a cert permission the service's own user can't read, a package
+    # the script assumes is already present but never installs, a config
+    # edit that silently never matches. Split into its own job so a slow
+    # role (an apt-heavy install) doesn't block the fast unit-test feedback
+    # loop in `backend` above.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend
+        run: |
+          pip install -e packages/schema/python
+          pip install -e "apps/api[dev]"
+      - name: Run role scripts for real
+        run: cd apps/api && pytest -q -m docker_role
 
   web:
     name: Web (lint + typecheck + build)
