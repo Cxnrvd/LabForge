@@ -74,7 +74,16 @@ ignore = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    # SQLAlchemy/SQLite connections sometimes get garbage-collected slightly
+    # after the test (and its own engine.dispose()) that created them — pytest
+    # then attributes the resulting "unraisable exception" GC warning to
+    # whichever *later* test happened to be running, which is exactly the
+    # flaky-attribution case pytest's own docs warn about for this warning
+    # class. Treat it as informational, not a failure.
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+]
 markers = [
     "docker_role: renders a role's provisioner script and actually runs it in a throwaway Linux container — real package installs and service starts, not just Jinja rendering. Needs Docker; excluded from the default run (see tests/test_role_scripts_docker.py).",
 ]

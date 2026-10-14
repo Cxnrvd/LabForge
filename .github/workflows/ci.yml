@@ -36,6 +36,7 @@ jobs:
       - name: Install backend
         run: |
           pip install -e packages/schema/python
+          pip install -e packages/agent
           pip install -e "apps/api[dev,migrate]"
       - name: Lint
         run: cd apps/api && ruff check .
@@ -65,6 +66,7 @@ jobs:
       - name: Install backend
         run: |
           pip install -e packages/schema/python
+          pip install -e packages/agent
           pip install -e "apps/api[dev]"
       - name: Run role scripts for real
         run: cd apps/api && pytest -q -m docker_role
