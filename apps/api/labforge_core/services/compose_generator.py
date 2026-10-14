@@ -375,8 +375,8 @@ def render(
                 ignored.append(f"role '{role.role_id}' on {host} has no image")
         warnings.extend(ignored)
 
-        service: dict[str, object] = {}
-        role_env: dict[str, str] = {}
+        service = {}
+        role_env = {}
         version: str | None = None
         for raw in node.config.roles:
             role, ver = lookup(raw)
@@ -419,7 +419,7 @@ def render(
             if primary.healthcheck:
                 service["healthcheck"] = dict(primary.healthcheck)
             for vol in primary.volumes:
-                service.setdefault("volumes", []).append(subst(vol))  # type: ignore[union-attr]
+                service.setdefault("volumes", []).append(subst(vol))  # type: ignore[attr-defined]
                 source = vol.split(":", 1)[0]
                 if source and source[0] not in "./~":
                     named_volumes.add(source)
@@ -496,8 +496,8 @@ def render(
             )
 
         if publish == "loopback" and primary is not None and primary.ports:
-            mappings: list[tuple[int, int]] = []
-            rendered_ports: list[str] = []
+            mappings = []
+            rendered_ports = []
             for container_port in primary.ports:
                 host_port = _pick_host_port(container_port, taken_ports, port_free)
                 mappings.append((host_port, container_port))

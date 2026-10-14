@@ -494,6 +494,6 @@ def generate_zip(
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for filename, body in file_contents.items():
-            zf.writestr(filename, body)
+        for zip_filename, zip_body in file_contents.items():
+            zf.writestr(zip_filename, zip_body)
     return buf.getvalue()

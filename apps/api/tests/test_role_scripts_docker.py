@@ -31,7 +31,16 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from labforge_schema import Credentials, LabConfig, NodeConfig, NodeType, OsType, Position, Provider, TopologyNode
+from labforge_schema import (
+    Credentials,
+    LabConfig,
+    NodeConfig,
+    NodeType,
+    OsType,
+    Position,
+    Provider,
+    TopologyNode,
+)
 
 from labforge_core.services.generator import generate_artifacts
 
@@ -81,7 +90,7 @@ class _Container:
         self.name = f"labforge-role-test-{id(self)}"
         self.image = image
 
-    def __enter__(self) -> "_Container":
+    def __enter__(self) -> _Container:
         subprocess.run(
             ["docker", "run", "-d", "--name", self.name, self.image, "sleep", "600"],
             check=True, capture_output=True, text=True, timeout=60,

@@ -407,8 +407,13 @@ def change(path: str | None, existing_choice: str | None, session: Session) -> d
                     "destination_not_empty",
                     409,
                 )
-            names = _move_entries(old, new)
-            moved = {"from": str(old), "to": str(new), "entries": len(names), "labs": _repoint_labs(session, old, new)}
+            moved_entries = _move_entries(old, new)
+            moved = {
+                "from": str(old),
+                "to": str(new),
+                "entries": len(moved_entries),
+                "labs": _repoint_labs(session, old, new),
+            }
         finally:
             _MOVE_LOCK.release()
 

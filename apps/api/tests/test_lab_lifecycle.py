@@ -140,7 +140,7 @@ def test_resume_reruns_compose_up_and_clears_old_sentinels(fake, session, tmp_pa
 def test_only_a_stopped_lab_can_be_started(fake, session, tmp_path):
     lab = _build(session, tmp_path)
     lab.status = "running"
-    with pytest.raises(build_runner.HaltFailed, match="only a stopped lab"):
+    with pytest.raises(build_runner.HaltFailed, match="only a stopped or paused lab"):
         build_runner.resume_lab(lab, session)
 
 

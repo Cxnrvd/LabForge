@@ -232,7 +232,17 @@ def test_wifi_pentest_env_role_installs_no_attack_tooling():
     passed-through adapter — never aircrack-ng, hostapd, wifite, hcxtools, or hashcat.
     That line is load-bearing: everything past it is the user's own, run by hand
     inside the VM, not something LabForge pre-wires."""
-    from labforge_schema import Credentials, LabConfig, NodeConfig, NodeType, OsType, Position, Provider, TopologyNode
+    from labforge_schema import (
+        Credentials,
+        LabConfig,
+        NodeConfig,
+        NodeType,
+        OsType,
+        Position,
+        Provider,
+        TopologyNode,
+    )
+
     from labforge_core.services.generator import generate_artifacts
 
     node = TopologyNode(
@@ -273,7 +283,17 @@ def test_wifi_pentest_env_role_installs_no_attack_tooling():
 
 def test_usb_passthrough_omitted_without_both_ids():
     """No vendor/product ID pair -> no usbfilter block at all, not a broken one."""
-    from labforge_schema import Credentials, LabConfig, NodeConfig, NodeType, OsType, Position, Provider, TopologyNode
+    from labforge_schema import (
+        Credentials,
+        LabConfig,
+        NodeConfig,
+        NodeType,
+        OsType,
+        Position,
+        Provider,
+        TopologyNode,
+    )
+
     from labforge_core.services.generator import generate_artifacts
 
     node = TopologyNode(

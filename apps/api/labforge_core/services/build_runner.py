@@ -27,12 +27,12 @@ Lifecycle rules
 
 from __future__ import annotations
 
+import base64
+import binascii
 import contextlib
 import json
 import logging
 import os
-import base64
-import binascii
 import re
 import shutil
 import signal
@@ -44,6 +44,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 from labforge_schema import LabConfig, Provider
 from sqlmodel import Session, select
@@ -447,7 +448,9 @@ def start_build_detailed(
         for warning in warnings:
             _LOGGER.info("compose_warning lab=%s %s", lab.id, warning)
         pid = _spawn_build(workspace, argv, banner=banner, env_extra=env_extra)
-        skipped = node_coverage["skipped"] if node_coverage else []  # type: ignore[index]
+        skipped = cast(
+            "list[dict[str, object]]", node_coverage["skipped"] if node_coverage else []  # type: ignore[index]
+        )
         if skipped or warnings:
             with (workspace / BUILD_LOG).open("a", encoding="utf-8") as fh:
                 if skipped:
@@ -561,10 +564,8 @@ def _ssh_info(workspace: Path, hostname: str, *, refresh: bool = False) -> dict 
         return None
     info = {k: fields[k] for k in ("HostName", "Port", "User", "IdentityFile")}
     cache[hostname] = info
-    try:
+    with contextlib.suppress(OSError):
         cache_path.write_text(json.dumps(cache), encoding="utf-8")
-    except OSError:
-        pass
     return info
 
 
@@ -1056,15 +1057,13 @@ def _release_usb_radios(workspace: Path) -> None:
     for node in topo.get("nodes", []):
         cfg = node.get("config", {})
         if any(str(r).split("@")[0] == "atbm-wifi-driver" for r in cfg.get("roles", [])):
-            try:
+            with contextlib.suppress(OSError, subprocess.TimeoutExpired):
                 subprocess.run(
                     ["vagrant", "ssh", cfg.get("hostname", ""), "-c",
                      "sudo systemctl stop hostapd dnsmasq; sudo rmmod atbm6012bx; sync"],
                     cwd=str(workspace), capture_output=True, text=True, errors="replace",
                     timeout=90, check=False,
                 )
-            except (OSError, subprocess.TimeoutExpired):
-                pass
 
 
 def halt_lab(lab: Lab, session: Session) -> None:
@@ -1653,7 +1652,7 @@ def stop_build(workspace: Path, *, kill_timeout_s: float = 5.0, halt_containers:
                 # The shim leads its own session; signal the whole group so
                 # the vagrant / docker child dies with it.
                 try:
-                    os.killpg(pid, signal.SIGTERM)
+                    os.killpg(pid, signal.SIGTERM)  # type: ignore[attr-defined]
                 except (ProcessLookupError, PermissionError):
                     os.kill(pid, signal.SIGTERM)
         except (ProcessLookupError, OSError) as exc:

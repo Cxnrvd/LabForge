@@ -177,7 +177,7 @@ def host_ip_conflicts(cidr: str) -> list[str]:
     found: set[str] = set()
     try:
         for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-            addr = info[4][0]
+            addr = str(info[4][0])
             if ip_address(addr) in net and not addr.endswith(".1"):
                 found.add(addr)
     except OSError:

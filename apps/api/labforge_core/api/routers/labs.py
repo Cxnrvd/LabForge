@@ -42,15 +42,15 @@ from labforge_core.schemas.api import (
 from labforge_core.services import docker_runtime, hostenv, images
 from labforge_core.services import workspace as workspace_store
 from labforge_core.services.build_runner import (
+    ALL_WIFI_SCENARIOS,
+    NODE_FILES,
     BuildPrereqError,
     DestroyFailed,
     HaltFailed,
     LabExistsError,
     SubnetConflictError,
-    destroy_lab,
-    NODE_FILES,
-    ALL_WIFI_SCENARIOS,
     apply_wifi_scenario,
+    destroy_lab,
     fetch_node_file,
     fetch_wazuh_password,
     halt_lab,

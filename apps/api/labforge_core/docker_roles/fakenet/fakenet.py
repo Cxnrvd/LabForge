@@ -151,7 +151,12 @@ def main() -> None:
     http.daemon_threads = True
     emit("start", ip=ip, services=["dns/53", "http/80"])
     open(READY, "w").write("ready\n")
-    signal.signal(signal.SIGTERM, lambda *_: (http.shutdown(), sys.exit(0)))
+
+    def _stop(*_args: object) -> None:
+        http.shutdown()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _stop)
     http.serve_forever()
 
 
