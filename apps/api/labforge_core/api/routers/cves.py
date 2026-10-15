@@ -2,14 +2,27 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+import re
+
+from fastapi import APIRouter, HTTPException, Path, Query, Request, status
 from labforge_schema import CVEEntry
+from pydantic import BaseModel
 
 from labforge_core.api.rate_limit import limit
-from labforge_core.provisioners.cve_lookup import known_cve_descriptions, list_known_cves
+from labforge_core.provisioners.cve_lookup import (
+    is_fully_provisioned,
+    known_cve_descriptions,
+    list_known_cves,
+    resolve_cve_payload,
+)
 from labforge_core.services.cve_client import CVEClientError, CVENotFound, get_cve, search_cves
 
 router = APIRouter(prefix="/cves", tags=["cves"])
+
+# A well-formed CVE id, nothing else — resolve_cve_payload reads a file named after this input
+# (provisioner_scripts_dir / f"{cve_id}.sh"), so this also keeps that lookup to the curated
+# scripts directory instead of taking arbitrary path segments from the URL.
+_CVE_ID_RE = re.compile(r"^CVE-\d{4}-\d{4,7}$")
 
 
 @router.get("/search", response_model=list[CVEEntry])
@@ -28,12 +41,55 @@ async def search(
         ) from exc
 
 
-@router.get("/curated", response_model=dict[str, str])
-def curated() -> dict[str, str]:
-    """Known CVEs with bundled curated provisioner scripts."""
+class CuratedCve(BaseModel):
+    cve_id: str
+    description: str
+    # True when the provisioner actually leaves a vulnerable service reachable on the lab network,
+    # not just notes or attacker-side tooling (see provisioners/cve_lookup.py).
+    fully_provisioned: bool
+
+
+@router.get("/curated", response_model=list[CuratedCve])
+def curated() -> list[CuratedCve]:
+    """Every CVE with a bundled provisioner script, and whether it actually stands up a vulnerable
+    target or only leaves notes (a Windows CVE, which LabForge has no curated Windows provisioner
+    for). Pin one of these to a node to get the real thing, not a guess."""
     descriptions = known_cve_descriptions()
-    known = set(list_known_cves())
-    return {cve: descriptions.get(cve, "") for cve in sorted(known)}
+    known = sorted(set(list_known_cves()))
+    return [
+        CuratedCve(
+            cve_id=cve,
+            description=descriptions.get(cve, ""),
+            fully_provisioned=is_fully_provisioned(cve),
+        )
+        for cve in known
+    ]
+
+
+class ScriptResponse(BaseModel):
+    cve_id: str
+    known: bool
+    fully_provisioned: bool
+    description: str
+    # The curated .sh body for a fully-provisioned CVE; the honest stub comment LabForge would
+    # actually write into a lab's provisioner for a notes-only or unrecognized one. Never
+    # fabricated — this is exactly what a build does with this CVE, nothing is invented for display.
+    script: str
+
+
+@router.get("/{cve_id}/script", response_model=ScriptResponse)
+def script(cve_id: str = Path(pattern=_CVE_ID_RE.pattern)) -> ScriptResponse:
+    """What LabForge actually does with this CVE: the real curated script, or the honest stub /
+    notes-only script it would write instead. Used by the CVE detail panel so it shows the real
+    thing rather than a guess at what a provisioner might look like."""
+    payload = resolve_cve_payload(cve_id)
+    return ScriptResponse(
+        cve_id=payload.cve_id,
+        known=payload.known,
+        fully_provisioned=payload.fully_provisioned,
+        description=payload.description,
+        script=payload.script,
+    )
 
 
 @router.get("/{cve_id}", response_model=CVEEntry)

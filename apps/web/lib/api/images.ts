@@ -1,0 +1,227 @@
+"use client";
+
+/**
+ * Image library: client types, hooks and helpers.
+ *
+ * Backend contract (implemented in apps/api/labforge_core/api/routers/images.py):
+ *   GET    /api/v1/images                  -> ImagesResponse
+ *   POST   /api/v1/images/{id}/pull        -> ImageEntry   (starts a pull/download)
+ *   DELETE /api/v1/images/{id}             -> 204
+ *   POST   /api/v1/images/{id}/export      -> archive download
+ *   POST   /api/v1/images/golden           -> ImageEntry   body: { source_id, name }
+ *   POST   /api/v1/images/prepare          -> { queued: string[] } body: { template_id }
+ *
+ * `status` is "ready" (here), "missing" (not here), "outdated" (another tag or provider is here, the
+ * required one still has to be fetched) or "pulling". When the API cannot be reached or Docker is not
+ * running, `useImages` reports `unavailable: true` and no rows rather than guessing.
+ */
+
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { LabConfig, TopologyNode } from "@labforge/schema";
+
+export type ImageKind = "docker" | "windows-base" | "golden" | "vagrant-box";
+export type ImageStatus = "ready" | "missing" | "pulling" | "outdated";
+
+export interface ImageEntry {
+  id: string;
+  kind: ImageKind;
+  name: string;
+  tag?: string;
+  size_mb: number;
+  status: ImageStatus;
+  /** 0..100 while status is "pulling". */
+  progress?: number;
+  used_by: string[];
+  updated_at?: string | null;
+  note?: string;
+}
+
+export interface ImagesResponse {
+  images: ImageEntry[];
+  total_mb: number;
+  disk_free_gb?: number | null;
+  /** False when the Docker daemon is not answering, so nothing is known about local images. */
+  engine?: boolean;
+}
+
+export interface ImagesResult extends ImagesResponse {
+  /** True when image status could not be read (API offline or Docker not running). */
+  unavailable: boolean;
+}
+
+export function useImages() {
+  return useQuery<ImagesResult>({
+    queryKey: ["images"],
+    queryFn: async () => {
+      try {
+        const res = await fetch("/api/v1/images");
+        if (!res.ok) throw new Error(String(res.status));
+        const body = (await res.json()) as ImagesResponse;
+        return { ...body, unavailable: body.engine === false };
+      } catch {
+        return { images: [], total_mb: 0, disk_free_gb: null, unavailable: true };
+      }
+    },
+    refetchInterval: (q) => (q.state.data?.images.some((i) => i.status === "pulling") ? 2000 : 20_000),
+    staleTime: 5000,
+  });
+}
+
+async function call(path: string, init?: RequestInit): Promise<Response> {
+  const res = await fetch(`/api/v1${path}`, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+  });
+  if (!res.ok) {
+    let detail = `${res.status} ${res.statusText}`;
+    try {
+      const b = (await res.json()) as { detail?: string | { detail?: string } };
+      if (typeof b.detail === "string") detail = b.detail;
+      else if (b.detail?.detail) detail = b.detail.detail;
+    } catch {
+      /* keep default */
+    }
+    throw new Error(res.status === 404 ? "The image service is not available on this API yet." : detail);
+  }
+  return res;
+}
+
+export function useImageActions() {
+  const qc = useQueryClient();
+  const refresh = (): void => void qc.invalidateQueries({ queryKey: ["images"] });
+  const pull = useMutation<unknown, Error, string>({
+    mutationFn: async (id) => (await call(`/images/${encodeURIComponent(id)}/pull`, { method: "POST" })).json(),
+    onSuccess: refresh,
+  });
+  const remove = useMutation<unknown, Error, string>({
+    mutationFn: async (id) => call(`/images/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    onSuccess: refresh,
+  });
+  const prepare = useMutation<unknown, Error, string>({
+    mutationFn: async (templateId) =>
+      (await call("/images/prepare", { method: "POST", body: JSON.stringify({ template_id: templateId }) })).json(),
+    onSuccess: refresh,
+  });
+  const golden = useMutation<unknown, Error, { source_id: string; name: string }>({
+    mutationFn: async (body) =>
+      (await call("/images/golden", { method: "POST", body: JSON.stringify(body) })).json(),
+    onSuccess: refresh,
+  });
+  return { pull, remove, prepare, golden };
+}
+
+/* ---------------- Required images for a topology ---------------- */
+
+export interface RequiredImage {
+  key: string;
+  label: string;
+  kind: ImageKind;
+  nodes: string[];
+}
+
+const WINDOWS_KEY: Record<string, string> = {
+  windows_10: "windows-10",
+  windows_11: "windows-11",
+  windows_server_2019: "windows-2019",
+  windows_server_2022: "windows-2022",
+};
+
+function requirementFor(node: TopologyNode, provider: string): { key: string; label: string; kind: ImageKind } {
+  const os = node.config.os as string;
+  if (WINDOWS_KEY[os]) {
+    const key = WINDOWS_KEY[os];
+    return { key, label: `Windows ${key.replace("windows-", "")} base`, kind: "windows-base" };
+  }
+  if (provider === "docker" && node.config.compose_image) {
+    return { key: node.config.compose_image, label: node.config.compose_image, kind: "docker" };
+  }
+  if (provider === "docker") {
+    return { key: os, label: os.replace(/_/g, " "), kind: "docker" };
+  }
+  return { key: os, label: `${os.replace(/_/g, " ")} box`, kind: "vagrant-box" };
+}
+
+export function requiredImages(topology: LabConfig, provider: string): RequiredImage[] {
+  const map = new Map<string, RequiredImage>();
+  for (const n of topology.nodes) {
+    const r = requirementFor(n, provider);
+    const hit = map.get(r.key);
+    if (hit) hit.nodes.push(n.config.hostname);
+    else map.set(r.key, { ...r, nodes: [n.config.hostname] });
+  }
+  return [...map.values()];
+}
+
+export type Readiness = "ready" | "missing" | "pulling" | "outdated" | "unknown";
+
+export function readinessOf(req: RequiredImage, images: ImageEntry[] | undefined, unavailable: boolean): Readiness {
+  if (!images || unavailable) return "unknown";
+  const k = req.key.toLowerCase();
+  const hit = images.find((i) => i.id.toLowerCase() === k || i.name.toLowerCase().includes(k) || k.includes(i.name.toLowerCase()));
+  return hit ? hit.status : "missing";
+}
+
+export function formatSize(mb: number): string {
+  if (mb >= 1024) return `${(mb / 1024).toFixed(mb >= 10240 ? 0 : 1)} GB`;
+  return `${mb} MB`;
+}
+
+/* ---------------- Server side requirements ---------------- */
+
+interface ServerRequirement extends RequiredImage {
+  status: Readiness;
+  size_mb: number;
+}
+
+/** A node the topology asks for that this exact build would never attempt on Docker — not
+ * missing, not failed, never started (a domain controller, or a firewall/router/camera whose
+ * role has no container path). See compose_generator.coverage_from_fallback_notes. */
+export interface SkippedNode {
+  hostname: string;
+  node_id: string | null;
+  node_type: string | null;
+  reason: string;
+}
+
+export interface NodeCoverage {
+  total: number;
+  built: number;
+  skipped: SkippedNode[];
+}
+
+interface RequiredImagesResult {
+  requirements: ServerRequirement[];
+  node_coverage: NodeCoverage | null;
+}
+
+/**
+ * What a topology needs and whether it is on this computer, worked out by the API from the
+ * generated Compose file (so roles, not just the OS, decide the image), plus which of the
+ * topology's nodes this exact Docker build would include at all. Docker labs only.
+ */
+export function useRequiredImages(topology: LabConfig | null | undefined, provider: string) {
+  return useQuery<RequiredImagesResult>({
+    queryKey: ["images-required", topology?.id, topology?.nodes.length, provider, JSON.stringify(topology?.nodes.map((n) => n.config.roles))],
+    enabled: !!topology && provider === "docker",
+    queryFn: async () => {
+      const res = await call("/images/required", { method: "POST", body: JSON.stringify({ topology }) });
+      return (await res.json()) as RequiredImagesResult;
+    },
+    retry: 0,
+    staleTime: 5000,
+    refetchInterval: (q) => (q.state.data?.requirements.some((r) => r.status === "pulling") ? 2000 : false),
+  });
+}
+
+/** Rows for display: the server's answer when there is one, the local guess otherwise. */
+export function resolveRequirements(
+  topology: LabConfig | null | undefined,
+  provider: string,
+  server: ServerRequirement[] | undefined,
+  images: ImageEntry[] | undefined,
+  unavailable: boolean,
+): Array<{ r: RequiredImage; state: Readiness }> {
+  if (server) return server.map((r) => ({ r, state: r.status }));
+  if (!topology) return [];
+  return requiredImages(topology, provider).map((r) => ({ r, state: readinessOf(r, images, unavailable) }));
+}

@@ -58,7 +58,7 @@ export interface LabMeta {
   name: string;
   description: string;
   network_cidr: string;
-  provider: "virtualbox" | "vmware" | "libvirt";
+  provider: "virtualbox" | "vmware" | "libvirt" | "docker";
 }
 
 interface TopologyState {
@@ -109,7 +109,7 @@ function defaultMeta(): LabMeta {
     name: "Untitled Lab",
     description: "",
     network_cidr: "192.168.56.0/24",
-    provider: "virtualbox",
+    provider: "docker",
   };
 }
 
@@ -178,6 +178,7 @@ function defaultNodeFor(
       credentials: DEFAULT_CREDS_PER_TYPE[type] ?? { username: "vagrant", password: "vagrant" },
       vlan: null,
       gateway: null,
+      gui: false,
     },
     attack_tags: [],
   };
@@ -237,6 +238,10 @@ function snapshot(state: TopologyState): HistoryEntry {
   };
 }
 
+// Where the nodes were when the current drag started. Undo has to return there; the state
+// seen when the drag ends already contains the moved positions.
+let dragOrigin: HistoryEntry | null = null;
+
 function pushHistory(state: TopologyState): Pick<TopologyState, "past" | "future"> {
   const next = [...state.past, snapshot(state)];
   return {
@@ -273,16 +278,25 @@ export const useTopologyStore = create<TopologyState>()(
     const positionDone = changes.some(
       (c) => c.type === "position" && c.dragging === false,
     );
+    const positionMoving = changes.some(
+      (c) => c.type === "position" && c.dragging === true,
+    );
     const removed = changes.some((c) => c.type === "remove");
     const dimChanges = changes.filter((c) => c.type === "dimensions");
-    const shouldSnapshot = positionDone || removed;
 
     // Snapshot the OLD state BEFORE applying changes; otherwise undo
     // restores the same state we just produced, i.e. no-op.
     set((state) => {
+      if (positionMoving && dragOrigin === null) dragOrigin = snapshot(state);
       const newNodes = applyNodeChanges(changes, state.nodes);
       const update: Partial<TopologyState> = { nodes: newNodes };
-      if (shouldSnapshot) {
+      if (positionDone && dragOrigin !== null) {
+        const origin = dragOrigin;
+        dragOrigin = null;
+        const past = [...state.past, origin];
+        update.past = past.length > HISTORY_LIMIT ? past.slice(past.length - HISTORY_LIMIT) : past;
+        update.future = [];
+      } else if (removed) {
         Object.assign(update, pushHistory(state));
       }
       return update;
@@ -332,7 +346,16 @@ export const useTopologyStore = create<TopologyState>()(
           .filter((n): n is FlowNode => !isZone(n))
           .map((n) => n.data.topologyNode.config.hostname.toLowerCase()),
       );
-      const topNode = defaultNodeFor(type, position, state.meta.network_cidr, usedIps, usedHostnames);
+      // Two nodes added from the palette used to land on the same spot. Step sideways, then down,
+      // until the place is free.
+      const taken = state.nodes.filter((n) => !isZone(n)).map((n) => n.position);
+      const free = (pt: { x: number; y: number }): boolean =>
+        !taken.some((q) => Math.abs(q.x - pt.x) < 150 && Math.abs(q.y - pt.y) < 130);
+      let placed = { ...position };
+      for (let i = 1; !free(placed) && i < 40; i += 1) {
+        placed = { x: position.x + (i % 5) * 200, y: position.y + Math.floor(i / 5) * 170 };
+      }
+      const topNode = defaultNodeFor(type, placed, state.meta.network_cidr, usedIps, usedHostnames);
       return {
         ...pushHistory(state),
         nodes: [...state.nodes, toFlowNode(topNode)],

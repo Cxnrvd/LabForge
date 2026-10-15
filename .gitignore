@@ -55,9 +55,40 @@ design.md
 designs/
 dashboard-proposals.html
 labforge-designs.html
+docs/design/
 
 # Claude Code session data (per-machine).
 .claude/
 
 # Tool caches that occasionally end up tracked.
 *.tsbuildinfo
+
+# local command runner and reports
+.lf-run/
+.labforge-report.txt
+apps/web/lib/api/generated.ts
+
+# audit output
+.labforge-audit.txt
+.audit-shots/
+.labforge-ui-audit.txt
+
+# Claude Code working files, not part of the product
+.labforge-audit.txt
+.labforge-ui-audit.txt
+.audit-shots/
+docs/CLAUDE-QA-PROMPT.md
+.claude/
+
+# Instructor-only / answer-key material for live scenarios — these spell out
+# exact lab credentials, full step-by-step attack procedures, Wazuh rule
+# internals, and the AP role's hardware bring-up details. They're prep
+# material for whoever is presenting, not something to ship in a repo
+# students/attendees (or the public) can browse — keeping them out of the
+# commit is the whole point, not an oversight. Stays on disk locally; just
+# never tracked. Grouped under docs/labs/wifi/ (walkthroughs, presenter
+# guide, slide content/deck/titles, study content, hardware notes, assets)
+# so this is one pattern instead of a dozen.
+docs/labs/wifi/
+docs/labs/ransomware-intrusion.md
+docs/labs/malware-triage.md

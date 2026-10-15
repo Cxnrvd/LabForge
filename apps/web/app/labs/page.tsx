@@ -56,6 +56,8 @@ const TEMPLATE_TONE: Record<string, "info" | "warn" | "purple" | "mute" | "act" 
   "smart-factory": "purple",
   "llm-red-team-range": "purple",
   "wan-sim": "info",
+  "ransomware-intrusion-hunt-docker": "danger",
+  "malware-triage-bench-docker": "danger",
 };
 
 const TEMPLATE_FILTERS: Array<{ id: string; label: string }> = [
@@ -66,10 +68,12 @@ const TEMPLATE_FILTERS: Array<{ id: string; label: string }> = [
   { id: "smart-factory", label: "smart-factory" },
   { id: "llm-red-team-range", label: "llm-red-team-range" },
   { id: "wan-sim", label: "wan-sim" },
+  { id: "ransomware-intrusion-hunt-docker", label: "ransomware-hunt (docker)" },
+  { id: "malware-triage-bench-docker", label: "malware-triage (docker)" },
   { id: "custom", label: "custom" },
 ];
 
-const PROVIDERS = ["virtualbox", "vmware", "libvirt"] as const;
+const PROVIDERS = ["all", "docker", "virtualbox", "vmware", "libvirt"] as const;
 type Provider = (typeof PROVIDERS)[number];
 
 /* ============================================================
@@ -321,10 +325,12 @@ export default function LabsIndex(): React.ReactElement {
     "smart-factory": false,
     "llm-red-team-range": false,
     "wan-sim": false,
+    "ransomware-intrusion-hunt-docker": false,
+    "malware-triage-bench-docker": false,
     custom: false,
   }));
 
-  const [providerFilter, setProviderFilter] = React.useState<Provider>("virtualbox");
+  const [providerFilter, setProviderFilter] = React.useState<Provider>("all");
 
   /* ---------- per-row heartbeats (nodes + last action) ---------- */
 
@@ -384,7 +390,7 @@ export default function LabsIndex(): React.ReactElement {
       }
 
       // .filt Provider chip
-      if (lab.provider && lab.provider !== providerFilter) return false;
+      if (providerFilter !== "all" && lab.provider && lab.provider !== providerFilter) return false;
 
       // Search box — name / template / workspace path (≈ "hostname" in the brief)
       if (q) {
@@ -407,7 +413,7 @@ export default function LabsIndex(): React.ReactElement {
     Object.values(templateFilter).forEach((v) => {
       if (v) n += 1;
     });
-    if (providerFilter !== "virtualbox") n += 1;
+    if (providerFilter !== "all") n += 1;
     return n;
   }, [statusFilter, templateFilter, providerFilter]);
 
@@ -637,7 +643,7 @@ export default function LabsIndex(): React.ReactElement {
         </div>
 
         {/* ----------------- main column ----------------- */}
-        <div style={{ minWidth: 0, minHeight: 0, overflowY: "auto" }}>
+        <div style={{ minWidth: 0, minHeight: 0, overflow: "auto" }}>
           <table>
             <thead>
               <tr>
@@ -707,13 +713,13 @@ export default function LabsIndex(): React.ReactElement {
                     <td>{nodeCount ?? "—"}</td>
                     <td className="mono">{lab.provider}</td>
                     <td>{bucket === "running" ? uptimeFrom(lab.updated_at) : "—"}</td>
-                    <td className="mono" style={{ color: "var(--d10-fg-faint)" }}>
+                    <td className="mono cell-ellipsis" title={lastAction} style={{ color: "var(--d10-fg-faint)" }}>
                       {lastAction}
                     </td>
                     <td onClick={(e) => e.stopPropagation()}>
                       <Link
                         href={`/monitor/${lab.id}`}
-                        className="btn primary"
+                        className="btn primary nowrap"
                         style={{ textDecoration: "none" }}
                         onClick={(e) => e.stopPropagation()}
                       >

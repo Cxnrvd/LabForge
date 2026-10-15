@@ -4,6 +4,20 @@ import type {
   ValidationResult,
 } from "@labforge/schema";
 
+export interface CuratedCve {
+  cve_id: string;
+  description: string;
+  fully_provisioned: boolean;
+}
+
+export interface CveScript {
+  cve_id: string;
+  known: boolean;
+  fully_provisioned: boolean;
+  description: string;
+  script: string;
+}
+
 export interface TemplateSummary {
   id: string;
   name: string;
@@ -15,6 +29,8 @@ export interface TemplateSummary {
 export interface ApiError {
   detail: string;
   code: string;
+  /** Structured fields of the error body (for example the data found in the old workspace). */
+  extra?: Record<string, unknown>;
 }
 
 const API_PREFIX = "/api/v1";
@@ -45,15 +61,40 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!response.ok) {
     let detail = `${response.status} ${response.statusText}`;
     let code = "request_failed";
+    let extra: Record<string, unknown> | undefined;
     try {
-      const body = (await response.json()) as { detail?: string | object; code?: string };
-      if (typeof body.detail === "string") detail = body.detail;
-      else if (body.detail) detail = JSON.stringify(body.detail);
+      const body = (await response.json()) as {
+        detail?: string | { detail?: string; code?: string } | Array<{ loc?: unknown[]; msg?: string }>;
+        code?: string;
+      };
+      if (typeof body.detail === "string") {
+        detail = body.detail;
+      } else if (Array.isArray(body.detail)) {
+        // FastAPI's own request-validation 422s, not LabForge's structured error shape — one
+        // entry per invalid field (bad IP, bad hostname, a role or CVE id that fails the schema
+        // regex, ...). Each entry's msg is usually "Value error, <our message>"; strip that
+        // prefix and name the field so a field_validator's message is readable rather than a
+        // raw JSON blob.
+        detail = body.detail
+          .map((e) => {
+            const field = Array.isArray(e.loc) ? e.loc.filter((p) => typeof p !== "number").join(".") : "";
+            const msg = (e.msg ?? "Invalid value").replace(/^Value error,\s*/, "");
+            return field ? `${field}: ${msg}` : msg;
+          })
+          .join("; ") || detail;
+        code = "validation_error";
+      } else if (body.detail && typeof body.detail === "object") {
+        // The API nests structured errors: {"detail": {"detail": "...", "code": "lab_exists"}}
+        if (typeof body.detail.detail === "string") detail = body.detail.detail;
+        else detail = JSON.stringify(body.detail);
+        if (body.detail.code) code = body.detail.code;
+        extra = body.detail as Record<string, unknown>;
+      }
       if (body.code) code = body.code;
     } catch {
       // ignore parse failure
     }
-    const err: ApiError = { detail, code };
+    const err: ApiError = { detail, code, extra };
     throw err;
   }
   if (response.status === 204) return undefined as T;
@@ -81,7 +122,123 @@ async function requestZip(path: string, body: unknown): Promise<Blob> {
   return await response.blob();
 }
 
+export interface HostMetrics {
+  memory: { total_mb: number | null; used_mb: number | null; percent: number | null };
+  cpu: { percent: number | null; cores: number | null };
+  disk: {
+    /** The folder actually measured (the nearest one that exists). */
+    path: string | null;
+    /** The workspace folder labs are built in, and where that setting came from. */
+    workspace_path?: string | null;
+    source?: "settings" | "environment" | "default";
+    total_gb: number | null;
+    used_gb: number | null;
+    free_gb: number | null;
+  };
+  sampled_at: string;
+  engine: {
+    docker_daemon: boolean;
+    docker_version: string | null;
+    compose_version: string | null;
+    docker_memory_mb?: number | null;
+    docker_disk?: { path: string | null; free_gb: number | null; total_gb: number | null } | null;
+    vagrant_version: string | null;
+    virtualbox_version: string | null;
+    hypervisor_present: boolean | null;
+  };
+}
+
+export interface LabEndpoint {
+  host: string;
+  label: string;
+  url: string | null;
+  address: string;
+  kind: "web" | "rdp" | "tcp";
+  host_port: number;
+}
+
+export interface PreflightCheck {
+  id: string;
+  status: "ok" | "warn" | "fail";
+  title: string;
+  detail: string;
+  fix: string | null;
+}
+
+export interface PreflightReport {
+  status: "ok" | "warn" | "fail";
+  ready: boolean;
+  checks: PreflightCheck[];
+}
+
+export type WorkspaceState = "ok" | "missing" | "not_writable" | "device_changed";
+
+export interface WorkspaceExisting {
+  path: string;
+  entries: number;
+  labs: number;
+  size_mb: number;
+  names: string[];
+}
+
+export interface WorkspaceStatus {
+  path: string;
+  source: "settings" | "environment" | "default";
+  default_path: string;
+  exists: boolean;
+  writable: boolean;
+  state: WorkspaceState;
+  error: string | null;
+  free_gb: number | null;
+  total_gb: number | null;
+  existing?: WorkspaceExisting;
+  moved?: { from: string; to: string; entries: number; labs: number } | null;
+}
+
+export interface WorkspaceValidation {
+  ok: boolean;
+  path: string | null;
+  code: string | null;
+  error: string | null;
+  writable: boolean;
+  free_gb: number | null;
+  total_gb: number | null;
+  existing: WorkspaceExisting | null;
+}
+
+export interface HostUsbDevice {
+  vendor_id: string;
+  product_id: string;
+  name?: string;
+  manufacturer?: string;
+  state?: string;
+}
+
 export const api = {
+  workspace: () => request<WorkspaceStatus>("/settings/workspace"),
+  validateWorkspace: (path: string) =>
+    request<WorkspaceValidation>("/settings/workspace/validate", {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    }),
+  /** `path: null` goes back to the default. `existingData` answers the "move or leave" question. */
+  setWorkspace: (path: string | null, existingData?: "move" | "leave") =>
+    request<WorkspaceStatus>("/settings/workspace", {
+      method: "PUT",
+      body: JSON.stringify({ path, existing_data: existingData ?? null }),
+    }),
+  labEndpoints: (labId: number) => request<LabEndpoint[]>(`/labs/${labId}/endpoints`),
+  preflight: (opts: { windowsGuests?: number; memoryMb?: number; recheck?: boolean } = {}) => {
+    const q = new URLSearchParams();
+    if (opts.windowsGuests) q.set("windows_guests", String(opts.windowsGuests));
+    if (opts.memoryMb) q.set("memory_mb", String(opts.memoryMb));
+    if (opts.recheck) q.set("recheck", "true");
+    const qs = q.toString();
+    return request<PreflightReport>(`/host/preflight${qs ? `?${qs}` : ""}`);
+  },
+  hostMetrics: () => request<HostMetrics>("/host/metrics"),
+  /** USB devices VirtualBox can pass through on this host (for a device picker). Read-only. */
+  hostUsbDevices: () => request<{ devices: HostUsbDevice[] }>("/host/usb-devices"),
   listTemplates: () => request<TemplateSummary[]>("/templates"),
   getTemplate: (id: string) => request<LabConfig>(`/templates/${id}`),
   validateTopology: (topology: LabConfig) =>
@@ -99,6 +256,19 @@ export const api = {
       `/cves/search?q=${encodeURIComponent(query)}&limit=${limit}`,
     ),
   getCve: (id: string) => request<CVEEntry>(`/cves/${encodeURIComponent(id)}`),
+  /**
+   * CVEs LabForge actually has a provisioner script for, and whether running it leaves a real
+   * vulnerable service reachable on the lab network ("fully_provisioned") or only notes / attacker
+   * tooling (today: every Windows CVE, since there is no curated Windows-side provisioner). Any
+   * other CVE pinned to a node gets a stub comment, not a working target. This only applies to the
+   * Vagrant/VirtualBox build — the Docker build does not read a node's CVE list at all.
+   */
+  curatedCves: () => request<CuratedCve[]>("/cves/curated"),
+  /**
+   * What LabForge actually does with this CVE: the real curated script for a fully-provisioned
+   * one, or the honest stub / notes-only script it would write otherwise. Never fabricated.
+   */
+  getCveScript: (id: string) => request<CveScript>(`/cves/${encodeURIComponent(id)}/script`),
   generateZip: (
     topology: LabConfig,
     options: { target?: "vagrant" | "docker-compose" } = {},
@@ -121,6 +291,53 @@ export const api = {
     }>(`/labs/${labId}/heartbeat`),
   getLabLog: (labId: number, lines = 200) =>
     request<string[]>(`/labs/${labId}/log?lines=${lines}`),
+  /** Best-effort live `journalctl -u <service>` tail from inside one guest VM. */
+  getNodeLog: (labId: number, hostname: string, service = "hostapd", lines = 100) =>
+    request<string[]>(
+      `/labs/${labId}/node-log/${encodeURIComponent(hostname)}?service=${encodeURIComponent(service)}&lines=${lines}`,
+    ),
+  /** Reads the Wazuh dashboard admin password straight off the manager VM
+   * (live, via SSH) rather than a log search — the install step that
+   * generates it only ever runs once on the VM's first boot, so anything
+   * depending on build.log retention can't be relied on to still have it. */
+  getWazuhPassword: (labId: number, hostname: string) =>
+    request<{ ok: boolean; password: string | null; error: string | null }>(
+      `/labs/${labId}/wazuh-password/${encodeURIComponent(hostname)}`,
+    ),
+  /** Switch a hostapd node to a named demo scenario (open/wep/wpa2/wpa3) and restart hostapd. */
+  setWifiScenario: (labId: number, hostname: string, scenario: string) =>
+    request<{ ok: boolean; message: string }>(
+      `/labs/${labId}/wifi-scenario/${encodeURIComponent(hostname)}?scenario=${encodeURIComponent(scenario)}`,
+      { method: "POST" },
+    ),
+  /** URL for downloading an allowlisted file (today: capture.pcap) out of a guest.
+   * Kept for reference/links elsewhere, but prefer `fetchNodeFile` for an actual
+   * download button: a bare `<a href>` on this endpoint shows the browser's raw
+   * error page on a cold guest (502) instead of a toast. */
+  nodeFileUrl: (labId: number, hostname: string, file: string) =>
+    `/api/v1/labs/${labId}/node-file/${encodeURIComponent(hostname)}?file=${encodeURIComponent(file)}`,
+  /** Fetches an allowlisted guest file as a Blob, throwing ApiError on failure
+   * (502 when the guest isn't reachable, 400 for an unlisted file) so callers
+   * can show a toast instead of letting the browser navigate to a raw error. */
+  fetchNodeFile: async (labId: number, hostname: string, file: string): Promise<Blob> => {
+    const response = await fetch(
+      `${API_PREFIX}/labs/${labId}/node-file/${encodeURIComponent(hostname)}?file=${encodeURIComponent(file)}`,
+      { headers: authHeaders() },
+    );
+    if (!response.ok) {
+      let detail = `${response.status} ${response.statusText}`;
+      let code = "request_failed";
+      try {
+        const body = (await response.json()) as { detail?: string; code?: string };
+        if (body.detail) detail = body.detail;
+        if (body.code) code = body.code;
+      } catch {
+        // ignore parse failure
+      }
+      throw { detail, code } satisfies ApiError;
+    }
+    return await response.blob();
+  },
   getRecentActivity: () =>
     request<
       Array<{
@@ -133,17 +350,62 @@ export const api = {
         log_snippet: string | null;
       }>
     >("/labs/activity/recent"),
-  buildLab: (topology: LabConfig) =>
+  buildLab: (topology: LabConfig, options: { replace?: boolean } = {}) =>
     request<{ lab_id: number; workspace_path: string; pid: number | null }>(
       "/labs/build",
-      { method: "POST", body: JSON.stringify({ topology }) },
+      {
+        method: "POST",
+        body: JSON.stringify({ topology, replace: options.replace ?? false }),
+      },
     ),
-  buildPreflight: () =>
+  /**
+   * Build, and if a lab with the same name is already running ask before
+   * tearing it down and starting over (the API answers 409 lab_exists).
+   */
+  buildLabConfirmed: async (topology: LabConfig) => {
+    try {
+      return await api.buildLab(topology);
+    } catch (err) {
+      const e = err as ApiError;
+      if (e?.code !== "lab_exists") throw err;
+      const ok =
+        typeof window !== "undefined" &&
+        window.confirm(
+          `${e.detail}\n\nReplace it? The running lab, its containers/VMs and its data will be destroyed first.`,
+        );
+      if (!ok) throw err;
+      return await api.buildLab(topology, { replace: true });
+    }
+  },
+  destroyLab: (labId: number, options: { force?: boolean } = {}) =>
+    request<void>(`/labs/${labId}${options.force ? "?force=true" : ""}`, {
+      method: "DELETE",
+    }),
+  buildPreflight: (provider?: string) =>
     request<{
       vagrant_available: boolean;
       vagrant_version?: string | null;
       default_provider?: string | null;
-    }>("/labs/build/preflight"),
+      virtualbox_version?: string | null;
+      vmware_available?: boolean;
+      vmware_plugin?: boolean;
+      hypervisor_present?: boolean | null;
+      host_os?: string;
+      host_arch?: string;
+      host_memory_mb?: number | null;
+      provider_problem?: { code: string; message: string } | null;
+      provider_warnings?: string[];
+      docker_available?: boolean;
+      docker_daemon?: boolean;
+      docker_version?: string | null;
+      compose_version?: string | null;
+      compose_supported?: boolean;
+      detail?: string | null;
+    }>(
+      provider
+        ? `/labs/build/preflight?provider=${encodeURIComponent(provider)}`
+        : "/labs/build/preflight",
+    ),
   buildLog: (labId: number, since: number) =>
     request<{ lines: string[]; next_offset: number; bytes_total: number }>(
       `/labs/${labId}/build/log?since=${since}`,
@@ -152,6 +414,13 @@ export const api = {
     request<BuildStatusPayload>(`/labs/${labId}/build/status`),
   buildStop: (labId: number) =>
     request<BuildStatusPayload>(`/labs/${labId}/build/stop`, { method: "POST" }),
+  haltLab: (labId: number) =>
+    request<{ id: number; status: string; provider: string }>(`/labs/${labId}/halt`, { method: "POST" }),
+  /** VM (Vagrant) labs only — suspends to disk, keeping RAM state for a fast resume. */
+  pauseLab: (labId: number) =>
+    request<{ id: number; status: string; provider: string }>(`/labs/${labId}/pause`, { method: "POST" }),
+  resumeLab: (labId: number) =>
+    request<{ id: number; status: string; provider: string }>(`/labs/${labId}/resume`, { method: "POST" }),
   buildPhases: (labId: number) =>
     request<BuildPhasesPayload>(`/labs/${labId}/build/phases`),
   getLabTopology: (labId: number) =>

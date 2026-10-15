@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
 
@@ -16,16 +16,18 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    Response,
     WebSocket,
     WebSocketDisconnect,
     status,
 )
-from labforge_schema import LabConfig
+from fastapi import Path as PathParam
+from labforge_schema import LabConfig, Provider
 from sqlmodel import Session, select
 
-from labforge_core.api.rate_limit import limit
+from labforge_core.api.rate_limit import limit, rate_limited
 from labforge_core.api.security import require_agent_token
-from labforge_core.models import Lab, LabHeartbeat, get_session
+from labforge_core.models import Lab, LabHeartbeat, get_engine, get_session
 from labforge_core.schemas.api import (
     ActivityEntry,
     BuildLogChunk,
@@ -37,21 +39,44 @@ from labforge_core.schemas.api import (
     LabCreateRequest,
     LabSummary,
 )
+from labforge_core.services import docker_runtime, hostenv, images
+from labforge_core.services import workspace as workspace_store
 from labforge_core.services.build_runner import (
+    ALL_WIFI_SCENARIOS,
+    NODE_FILES,
     BuildPrereqError,
+    DestroyFailed,
+    HaltFailed,
+    LabExistsError,
+    SubnetConflictError,
+    apply_wifi_scenario,
+    destroy_lab,
+    fetch_node_file,
+    fetch_wazuh_password,
+    halt_lab,
+    node_log,
     parse_per_vm_phases,
+    pause_lab,
     read_build_status,
     read_log_chunk,
+    resume_lab,
     start_build,
     stop_build,
-    vagrant_available,
 )
+from labforge_core.services.compose_generator import endpoints_from_workspace
 from labforge_core.services.live_bus import bus
+from labforge_core.services.template_loader import TemplateNotFound, get_template
 
 _LOGGER = logging.getLogger("labforge.labs")
 
 router = APIRouter(prefix="/labs", tags=["labs"])
+# Real ids are small positive integers; anything larger overflows SQLite and used to be a 500.
+LabId = Annotated[int, PathParam(ge=1, le=2_147_483_647)]
+
 _AUTH = [Depends(require_agent_token)]
+# Lifecycle calls shell out to Docker or Vagrant, so a loop of them can pin the machine.
+_BUILD_LIMIT = [*_AUTH, rate_limited("lab_build", capacity=6, per_seconds=60.0)]
+_LIFECYCLE_LIMIT = [*_AUTH, rate_limited("lab_lifecycle", capacity=20, per_seconds=60.0)]
 
 
 @router.get("", response_model=list[LabSummary])
@@ -84,8 +109,8 @@ def create_lab(
         provider=payload.provider,
         status="pending",
         workspace_path=payload.workspace_path,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
     )
     session.add(row)
     session.commit()
@@ -95,7 +120,7 @@ def create_lab(
 
 @router.get("/{lab_id}", response_model=LabSummary)
 def get_lab(
-    lab_id: int,
+    lab_id: LabId,
     session: Annotated[Session, Depends(get_session)],
 ) -> LabSummary:
     row = session.get(Lab, lab_id)
@@ -109,7 +134,7 @@ def get_lab(
 
 @router.patch("/{lab_id}/status", response_model=LabSummary, dependencies=_AUTH)
 def update_status(
-    lab_id: int,
+    lab_id: LabId,
     new_status: str,
     session: Annotated[Session, Depends(get_session)],
 ) -> LabSummary:
@@ -120,26 +145,45 @@ def update_status(
             detail={"detail": f"Lab {lab_id} not found", "code": "not_found"},
         )
     row.status = new_status
-    row.updated_at = datetime.utcnow()
+    row.updated_at = datetime.now(UTC)
     session.add(row)
     session.commit()
     session.refresh(row)
     return LabSummary.model_validate(row, from_attributes=True)
 
 
-@router.delete("/{lab_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=_AUTH)
+@router.delete("/{lab_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=_LIFECYCLE_LIMIT)
 def delete_lab(
-    lab_id: int,
+    lab_id: LabId,
     session: Annotated[Session, Depends(get_session)],
+    force: Annotated[
+        bool,
+        Query(description="Remove the record even if the VMs/containers could not be torn down."),
+    ] = False,
 ) -> None:
+    """Destroy a lab: remove its VMs / containers, verify, then delete the record.
+
+    Unlike a plain row delete this tears the infrastructure down first. If that
+    fails the lab is kept (status ``destroy_failed``) and a 502 explains why, so
+    nothing is orphaned silently. ``?force=true`` removes the record anyway.
+    """
     row = session.get(Lab, lab_id)
     if row is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"detail": f"Lab {lab_id} not found", "code": "not_found"},
         )
-    session.delete(row)
-    session.commit()
+    try:
+        destroy_lab(row, session, force=force)
+    except DestroyFailed as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "detail": f"Could not tear lab {lab_id} down: {exc}. "
+                "The lab was kept; fix the problem and retry, or force-delete the record.",
+                "code": "destroy_failed",
+            },
+        ) from exc
 
 
 # ---------------------------------------------------------------- heartbeat
@@ -148,7 +192,7 @@ def delete_lab(
 @limit("heartbeat", capacity=60, per_seconds=60.0)
 async def post_heartbeat(
     request: Request,
-    lab_id: int,
+    lab_id: LabId,
     payload: HeartbeatPayload,
     session: Annotated[Session, Depends(get_session)],
 ) -> LabSummary:
@@ -165,7 +209,7 @@ async def post_heartbeat(
             detail={"detail": f"Lab {lab_id} not found", "code": "not_found"},
         )
 
-    captured_at = payload.captured_at or datetime.utcnow()
+    captured_at = payload.captured_at or datetime.now(UTC)
     serialized = payload.model_dump(mode="json")
     serialized["captured_at"] = captured_at.isoformat()
     hb = LabHeartbeat(
@@ -195,7 +239,7 @@ async def post_heartbeat(
 
 @router.get("/{lab_id}/heartbeat", response_model=HeartbeatPayload)
 def latest_heartbeat(
-    lab_id: int,
+    lab_id: LabId,
     session: Annotated[Session, Depends(get_session)],
 ) -> HeartbeatPayload:
     row = session.exec(
@@ -213,7 +257,7 @@ def latest_heartbeat(
 
 @router.get("/{lab_id}/log", response_model=list[str])
 def lab_log(
-    lab_id: int,
+    lab_id: LabId,
     session: Annotated[Session, Depends(get_session)],
     lines: int = Query(default=200, ge=1, le=2000),
 ) -> list[str]:
@@ -238,13 +282,106 @@ def lab_log(
     return out[-lines:]
 
 
+def _lookup_lab(lab_id: int) -> Lab:
+    """Fetch a Lab row through a short-lived session that releases its pooled
+    connection immediately, instead of one held open (via ``Depends(get_session)``)
+    for the full duration of a slow ``vagrant ssh`` call below. Holding a pool
+    connection across a 60-90s subprocess starves the shared pool (5 + 10
+    overflow) and cascades into unrelated endpoints failing with
+    ``QueuePool ... timed out`` once a couple of these stack up against an
+    unreachable VM."""
+    with Session(get_engine()) as session:
+        lab = session.get(Lab, lab_id)
+        if lab is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lab not found")
+        session.expunge(lab)
+        return lab
+
+
+@router.get("/{lab_id}/node-log/{hostname}", response_model=list[str])
+def node_log_endpoint(
+    lab_id: LabId,
+    hostname: str,
+    service: str = Query(default="hostapd"),
+    lines: int = Query(default=100, ge=1, le=500),
+) -> list[str]:
+    """Best-effort live tail of a service's journal inside one guest VM —
+    used by the webinar dashboard to show hostapd's own log (association,
+    deauth, EAPOL activity) without wiring up a real SIEM query. Never
+    errors the request; a VM that isn't reachable yet just comes back as a
+    single explanatory line."""
+    lab = _lookup_lab(lab_id)
+    workspace = _resolve_workspace(lab)
+    out, err = node_log(workspace, hostname, lab.provider == "docker", service, lines)
+    return out if err is None else [f"[{err}]"]
+
+
+@router.get("/{lab_id}/wazuh-password/{hostname}")
+def wazuh_password_endpoint(lab_id: LabId, hostname: str) -> dict[str, object]:
+    """Read the Wazuh dashboard admin password straight off the manager VM.
+
+    Deliberately not a log lookup: the install step that generates this
+    password only ever runs once, on the VM's first `vagrant up` — asking
+    a user to go find that line in build.log breaks the moment the lab is
+    resumed/rebuilt after it already scrolled past, or the log itself was
+    rotated. This re-reads the fixed file the wazuh-manager role drops on
+    disk, live, every time it's called, so the UI's AccessPanel can just
+    offer a button instead of a "search the log" instruction that cannot
+    be guaranteed to work.
+    """
+    lab = _lookup_lab(lab_id)
+    workspace = _resolve_workspace(lab)
+    password, err = fetch_wazuh_password(workspace, hostname, lab.provider == "docker")
+    return {"ok": password is not None, "password": password, "error": err}
+
+
+@router.post("/{lab_id}/wifi-scenario/{hostname}")
+def wifi_scenario_endpoint(
+    lab_id: LabId,
+    hostname: str,
+    scenario: str = Query(description=f"One of: {', '.join(sorted(ALL_WIFI_SCENARIOS))}"),
+) -> dict[str, object]:
+    """Switch a hostapd node to a named demo scenario (open/wep/wpa2/wpa3) and
+    restart hostapd — the webinar dashboard's segment switcher. Returns
+    ``{ok, message}`` with a 200 either way; the caller checks ``ok``, since
+    a VM that isn't reachable is an expected, recoverable state here, not a
+    server error."""
+    lab = _lookup_lab(lab_id)
+    workspace = _resolve_workspace(lab)
+    ok, message = apply_wifi_scenario(workspace, hostname, lab.provider == "docker", scenario)
+    return {"ok": ok, "message": message}
+
+
+@router.get("/{lab_id}/node-file/{hostname}")
+def node_file_endpoint(
+    lab_id: LabId,
+    hostname: str,
+    file: str = Query(description=f"One of: {', '.join(sorted(NODE_FILES))}"),
+) -> Response:
+    """Download one allowlisted file out of a guest VM — today, the hostapd
+    role's rolling capture.pcap, so a webinar segment's traffic can be
+    reviewed after the fact instead of only watched scroll by in the log."""
+    if file not in NODE_FILES:
+        raise HTTPException(status_code=400, detail=f"Unknown file {file!r}")
+    lab = _lookup_lab(lab_id)
+    workspace = _resolve_workspace(lab)
+    data, err = fetch_node_file(workspace, hostname, lab.provider == "docker", NODE_FILES[file])
+    if err is not None:
+        raise HTTPException(status_code=502, detail=err)
+    return Response(
+        content=data,
+        media_type="application/vnd.tcpdump.pcap",
+        headers={"Content-Disposition": f'attachment; filename="{hostname}-{file}"'},
+    )
+
+
 # ---------------------------------------------------------------- build
 
 @router.post(
     "/build",
     response_model=BuildResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=_AUTH,
+    dependencies=_BUILD_LIMIT,
 )
 def trigger_build(
     payload: BuildRequest,
@@ -256,11 +393,34 @@ def trigger_build(
     (``GET /labs/{id}/build/log`` and ``/build/status``).
     """
     try:
-        lab, workspace = start_build(payload.topology, session)
+        lab, workspace = start_build(
+            payload.topology,
+            session,
+            replace=payload.replace,
+            publish=payload.publish,
+        )
     except BuildPrereqError as exc:
         raise HTTPException(
             status_code=status.HTTP_412_PRECONDITION_FAILED,
-            detail={"detail": str(exc), "code": "vagrant_missing"},
+            detail={"detail": str(exc), "code": exc.code},
+        ) from exc
+    except LabExistsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"detail": str(exc), "code": "lab_exists", "lab_ids": exc.lab_ids},
+        ) from exc
+    except SubnetConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"detail": str(exc), "code": "subnet_conflict"},
+        ) from exc
+    except DestroyFailed as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "detail": f"Could not replace the existing lab: {exc}",
+                "code": "destroy_failed",
+            },
         ) from exc
     pid_file = workspace / ".build.pid"
     pid = int(pid_file.read_text().strip()) if pid_file.exists() else None
@@ -282,7 +442,7 @@ def _resolve_workspace(lab: Lab) -> Path:
 
 @router.get("/{lab_id}/build/log", response_model=BuildLogChunk)
 def build_log(
-    lab_id: int,
+    lab_id: LabId,
     session: Annotated[Session, Depends(get_session)],
     since: int = Query(default=0, ge=0),
 ) -> BuildLogChunk:
@@ -299,7 +459,7 @@ def build_log(
 
 @router.get("/{lab_id}/build/status", response_model=BuildStatus)
 def build_status(
-    lab_id: int,
+    lab_id: LabId,
     session: Annotated[Session, Depends(get_session)],
 ) -> BuildStatus:
     lab = session.get(Lab, lab_id)
@@ -331,7 +491,7 @@ def build_status(
         new_status = "failed"
     if new_status is not None and new_status != lab.status:
         lab.status = new_status
-        lab.updated_at = datetime.utcnow()
+        lab.updated_at = datetime.now(UTC)
         session.add(lab)
         session.commit()
     return BuildStatus(**snap)
@@ -339,7 +499,7 @@ def build_status(
 
 @router.get("/{lab_id}/build/phases", response_model=BuildPhases)
 def build_phases(
-    lab_id: int,
+    lab_id: LabId,
     session: Annotated[Session, Depends(get_session)],
 ) -> BuildPhases:
     """Per-VM phase snapshot driven by parsing ``build.log``.
@@ -362,7 +522,7 @@ def build_phases(
 
 @router.get("/{lab_id}/topology", response_model=LabConfig)
 def get_lab_topology(
-    lab_id: int,
+    lab_id: LabId,
     session: Annotated[Session, Depends(get_session)],
 ) -> LabConfig:
     """Return the topology JSON that was frozen into the workspace.
@@ -400,10 +560,10 @@ def get_lab_topology(
 @router.post(
     "/{lab_id}/build/stop",
     response_model=BuildStatus,
-    dependencies=_AUTH,
+    dependencies=_LIFECYCLE_LIMIT,
 )
 def stop_lab_build(
-    lab_id: int,
+    lab_id: LabId,
     session: Annotated[Session, Depends(get_session)],
 ) -> BuildStatus:
     """User-initiated abort of an in-flight build.
@@ -421,45 +581,165 @@ def stop_lab_build(
     result = stop_build(workspace)
     if result["phase"] == "aborted" and lab.status == "building":
         lab.status = "failed"
-        lab.updated_at = datetime.utcnow()
+        lab.updated_at = datetime.now(UTC)
         session.add(lab)
         session.commit()
     return BuildStatus(**read_build_status(workspace))
 
 
+@router.post("/{lab_id}/halt", response_model=LabSummary, dependencies=_LIFECYCLE_LIMIT)
+def halt_lab_route(
+    lab_id: LabId,
+    session: Annotated[Session, Depends(get_session)],
+) -> LabSummary:
+    """Stop a lab's containers/VMs and keep its data, network and workspace.
+
+    Docker: ``compose stop``. Vagrant: ``vagrant halt`` (full poweroff —
+    for a faster round-trip, use POST /{lab_id}/pause instead)."""
+    lab = session.get(Lab, lab_id)
+    if lab is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": f"Lab {lab_id} not found", "code": "not_found"},
+        )
+    try:
+        halt_lab(lab, session)
+    except HaltFailed as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"detail": str(exc), "code": "halt_failed"},
+        ) from exc
+    session.refresh(lab)
+    return LabSummary.model_validate(lab, from_attributes=True)
+
+
+@router.post("/{lab_id}/pause", response_model=LabSummary, dependencies=_LIFECYCLE_LIMIT)
+def pause_lab_route(
+    lab_id: LabId,
+    session: Annotated[Session, Depends(get_session)],
+) -> LabSummary:
+    """Pause a running lab without tearing it down — available for every
+    runtime. Vagrant: ``vagrant suspend`` (RAM state saved to disk, VM
+    powered off). Docker: ``docker compose pause`` (containers frozen via
+    the cgroup freezer, stay resident in memory). Either way, POST
+    /{lab_id}/resume afterward is faster than Stop + Start."""
+    lab = session.get(Lab, lab_id)
+    if lab is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": f"Lab {lab_id} not found", "code": "not_found"},
+        )
+    try:
+        pause_lab(lab, session)
+    except HaltFailed as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"detail": str(exc), "code": "pause_failed"},
+        ) from exc
+    session.refresh(lab)
+    return LabSummary.model_validate(lab, from_attributes=True)
+
+
+@router.post("/{lab_id}/resume", response_model=LabSummary, dependencies=_BUILD_LIMIT)
+def resume_lab_route(
+    lab_id: LabId,
+    session: Annotated[Session, Depends(get_session)],
+) -> LabSummary:
+    """Start a stopped or paused lab again. Progress shows up in /build/status and /build/log."""
+    lab = session.get(Lab, lab_id)
+    if lab is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": f"Lab {lab_id} not found", "code": "not_found"},
+        )
+    try:
+        resume_lab(lab, session)
+    except BuildPrereqError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail={"detail": str(exc), "code": exc.code},
+        ) from exc
+    except HaltFailed as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"detail": str(exc), "code": "resume_failed"},
+        ) from exc
+    session.refresh(lab)
+    return LabSummary.model_validate(lab, from_attributes=True)
+
+
+@router.get("/{lab_id}/endpoints")
+def lab_endpoints(
+    lab_id: LabId,
+    session: Annotated[Session, Depends(get_session)],
+) -> list[dict[str, object]]:
+    """Addresses a running Docker lab publishes on this computer (Kibana, consoles, RDP)."""
+    lab = session.get(Lab, lab_id)
+    if lab is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": f"Lab {lab_id} not found", "code": "not_found"},
+        )
+    workspace = _resolve_workspace(lab)
+    return endpoints_from_workspace(workspace)
+
+
 @router.get("/build/preflight")
-def build_preflight() -> dict[str, object]:
+def build_preflight(
+    provider: Annotated[str | None, Query(description="Topology provider to check, e.g. virtualbox")] = None,
+    template_id: Annotated[
+        str | None, Query(description="Bundled template to report per-image readiness for")
+    ] = None,
+) -> dict[str, object]:
     """Cheap probe so the UI can disable / warn on the Build button.
 
-    Returns at minimum ``vagrant_available``. Best-effort additions:
-    ``vagrant_version`` (parsed from ``vagrant --version``), and the
-    default provider env var if one is set so the UI can call out a
-    mismatch with the topology's chosen provider.
+    ``vagrant_available`` / ``vagrant_version`` / ``default_provider`` describe
+    the VM providers; the ``docker_*`` and ``compose_*`` keys describe the
+    docker runtime. Both sets are always present so the UI can pick the check
+    that matches the topology's provider. Pass ``provider`` to also get
+    ``provider_problem`` (blocks a build) and ``provider_warnings`` (advice)
+    for that provider on this host.
     """
-    import subprocess
-
-    payload: dict[str, object] = {"vagrant_available": vagrant_available()}
-    if payload["vagrant_available"]:
-        try:
-            out = subprocess.run(
-                ["vagrant", "--version"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=False,
-            )
-            version = (out.stdout or "").strip().split()[-1] if out.stdout else None
-            payload["vagrant_version"] = version
-        except Exception:
-            payload["vagrant_version"] = None
+    status = hostenv.vm_runtime_status()
+    payload: dict[str, object] = {
+        "vagrant_available": bool(status["vagrant_version"]),
+        "vagrant_version": status["vagrant_version"],
+        "virtualbox_version": status["virtualbox_version"],
+        "virtualbox_extpack": status["virtualbox_extpack"],
+        "vmware_available": bool(status["vmware_vmrun"]),
+        "vmware_plugin": status["vmware_plugin"],
+        "hypervisor_present": status["hypervisor_present"],
+        "host_os": status["host_os"],
+        "host_arch": status["host_arch"],
+        "host_memory_mb": status["memory_mb"],
+    }
     default_provider = os.environ.get("VAGRANT_DEFAULT_PROVIDER")
     if default_provider:
         payload["default_provider"] = default_provider
+    payload.update(docker_runtime.runtime_status())
+    payload["workspace"] = workspace_store.status()
+    if template_id:
+        try:
+            payload["images"] = images.plan(get_template(template_id))
+        except TemplateNotFound:
+            raise HTTPException(
+                status_code=404,
+                detail={"detail": "Unknown template", "code": "not_found"},
+            ) from None
+    if provider:
+        try:
+            prov = Provider(provider)
+        except ValueError:
+            prov = None
+        if prov is not None:
+            problem = hostenv.provider_problem(prov, status) if prov is not Provider.DOCKER else None
+            payload["provider_problem"] = {"code": problem[0], "message": problem[1]} if problem else None
+            payload["provider_warnings"] = hostenv.provider_warnings(prov, status)
     return payload
 
 
 @router.websocket("/{lab_id}/ws")
-async def live_stream(websocket: WebSocket, lab_id: int) -> None:
+async def live_stream(websocket: WebSocket, lab_id: LabId) -> None:
     """Live telemetry stream for a single lab.
 
     The dashboard opens this on mount and consumes one JSON envelope
@@ -510,7 +790,7 @@ def recent_activity(
     limit: int = Query(default=30, ge=1, le=200),
 ) -> list[ActivityEntry]:
     """Cross-lab activity feed for the dashboard."""
-    since = datetime.utcnow() - timedelta(hours=24)
+    since = datetime.now(UTC) - timedelta(hours=24)
     rows = session.exec(
         select(LabHeartbeat, Lab)
         .where(LabHeartbeat.lab_id == Lab.id, LabHeartbeat.captured_at >= since)

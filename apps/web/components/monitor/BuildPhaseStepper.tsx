@@ -34,7 +34,16 @@ interface BuildPhaseStepperProps {
   perVm: Record<string, BuildPhase>;
   /** Overall build phase from /build/status (succeeded/failed/aborted/running/unknown). */
   overall: "running" | "succeeded" | "failed" | "aborted" | "unknown";
+  /** Docker labs pull images and wait for health checks; VM labs import boxes and provision. */
+  provider?: string;
 }
+
+const DOCKER_LABELS: Partial<Record<BuildPhase | "generate", string>> = {
+  downloading: "Pull images",
+  booting: "Start containers",
+  network: "Network",
+  provisioning: "Health checks",
+};
 
 /** Returns the lowest rank among per-VM phases — the slowest VM wins. */
 function _slowestPhaseRank(perVm: Record<string, BuildPhase>): number {
@@ -43,7 +52,7 @@ function _slowestPhaseRank(perVm: Record<string, BuildPhase>): number {
   return Math.min(...ranks);
 }
 
-export function BuildPhaseStepper({ perVm, overall }: BuildPhaseStepperProps) {
+export function BuildPhaseStepper({ perVm, overall, provider }: BuildPhaseStepperProps) {
   const slowest = _slowestPhaseRank(perVm);
   const anyFailed = Object.values(perVm).some((p) => p === "failed") || overall === "failed";
   const allReady = Object.values(perVm).length > 0 && Object.values(perVm).every((p) => p === "ready");
@@ -87,7 +96,7 @@ export function BuildPhaseStepper({ perVm, overall }: BuildPhaseStepperProps) {
                   idx + 1
                 )}
               </span>
-              {step.label}
+              {(provider === "docker" && DOCKER_LABELS[step.id]) || step.label}
             </li>
             {idx < STEPS.length - 1 && (
               <span

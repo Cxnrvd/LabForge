@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 
@@ -12,11 +13,13 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from labforge_core.api.routers import cves, generate, labs, templates, topologies
+from labforge_core.api.browser_guard import BrowserGuardMiddleware
+from labforge_core.api.routers import cves, generate, host, images, labs, templates, topologies
+from labforge_core.api.routers import settings as settings_router
 from labforge_core.logging_setup import configure_logging
 from labforge_core.models import create_db_and_tables, get_session
 from labforge_core.provisioners.role_registry import load_plugins as _load_role_plugins
-from labforge_core.services.build_runner import reconcile_orphan_builds
+from labforge_core.services.build_runner import reattach_daemons, reconcile_orphan_builds
 from labforge_core.settings import get_settings
 
 configure_logging()
@@ -89,6 +92,13 @@ def _enforce_auth_or_loopback() -> None:
 _enforce_auth_or_loopback()
 
 
+def _warm_images() -> None:
+    with suppress(Exception):
+        from labforge_core.services import images
+
+        images.list_images()
+
+
 @asynccontextmanager
 async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
     create_db_and_tables()
@@ -99,11 +109,14 @@ async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
         session = next(session_gen)
         try:
             reconcile_orphan_builds(session)
+            reattach_daemons(session)
         finally:
             with suppress(StopIteration):
                 next(session_gen)
     except Exception as exc:
         _LOGGER.warning("reconcile_failed", extra={"error": str(exc)})
+    # Warm the image catalog so the first visit to the Images page or the Launch dialog is fast.
+    threading.Thread(target=_warm_images, name="warm-images", daemon=True).start()
     yield
 
 
@@ -125,6 +138,14 @@ app.add_middleware(
     # under spec, and surfaces accidentally-exposed methods.
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept", "Origin"],
+)
+
+
+# Added last so it runs first, before CORS and routing.
+app.add_middleware(
+    BrowserGuardMiddleware,
+    allowed_hosts=settings.allowed_hosts,
+    allowed_origins=settings.cors_origins,
 )
 
 
@@ -170,3 +191,6 @@ app.include_router(templates.router, prefix=API_PREFIX)
 app.include_router(generate.router, prefix=API_PREFIX)
 app.include_router(cves.router, prefix=API_PREFIX)
 app.include_router(labs.router, prefix=API_PREFIX)
+app.include_router(host.router, prefix=API_PREFIX)
+app.include_router(images.router, prefix=API_PREFIX)
+app.include_router(settings_router.router, prefix=API_PREFIX)

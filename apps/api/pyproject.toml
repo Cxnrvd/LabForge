@@ -6,7 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
-    "sqlmodel>=0.0.22",
+    "sqlmodel>=0.0.22,<0.0.40",  # 0.0.4x rejects the naive datetimes the models store
     "pydantic>=2.7.0",
     "pydantic-settings>=2.4.0",
     "jinja2>=3.1.4",
@@ -14,7 +14,10 @@ dependencies = [
     "python-multipart>=0.0.9",
     "pyyaml>=6.0",
     "websockets>=12.0",
+    "psutil>=5.9",
     "labforge-schema",
+    # The build runner spawns the heartbeat daemon with this interpreter.
+    "labforge-agent",
 ]
 
 [project.optional-dependencies]
@@ -24,6 +27,7 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "respx>=0.21.0",
+    "httpx2>=2.0.0",
     "httpx>=0.27.0",
     "ruff>=0.6.0",
     "mypy>=1.11.0",
@@ -32,6 +36,7 @@ dev = [
 
 [tool.uv.sources]
 labforge-schema = { path = "../../packages/schema/python", editable = true }
+labforge-agent = { path = "../../packages/agent", editable = true }
 
 [build-system]
 requires = ["hatchling"]
@@ -43,6 +48,8 @@ packages = ["labforge_core"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# Container-side role scripts: standalone programs that ship into Docker images.
+extend-exclude = ["labforge_core/docker_roles"]
 
 [tool.ruff.lint]
 select = [
@@ -67,7 +74,19 @@ ignore = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    # SQLAlchemy/SQLite connections sometimes get garbage-collected slightly
+    # after the test (and its own engine.dispose()) that created them — pytest
+    # then attributes the resulting "unraisable exception" GC warning to
+    # whichever *later* test happened to be running, which is exactly the
+    # flaky-attribution case pytest's own docs warn about for this warning
+    # class. Treat it as informational, not a failure.
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+]
+markers = [
+    "docker_role: renders a role's provisioner script and actually runs it in a throwaway Linux container — real package installs and service starts, not just Jinja rendering. Needs Docker; excluded from the default run (see tests/test_role_scripts_docker.py).",
+]
 
 [tool.mypy]
 python_version = "3.12"

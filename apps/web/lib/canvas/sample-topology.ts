@@ -13,7 +13,7 @@ export const SAMPLE_TOPOLOGY: LabConfig = {
   name: "Quickstart",
   description: "Sample lab pre-loaded on your first visit. Edit it freely.",
   network_cidr: "192.168.56.0/24",
-  provider: "virtualbox",
+  provider: "docker",
   version: "1.0",
   zones: [
     {
@@ -43,6 +43,7 @@ export const SAMPLE_TOPOLOGY: LabConfig = {
         credentials: { username: "kali", password: "kali" },
         vlan: null,
         gateway: null,
+        gui: false,
       },
       attack_tags: [],
     },
@@ -62,6 +63,7 @@ export const SAMPLE_TOPOLOGY: LabConfig = {
         credentials: { username: "admin", password: "Pf!Lab2025" },
         vlan: null,
         gateway: null,
+        gui: false,
       },
       attack_tags: [],
     },
@@ -81,6 +83,7 @@ export const SAMPLE_TOPOLOGY: LabConfig = {
         credentials: { username: "vagrant", password: "vagrant" },
         vlan: null,
         gateway: null,
+        gui: false,
       },
       attack_tags: [],
     },

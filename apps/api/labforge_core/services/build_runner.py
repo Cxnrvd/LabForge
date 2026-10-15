@@ -1,21 +1,36 @@
 """In-app Build Lab runner.
 
 The web Build button POSTs the canvas topology here. We:
-  1. Generate the Vagrant bundle straight to disk (no zip round-trip).
-  2. Register a Lab row.
-  3. Spawn ``vagrant up`` as a detached subprocess writing combined
-     stdout+stderr to ``<workspace>/build.log``. A sentinel file
-     ``.build.exit`` carries the eventual exit code.
-  4. Spawn the heartbeat daemon so the dashboard sees per-VM state once
-     VMs come up.
+  1. Create the Lab row first, so the lab id (not its name) keys everything
+     that follows: workspace directory, Compose project, process sentinels.
+  2. Generate the bundle straight to disk (no zip round-trip): a Vagrantfile
+     for the VM providers, a docker-compose project for ``provider: docker``.
+  3. Spawn ``vagrant up`` / ``docker compose up --wait`` as a detached
+     subprocess writing combined stdout+stderr to ``<workspace>/build.log``.
+     A sentinel file ``.build.exit`` carries the eventual exit code.
+  4. Spawn the heartbeat daemon so the dashboard sees per-VM / per-container
+     state once things come up.
 
 The runner returns immediately. The /labs/{id}/build/log endpoint tails
 the log; the /labs/{id}/build/status endpoint reads the sentinel.
+
+Lifecycle rules
+---------------
+* A workspace belongs to exactly one lab row and is never reused, so a second
+  Build can no longer wipe the directory a running build is still using.
+* Building a topology whose name matches a live lab is refused (``LabExistsError``)
+  unless the caller asks to ``replace`` it, which performs a real teardown first.
+* ``destroy_lab`` removes the VMs/containers first, verifies they are gone, and
+  only then deletes the workspace. If teardown fails the lab is kept so the user
+  can see it and retry.
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
 import contextlib
+import json
 import logging
 import os
 import re
@@ -24,27 +39,88 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
-from labforge_schema import LabConfig
+from labforge_schema import LabConfig, Provider
 from sqlmodel import Session, select
 
 from labforge_core.models import Lab
-from labforge_core.services.generator import generate_artifacts, vagrant_provider_name
+from labforge_core.services import boxes, docker_runtime, hostenv, images, preflight
+from labforge_core.services import workspace as workspace_store
+from labforge_core.services.compose_generator import (
+    build_bundle,
+    coverage_from_fallback_notes,
+    has_windows_guests,
+    host_port_free,
+    project_name,
+)
+from labforge_core.services.generator import BOX_MAP, generate_artifacts, vagrant_provider_name
 from labforge_core.settings import get_settings
 
 BUILD_LOG = "build.log"
 BUILD_EXIT = ".build.exit"
 BUILD_PID = ".build.pid"
 BUILD_ABORTED = ".build.aborted"
+DAEMON_PID = ".labforge-daemon.pid"
+
+# Lab statuses that mean "something may be running or still starting".
+ACTIVE_STATUSES = ("building", "running", "partial")
 
 _LOGGER = logging.getLogger("labforge.build_runner")
 
+# Serialises "is there already a live lab with this name? -> create the row".
+# The API runs as one process, so a process-local lock is enough.
+_CREATE_LOCK = threading.Lock()
+_LAB_LOCKS: dict[int, threading.Lock] = {}
+_LAB_LOCKS_GUARD = threading.Lock()
+
+
+def _lab_lock(lab_id: int) -> threading.Lock:
+    with _LAB_LOCKS_GUARD:
+        return _LAB_LOCKS.setdefault(lab_id, threading.Lock())
+
 
 class BuildPrereqError(RuntimeError):
-    """Vagrant isn't installed / wrong version / etc."""
+    """Vagrant/Docker isn't installed, not running, wrong version, etc."""
+
+    def __init__(self, message: str, code: str = "vagrant_missing") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class LabExistsError(RuntimeError):
+    """A live lab already exists for this topology name."""
+
+    def __init__(self, lab_ids: list[int], name: str) -> None:
+        super().__init__(
+            f"A lab named '{name}' already exists (id {', '.join(map(str, lab_ids))}). "
+            "Destroy it first, or build with replace to tear it down and start over."
+        )
+        self.lab_ids = lab_ids
+
+
+class SubnetConflictError(RuntimeError):
+    """The lab network overlaps one that already exists on the Docker host."""
+
+
+class HaltFailed(RuntimeError):
+    """Stopping or resuming a lab failed; the message says why."""
+
+
+class DestroyFailed(RuntimeError):
+    """Teardown could not be verified; the lab was left in place."""
+
+
+def _utcnow() -> datetime:
+    """Aware UTC now, without the deprecated ``datetime.utcnow()`` call.
+
+    The DB column type (``UTCDateTime``) rejects naive datetimes, so this must stay aware."""
+    return datetime.now(UTC)
 
 
 def _slug(name: str) -> str:
@@ -55,21 +131,57 @@ def vagrant_available() -> bool:
     return shutil.which("vagrant") is not None
 
 
-def _write_artifacts(topology: LabConfig, workspace: Path) -> None:
-    artifacts = generate_artifacts(topology)
+def runtime_of(workspace: Path) -> str:
+    """``"docker"`` or ``"vagrant"``, decided by what is in the workspace."""
+    return "docker" if docker_runtime.is_docker_workspace(workspace) else "vagrant"
+
+
+def _write_artifacts(
+    topology: LabConfig, workspace: Path, box_overrides: dict | None = None
+) -> list[str]:
+    """Write the Vagrant project; returns the generator's warnings (roles with no curated
+    installer, CVEs that are a stub or notes-only), the same shape as _write_docker_bundle's."""
+    artifacts = generate_artifacts(topology, box_overrides=box_overrides)
     workspace.mkdir(parents=True, exist_ok=True)
-    (workspace / "Vagrantfile").write_text(artifacts.vagrantfile, encoding="utf-8")
+    # LF endings everywhere: these scripts run inside Linux guests, where a
+    # CRLF shebang fails with "bad interpreter", even if the API runs on Windows.
+    hostenv.write_guest_file(workspace / "Vagrantfile", artifacts.vagrantfile)
     provision_dir = workspace / "provision"
     provision_dir.mkdir(exist_ok=True)
     for filename, body in artifacts.provisioner_scripts.items():
-        (provision_dir / filename).write_text(body, encoding="utf-8")
+        hostenv.write_guest_file(provision_dir / filename, body)
     if artifacts.hosts_file:
-        (workspace / "hosts").write_text(artifacts.hosts_file, encoding="utf-8")
+        hostenv.write_guest_file(workspace / "hosts", artifacts.hosts_file)
     if artifacts.readme:
-        (workspace / "README.md").write_text(artifacts.readme, encoding="utf-8")
-    (workspace / "topology.json").write_text(
-        topology.model_dump_json(indent=2), encoding="utf-8"
-    )
+        hostenv.write_guest_file(workspace / "README.md", artifacts.readme)
+    hostenv.write_guest_file(workspace / "topology.json", topology.model_dump_json(indent=2))
+    return artifacts.warnings
+
+
+def _write_docker_bundle(
+    topology: LabConfig, workspace: Path, *, project: str, publish: str
+) -> tuple[list[str], dict[str, object]]:
+    """Write the compose project; returns the generator's warnings and the node-coverage summary
+    (compose_generator.coverage_from_fallback_notes) — which nodes this exact build includes,
+    separate from the general warnings list so the caller can make it impossible to miss."""
+    files, artifacts = build_bundle(topology, publish=publish, project=project, port_free=host_port_free)
+    coverage = coverage_from_fallback_notes(topology, artifacts.fallback_notes)
+    workspace.mkdir(parents=True, exist_ok=True)
+    for rel, content in files.items():
+        target = workspace / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        hostenv.write_guest_file(target, content, rel)
+    # Windows guests whose installer is already downloaded start from a copy of it.
+    seeds_path = workspace / ".labforge-seeds.json"
+    existing = json.loads(seeds_path.read_text(encoding="utf-8")) if seeds_path.exists() else []
+    try:
+        extra = images.base_seeds(topology, project, existing)
+    except Exception:
+        _LOGGER.warning("base_seed_lookup_failed", exc_info=True)
+        extra = []
+    if extra:
+        hostenv.write_guest_file(seeds_path, json.dumps([*existing, *extra], indent=2), ".labforge-seeds.json")
+    return artifacts.warnings, coverage
 
 
 def _shim_dir() -> Path:
@@ -84,45 +196,41 @@ def _shim_dir() -> Path:
     return d
 
 
-def _spawn_vagrant_up(workspace: Path, provider: str) -> int:
-    """Detach `vagrant up --provider <provider>` so the handler can return.
+def _spawn_build(workspace: Path, argv: list[str], *, banner: str, env_extra: dict[str, str] | None = None) -> int:
+    """Detach ``argv`` (``vagrant up ...`` / ``docker compose up ...``).
 
-    The provider is forced both via the CLI flag and by setting
-    ``VAGRANT_DEFAULT_PROVIDER`` in the spawned env, so a stale system
-    default (e.g. ``vmware_desktop``) can't silently win.
+    The shim runs the command, captures its exit code, and writes the
+    ``.build.exit`` sentinel however the command ends. Output goes to
+    ``build.log``.
     """
     log_path = workspace / BUILD_LOG
     log_path.write_text(
-        (
-            f"--- vagrant up start {datetime.utcnow().isoformat()} ---\n"
-            f"--- provider={provider} ---\n"
-        ),
+        f"--- build start {_utcnow().isoformat()} ---\n{banner}\n",
         encoding="utf-8",
     )
     fh = log_path.open("a", encoding="utf-8", buffering=1)  # line-buffered
 
-    # On POSIX `start_new_session=True` detaches; on Windows we use the
-    # CREATE_NEW_PROCESS_GROUP flag for the same effect.
+    # On POSIX `start_new_session=True` detaches. On Windows use a new process
+    # group plus a hidden console (CREATE_NO_WINDOW): unlike DETACHED_PROCESS,
+    # the console children (vagrant, VBoxManage, docker) then inherit it instead
+    # of each opening a visible window.
     creationflags = 0
-    if os.name == "nt":
-        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
-        creationflags |= 0x00000008  # DETACHED_PROCESS
+    if hostenv.is_windows():
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | 0x08000000  # type: ignore[attr-defined]
 
-    # Drop the shim outside the workspace so the artifact dir stays
-    # clean. One shim file per workspace slug is enough.
     shim_name = f"build_shim_{_slug(workspace.name)}_{int(time.time())}.py"
     shim = _shim_dir() / shim_name
     shim.write_text(_BUILD_SHIM, encoding="utf-8")
 
-    env = {**os.environ, "VAGRANT_DEFAULT_PROVIDER": provider}
+    env = {**os.environ, **(env_extra or {})}
 
     proc = subprocess.Popen(
-        [sys.executable, str(shim), str(workspace), provider],
+        [sys.executable, str(shim), str(workspace), json.dumps(argv)],
         cwd=str(workspace),
         stdout=fh,
         stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL,
-        start_new_session=os.name != "nt",
+        start_new_session=not hostenv.is_windows(),
         creationflags=creationflags,
         env=env,
     )
@@ -130,19 +238,35 @@ def _spawn_vagrant_up(workspace: Path, provider: str) -> int:
     return proc.pid
 
 
-# Shim that runs `vagrant up --provider <provider>`, captures the exit
-# code, and writes the sentinel file regardless of how vagrant terminates.
-# Lives in a temp dir so the workspace stays free of build scaffolding.
-_BUILD_SHIM = '''\
-import os, subprocess, sys, time
+# Shim that runs the build command, captures the exit code, and writes the
+# sentinel file regardless of how the command terminates. Lives in a temp dir
+# so the workspace stays free of build scaffolding.
+_BUILD_SHIM = '''import json, os, re, subprocess, sys, time
+# Windows gives a redirected-to-file stdout the OS ANSI codepage (cp1252) by
+# default, not UTF-8 — any non-ASCII byte a child process prints (vagrant,
+# apt, dpkg locale strings, box messages) then raises UnicodeEncodeError and
+# kills the whole shim mid-build, even though provisioning itself succeeded.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 ws = sys.argv[1]
-provider = sys.argv[2] if len(sys.argv) > 2 else "virtualbox"
+argv = json.loads(sys.argv[2])
 exit_path = os.path.join(ws, ".build.exit")
+# docker pull prints one progress line per layer every few hundred ms, which buries the
+# useful lines in tens of KB of noise. Keep one of them every 10 seconds.
+progress = re.compile(r"^[ \t]*[0-9a-f]{12}[ \t]+(Downloading|Extracting|Pulling fs layer|Waiting|Download complete|Verifying Checksum)")
 try:
-    rc = subprocess.call(
-        ["vagrant", "up", "--provider", provider],
-        cwd=ws,
-    )
+    proc = subprocess.Popen(argv, cwd=ws, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, encoding="utf-8", errors="replace", bufsize=1)
+    last = 0.0
+    for line in proc.stdout:
+        if progress.match(line):
+            now = time.time()
+            if now - last < 10:
+                continue
+            last = now
+        sys.stdout.write(line)
+        sys.stdout.flush()
+    rc = proc.wait()
 except FileNotFoundError:
     rc = 127
 except Exception as exc:
@@ -153,60 +277,950 @@ with open(exit_path, "w", encoding="utf-8") as fh:
 '''
 
 
-def start_build(
-    topology: LabConfig,
-    session: Session,
-    workspace_root: Path | None = None,
-) -> tuple[Lab, Path]:
-    """Synchronously: generate bundle + create Lab row + spawn vagrant up.
+def _log_reuse(topology: LabConfig, workspace: Path) -> None:
+    """Say in the build log what was already on this computer and what is being fetched.
 
-    Returns the persisted Lab and the workspace path. Raises BuildPrereqError
-    if vagrant isn't installed.
+    The fetching itself is Compose's job (it only pulls images that are missing) and, for Windows
+    guests, the seeding step; this makes the decision visible.
     """
-    if not vagrant_available():
-        raise BuildPrereqError(
-            "vagrant is not on PATH on the API host — install Vagrant 2.4+ first"
-        )
-    settings = get_settings()
-    root = workspace_root or settings.workspace_root
-    slug = _slug(topology.name)
-    workspace = root / slug
-    if workspace.exists() and any(workspace.iterdir()):
-        # Same convention the CLI uses: re-build wipes the previous one.
-        # The heartbeat daemon, if any, will exit cleanly because the dir
-        # disappears for a moment.
-        shutil.rmtree(workspace)
-    _write_artifacts(topology, workspace)
+    try:
+        plan = images.plan(topology)
+    except Exception:
+        _LOGGER.warning("image_plan_failed", exc_info=True)
+        return
+    with (workspace / BUILD_LOG).open("a", encoding="utf-8") as fh:
+        fh.write(f"[labforge] reusing {len(plan['present_ids'])} image(s) already on this computer\n")
+        if plan["missing_ids"]:
+            fh.write(
+                f"[labforge] fetching {len(plan['missing_ids'])} missing item(s), about {plan['download_mb']} MB: "
+                + ", ".join(plan["missing_ids"])
+                + "\n"
+            )
+        else:
+            fh.write("[labforge] nothing to download\n")
 
-    lab = Lab(
-        topology_slug=slug,
-        name=topology.name,
-        provider=topology.provider.value,
-        status="building",
-        workspace_path=str(workspace),
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
-    )
-    session.add(lab)
-    session.commit()
-    session.refresh(lab)
 
-    pid = _spawn_vagrant_up(workspace, vagrant_provider_name(topology.provider))
-    # Spawn the heartbeat daemon so once VMs come up the dashboard
-    # populates without the user having to run `labforge run` in parallel.
+def _spawn_daemon(lab: Lab, workspace: Path) -> None:
+    """Heartbeat daemon, best effort: the build proceeds without it."""
     try:
         from labforge_agent import daemon as _daemon
 
         _daemon.spawn_detached(
             lab_id=lab.id or 0,
             workspace=workspace,
-            api_base="http://127.0.0.1:8000",
+            api_base=f"http://127.0.0.1:{os.environ.get('LABFORGE_API_PORT', '8000')}",
+            api_token=get_settings().agent_token,
         )
     except Exception:
-        # Heartbeat is best-effort; the build still proceeds without it.
-        pass
-    print(f"[build_runner] vagrant up pid={pid} workspace={workspace}", flush=True)
-    return lab, workspace
+        _LOGGER.warning("heartbeat_daemon_spawn_failed", exc_info=True)
+
+
+def _live_labs_named(session: Session, slug: str) -> list[Lab]:
+    rows = session.exec(select(Lab).where(Lab.topology_slug == slug)).all()
+    # A stopped lab still owns its network, volumes and subnet.
+    return [row for row in rows if row.status in (*ACTIVE_STATUSES, "stopped")]
+
+
+@dataclass
+class BuildResult:
+    lab: Lab
+    workspace: Path
+    warnings: list[str]
+
+
+def start_build(
+    topology: LabConfig,
+    session: Session,
+    workspace_root: Path | None = None,
+    *,
+    replace: bool = False,
+    publish: str = "loopback",
+) -> tuple[Lab, Path]:
+    """Create the lab, write its bundle and start the build.
+
+    Returns the persisted Lab and its workspace. Raises:
+
+    * ``BuildPrereqError`` if Vagrant / Docker is unavailable,
+    * ``LabExistsError`` if a live lab with this name exists and ``replace`` is false,
+    * ``SubnetConflictError`` if a docker lab's network overlaps an existing one,
+    * ``DestroyFailed`` if ``replace`` could not tear the old lab down.
+    """
+    result = start_build_detailed(
+        topology, session, workspace_root, replace=replace, publish=publish
+    )
+    return result.lab, result.workspace
+
+
+def start_build_detailed(
+    topology: LabConfig,
+    session: Session,
+    workspace_root: Path | None = None,
+    *,
+    replace: bool = False,
+    publish: str = "loopback",
+) -> BuildResult:
+    use_docker = topology.provider is Provider.DOCKER
+    if use_docker:
+        problem = docker_runtime.prereq_problem() or preflight.blocking_problem(topology)
+        if problem:
+            raise BuildPrereqError(problem[1], problem[0])
+    else:
+        vm_problem = hostenv.provider_problem(topology.provider)
+        if vm_problem:
+            raise BuildPrereqError(vm_problem[1], vm_problem[0])
+
+    if workspace_root is not None:
+        root = workspace_root
+    else:
+        try:
+            root = workspace_store.require_usable()
+        except workspace_store.WorkspaceError as exc:
+            raise BuildPrereqError(str(exc), exc.code) from exc
+    slug = _slug(topology.name)
+
+    if replace:
+        # Real teardown of every lab built from this topology name, outside
+        # the create lock because it can take a while.
+        for old in session.exec(select(Lab).where(Lab.topology_slug == slug)).all():
+            destroy_lab(old, session)
+
+    with _CREATE_LOCK:
+        live = _live_labs_named(session, slug)
+        if live:
+            raise LabExistsError([lab.id or 0 for lab in live], topology.name)
+        lab = Lab(
+            topology_slug=slug,
+            name=topology.name,
+            provider=topology.provider.value,
+            status="building",
+            workspace_path=None,
+            created_at=_utcnow(),
+            updated_at=_utcnow(),
+        )
+        session.add(lab)
+        session.commit()
+        session.refresh(lab)
+        # Immutable workspace key: the lab id. The name only decorates it.
+        workspace = root / f"{slug}-{lab.id}"
+        lab.workspace_path = str(workspace)
+        session.add(lab)
+        session.commit()
+
+    warnings: list[str] = []
+    try:
+        project = project_name(f"lf{lab.id}-{slug}")
+        if use_docker:
+            conflicts = docker_runtime.subnet_conflicts(topology.network_cidr, own_project=project)
+            if conflicts:
+                raise SubnetConflictError(
+                    f"The lab network {topology.network_cidr} overlaps "
+                    + "; ".join(conflicts)
+                    + ". Change the network CIDR or destroy the other lab."
+                )
+            warnings, node_coverage = _write_docker_bundle(topology, workspace, project=project, publish=publish)
+            # A Windows guest downloads and installs Windows on its first start.
+            wait = 5400 if has_windows_guests(topology) else 900
+            argv = docker_runtime.up_command(project, wait_timeout=wait, workspace=workspace)
+            banner = f"--- runtime=docker project={project} ---"
+            env_extra = None
+        else:
+            node_coverage = None
+            provider = vagrant_provider_name(topology.provider)
+            try:
+                resolved = boxes.resolve_boxes(topology, provider, BOX_MAP)
+            except boxes.BoxUnavailable as exc:
+                raise BuildPrereqError(str(exc), "box_unavailable") from exc
+            warnings = [
+                *resolved.warnings,
+                *hostenv.provider_warnings(topology.provider),
+                *hostenv.resource_warnings(topology, root),
+            ]
+            clash = hostenv.host_ip_conflicts(topology.network_cidr)
+            if clash:
+                warnings.append(
+                    f"This computer already has address(es) {', '.join(clash)} inside the lab network "
+                    f"{topology.network_cidr}. Pick a different network CIDR if VMs are unreachable."
+                )
+            warnings.extend(_write_artifacts(topology, workspace, resolved.overrides))
+            argv = ["vagrant", "up", "--provider", provider]
+            banner = f"--- runtime=vagrant provider={provider} ---"
+            env_extra = {"VAGRANT_DEFAULT_PROVIDER": provider}
+        for warning in warnings:
+            _LOGGER.info("compose_warning lab=%s %s", lab.id, warning)
+        pid = _spawn_build(workspace, argv, banner=banner, env_extra=env_extra)
+        skipped = cast(
+            "list[dict[str, object]]", node_coverage["skipped"] if node_coverage else []  # type: ignore[index]
+        )
+        if skipped or warnings:
+            with (workspace / BUILD_LOG).open("a", encoding="utf-8") as fh:
+                if skipped:
+                    built, total = node_coverage["built"], node_coverage["total"]  # type: ignore[index]
+                    fh.write(
+                        f"[labforge] NOTE: {built} of {total} nodes will run. "
+                        f"{len(skipped)} cannot run on Docker:\n"
+                    )
+                    for s in skipped:
+                        fh.write(f"[labforge]   - {s['hostname']}: {s['reason']}\n")
+                fh.writelines(f"[labforge] warning: {w}\n" for w in warnings)
+        _log_reuse(topology, workspace)
+    except Exception:
+        # Never leave a half-created lab behind: drop the row and any files.
+        session.delete(lab)
+        session.commit()
+        shutil.rmtree(workspace, ignore_errors=True)
+        raise
+
+    _spawn_daemon(lab, workspace)
+    print(f"[build_runner] {banner} pid={pid} workspace={workspace}", flush=True)
+    return BuildResult(lab=lab, workspace=workspace, warnings=warnings)
+
+
+# ------------------------------------------------------------------ destroy
+
+
+def _stop_daemon(workspace: Path) -> None:
+    with contextlib.suppress(Exception):
+        from labforge_agent import daemon as _daemon
+
+        _daemon.request_stop(workspace)
+    pid_file = workspace / DAEMON_PID
+    if pid_file.exists():
+        with contextlib.suppress(ValueError, OSError):
+            pid = int(pid_file.read_text().strip())
+            if pid > 0 and is_pid_alive(pid):
+                os.kill(pid, signal.SIGTERM)
+
+
+def _vagrant_teardown(workspace: Path) -> str | None:
+    """Return an error string, or ``None`` on success."""
+    if not vagrant_available():
+        return "vagrant is not on PATH, so the VMs cannot be destroyed"
+    try:
+        proc = subprocess.run(
+            ["vagrant", "destroy", "-f"],
+            cwd=str(workspace),
+            capture_output=True,
+            text=True, errors="replace",
+            timeout=600,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return "vagrant destroy timed out after 10 minutes"
+    except OSError as exc:
+        return f"could not run vagrant: {exc}"
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout).strip().splitlines()[-3:]
+        return f"vagrant destroy exited {proc.returncode}: {' | '.join(tail)}"
+    return None
+
+
+# Services the webinar dashboard's live-log tab is allowed to tail inside a
+# guest. Kept to a tiny allowlist because the service name is spliced into a
+# remote shell string for ``vagrant ssh -c`` — never take it from the request
+# unchecked. freeradius and labforge-captive-portal were added alongside
+# those roles — found missing here (silently rejecting the dashboard's own
+# RADIUS log panel) during a real end-to-end run against actual VMs.
+NODE_LOG_SERVICES = {"hostapd", "dnsmasq", "wazuh-agent", "freeradius", "labforge-captive-portal"}
+
+
+# ---------------------------------------------------------------- fast guest exec
+#
+# `vagrant ssh` pays Ruby/Vagrant startup (plus the VMware plugin's own probes)
+# on every call: ~25s per scenario click on this host. The VM's SSH endpoint is
+# a stable NAT forward, so resolve it once with `vagrant ssh-config`, cache it,
+# and talk to the guest with plain ssh (~0.3s). Any failure falls back to
+# `vagrant ssh`, so this is purely an accelerator.
+
+_SSH_CACHE_FILE = ".labforge-ssh.json"
+
+
+def _ssh_info(workspace: Path, hostname: str, *, refresh: bool = False) -> dict | None:
+    cache_path = workspace / _SSH_CACHE_FILE
+    cache: dict = {}
+    if cache_path.exists() and not refresh:
+        try:
+            cache = json.loads(cache_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            cache = {}
+        if hostname in cache:
+            return cache[hostname]
+    if not vagrant_available():
+        return None
+    try:
+        proc = subprocess.run(
+            ["vagrant", "ssh-config", hostname], cwd=str(workspace), capture_output=True,
+            text=True, errors="replace", timeout=90, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    fields: dict[str, str] = {}
+    for line in proc.stdout.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) == 2:
+            fields[parts[0]] = parts[1].strip().strip('"')
+    if not {"HostName", "Port", "User", "IdentityFile"} <= fields.keys():
+        return None
+    info = {k: fields[k] for k in ("HostName", "Port", "User", "IdentityFile")}
+    cache[hostname] = info
+    with contextlib.suppress(OSError):
+        cache_path.write_text(json.dumps(cache), encoding="utf-8")
+    return info
+
+
+def guest_exec(workspace: Path, hostname: str, script: str, timeout: int = 60) -> subprocess.CompletedProcess:
+    """Run a bash script in a guest. Fast direct ssh first, `vagrant ssh` as the fallback."""
+    ssh = shutil.which("ssh")
+    if ssh:
+        for attempt in (0, 1):
+            info = _ssh_info(workspace, hostname, refresh=bool(attempt))
+            if not info:
+                break
+            argv = [
+                ssh, "-i", info["IdentityFile"], "-p", info["Port"],
+                "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=NUL",
+                "-o", "BatchMode=yes", "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=5",
+                f"{info['User']}@{info['HostName']}",
+                # Script travels as one base64 argument, not on stdin: commands
+                # inside it (sudo tee ...) would otherwise swallow the rest of it.
+                f"bash -c \"$(echo {base64.b64encode(script.encode()).decode()} | base64 -d)\"",
+            ]
+            try:
+                proc = subprocess.run(
+                    argv, capture_output=True, text=True,
+                    errors="replace", timeout=timeout, check=False,
+                )
+            except subprocess.TimeoutExpired:
+                raise
+            except OSError:
+                break
+            if proc.returncode != 255:  # 255 = ssh itself could not connect
+                return proc
+    return subprocess.run(
+        ["vagrant", "ssh", hostname, "-c", script], cwd=str(workspace), capture_output=True,
+        text=True, errors="replace", timeout=max(timeout, 90), check=False,
+    )
+
+
+def node_log(
+    workspace: Path, hostname: str, use_docker: bool, service: str, tail: int,
+) -> tuple[list[str], str | None]:
+    """Best-effort ``journalctl -u <service>`` tail from inside a running guest.
+
+    Returns ``(lines, error)`` — never raises. A VM that isn't up yet, a
+    missing CLI, or a bad hostname all come back as an error string the
+    caller can surface inline instead of failing the request outright.
+    """
+    if service not in NODE_LOG_SERVICES:
+        return [], f"service {service!r} is not on the allowed list"
+    if use_docker:
+        argv = [
+            "docker", "compose", "exec", "-T", hostname,
+            "journalctl", "-u", service, "--no-pager", "-n", str(tail),
+        ]
+    else:
+        if not vagrant_available():
+            return [], "vagrant is not on PATH"
+        argv = None
+    try:
+        if argv is None:
+            # The vagrant user isn't in the adm/systemd-journal groups, so
+            # plain journalctl silently returns "No entries" for another
+            # service's logs — needs sudo (passwordless by default on every
+            # Vagrant box this generator targets).
+            proc = guest_exec(
+                workspace, hostname, f"sudo journalctl -u {service} --no-pager -n {tail} 2>&1", timeout=60
+            )
+        else:
+            proc = subprocess.run(
+                argv, cwd=str(workspace), capture_output=True, text=True,
+                errors="replace", timeout=60, check=False,
+            )
+    except subprocess.TimeoutExpired:
+        return [], "timed out reaching the guest"
+    except OSError as exc:
+        return [], str(exc)
+    if proc.returncode != 0 and not proc.stdout.strip():
+        tail_err = (proc.stderr or "").strip().splitlines()[-2:]
+        return [], f"exited {proc.returncode}: {' | '.join(tail_err) or 'no output'}"
+    return proc.stdout.splitlines(), None
+
+
+def fetch_wazuh_password(workspace: Path, hostname: str, use_docker: bool) -> tuple[str | None, str | None]:
+    """Read the Wazuh dashboard admin password straight off the manager VM.
+
+    Returns ``(password, error)`` — never raises. Deliberately NOT a log
+    search: the wazuh-manager role's install step only ever runs once (the
+    VM's first `vagrant up`), so a password that only ever reached
+    build.log is unrecoverable the moment that one-time output scrolls
+    past or the log gets rotated/truncated by a later pause/resume. This
+    instead re-reads the fixed file the role also drops on disk
+    (/var/log/labforge-wazuh-password), which exists for as long as the
+    VM itself does — fetchable on demand, not dependent on anything
+    having been logged at all.
+    """
+    cat_cmd = "sudo cat /var/log/labforge-wazuh-password 2>&1"
+    if use_docker:
+        argv = ["docker", "compose", "exec", "-T", hostname, "sh", "-c", cat_cmd]
+        try:
+            proc = subprocess.run(
+                argv, cwd=str(workspace), capture_output=True, text=True,
+                errors="replace", timeout=20, check=False,
+            )
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            return None, str(exc)
+    else:
+        if not vagrant_available():
+            return None, "vagrant is not on PATH"
+        try:
+            proc = guest_exec(workspace, hostname, cat_cmd, timeout=20)
+        except subprocess.TimeoutExpired:
+            return None, "timed out reaching the guest"
+    out = (proc.stdout or "").strip()
+    if proc.returncode != 0 or not out:
+        return None, "not available yet — the VM may still be provisioning, or isn't up"
+    return out, None
+
+
+# The security-relevant tail of a hostapd.conf for each demo segment — the
+# interface/driver/ssid/logging lines come from whatever the hostapd role
+# already wrote, so switching scenarios never has to re-detect the adapter.
+WIFI_SCENARIOS: dict[str, str] = {
+    "open": "hw_mode=g\nchannel=6\n",
+    # hostapd requires an ASCII WEP key to be quoted — unquoted, it tries to
+    # parse the text as hex digits and rejects it as "invalid WEP key".
+    "wep": 'hw_mode=g\nchannel=6\nwep_default_key=0\nwep_key0="LabForgeWEP01"\n',
+    # WPS is bundled into the WPA2 scenario rather than its own button —
+    # WPS-on-WPA2-Personal is the common real-world pairing (most
+    # consumer routers ship exactly this combo), and segment 5's WPS
+    # process needs an AP that actually advertises it to have anything to
+    # attack at all. hostapd needs the full device-identity block below for
+    # WPS to activate, not just wps_state — verified: without
+    # uuid/device_name/config_methods/eap_server, `wash` sees nothing here.
+    "wpa2": (
+        "hw_mode=g\nchannel=6\nwpa=2\nwpa_passphrase=LabForgeDemo123\n"
+        "wpa_key_mgmt=WPA-PSK\nrsn_pairwise=CCMP\n"
+        "wps_state=2\nap_setup_locked=0\neap_server=1\n"
+        "config_methods=virtual_push_button physical_display\n"
+        "uuid=87654321-9abc-def0-1234-56789abcdef0\n"
+        "device_name=LabForge-Demo-AP\nmanufacturer=LabForge\n"
+        "model_name=LabForge-Demo-AP\nmodel_number=1\nserial_number=12345\n"
+        "device_type=6-0050F204-1\nos_version=01020300\n"
+    ),
+    # Hidden SSID — HTB's "Finding Hidden SSIDs": the AP stops broadcasting
+    # its SSID in beacons (still answers a directed probe for it), so the
+    # live angle is recovering the name from probe/association traffic
+    # rather than reading it straight off a beacon frame.
+    "hidden-ssid": (
+        "hw_mode=g\nchannel=6\nwpa=2\nwpa_passphrase=LabForgeDemo123\n"
+        "wpa_key_mgmt=WPA-PSK\nrsn_pairwise=CCMP\nignore_broadcast_ssid=1\n"
+    ),
+    "wpa3": (
+        "hw_mode=g\nchannel=6\nwpa=2\nwpa_key_mgmt=SAE\nrsn_pairwise=CCMP\n"
+        "ieee80211w=2\nsae_password=LabForgeDemo123\n"
+    ),
+    # Transition mode: the AP accepts BOTH a WPA2-PSK client and an SAE
+    # client on the same BSSID (ieee80211w=1, "optional", is what the WPA3
+    # spec requires here — =2 would force PMF and break the WPA2-PSK side).
+    # This is what makes a live SAE-downgrade / Evil-Twin-against-WPA3 demo
+    # possible: an attacker clones the SSID as WPA2-only and a transition-
+    # aware client that would otherwise prefer SAE can be talked down to it.
+    "wpa3-transition": (
+        "hw_mode=g\nchannel=6\nwpa=2\nwpa_key_mgmt=WPA-PSK SAE\nrsn_pairwise=CCMP\n"
+        "ieee80211w=1\nwpa_passphrase=LabForgeDemo123\nsae_password=LabForgeDemo123\n"
+    ),
+    # Enhanced Open (OWE) — no PSK at all, so there's nothing to crack; the
+    # live angle here is OWE's lack of AP authentication (any adapter can
+    # clone this SSID open or OWE, same signal strength, and a client has no
+    # way to tell which is real).
+    "owe": "hw_mode=g\nchannel=6\nwpa=2\nwpa_key_mgmt=OWE\nrsn_pairwise=CCMP\nieee80211w=2\n",
+    # MAC filtering — HTB's "Bypassing MAC Filtering": the AP only accepts
+    # associations from one fixed, documented "allowed" MAC
+    # (AA:BB:CC:DD:EE:FF, written to hostapd.accept below), not tied to any
+    # real device in this lab. The live demo is spoofing *to* that address
+    # (macchanger/ip link) after an initial attempt from the attacker's own
+    # MAC is rejected — the point is the bypass technique, not who the
+    # allowed address actually belongs to.
+    "mac-filter": (
+        "hw_mode=g\nchannel=6\nwpa=2\nwpa_passphrase=LabForgeDemo123\n"
+        "wpa_key_mgmt=WPA-PSK\nrsn_pairwise=CCMP\nmacaddr_acl=1\n"
+        "accept_mac_file=/etc/hostapd/hostapd.accept\n"
+    ),
+}
+
+# The one fixed "allowed" address for the mac-filter scenario — not a real
+# device, just the address a presenter spoofs to during the demo.
+_MAC_FILTER_ALLOWED = "AA:BB:CC:DD:EE:FF"
+
+# Real OWE transition mode needs TWO BSSIDs (one Open, one OWE, each
+# advertising the other's address/SSID) — unlike SAE's transition mode,
+# which is a single BSS. The hostapd role attempts to bring up a second
+# AP-mode VIF ($IFACE + "1") for exactly this; $SECOND_IFACE/$IFACE_MAC/
+# $SECOND_MAC are bash variables the remote script below fills in from
+# whatever that attempt produced, expanded by the unquoted heredoc same as
+# $IFACE already is for every other scenario.
+WIFI_MULTI_BSS_SCENARIOS: dict[str, str] = {
+    "owe-transition": (
+        "hw_mode=g\nchannel=6\nwpa=2\nwpa_key_mgmt=OWE\nrsn_pairwise=CCMP\n"
+        "ieee80211w=2\nowe_transition_bssid=$SECOND_MAC\n"
+        'owe_transition_ssid="LabForge-Open"\n'
+        "\nbss=$SECOND_IFACE\nssid=LabForge-Open\nowe_transition_bssid=$IFACE_MAC\n"
+        'owe_transition_ssid="LabForge-Demo-AP"\n'
+    ),
+}
+
+# Scenarios that hand off authentication to a RADIUS server instead of a
+# local PSK/SAE secret — the auth_server_* lines get the freeradius role's
+# node IP spliced in at apply time (see _find_role_ip below), not baked in
+# here, since which node runs that role is a per-lab topology choice.
+WIFI_ENTERPRISE_SCENARIOS: dict[str, str] = {
+    "wpa2-enterprise": (
+        "hw_mode=g\nchannel=6\nwpa=2\nieee8021x=1\nwpa_key_mgmt=WPA-EAP\n"
+        "rsn_pairwise=CCMP\n"
+    ),
+    "wpa3-enterprise": (
+        "hw_mode=g\nchannel=6\nwpa=2\nieee8021x=1\nwpa_key_mgmt=WPA-EAP-SHA256\n"
+        "rsn_pairwise=CCMP\nieee80211w=2\n"
+    ),
+}
+
+# All valid scenario names — used for the Query() description in labs.py and
+# the "unknown scenario" validation below; the two dicts stay separate since
+# WIFI_ENTERPRISE_SCENARIOS needs the extra radius_ip lookup the others don't.
+ALL_WIFI_SCENARIOS: frozenset[str] = (
+    frozenset(WIFI_SCENARIOS) | frozenset(WIFI_ENTERPRISE_SCENARIOS) | frozenset(WIFI_MULTI_BSS_SCENARIOS)
+)
+
+# Shared secret between every hostapd node's wpa2/3-enterprise scenario and
+# the freeradius role's NAS client entry (see role_installers.py) — fixed,
+# like the rest of this lab's default credentials, so switching scenarios
+# never needs a secret passed around by hand.
+_RADIUS_SHARED_SECRET = "LabForgeRadius123"
+
+
+def _find_role_ip(workspace: Path, role: str) -> str | None:
+    """Look up the IP of the (first) node carrying ``role`` in this lab's
+    frozen topology.json — used to wire the hostapd role's enterprise
+    scenarios to wherever the freeradius role actually landed, without the
+    webinar dashboard having to know or pass that IP itself."""
+    topo_file = workspace / "topology.json"
+    if not topo_file.exists():
+        return None
+    try:
+        topo = LabConfig.model_validate_json(topo_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    for node in topo.nodes:
+        for configured_role in node.config.roles:
+            bare = configured_role.split("@", 1)[0]
+            if bare == role:
+                return node.config.ip
+    return None
+
+
+def apply_wifi_scenario(
+    workspace: Path, hostname: str, use_docker: bool, scenario: str,
+) -> tuple[bool, str]:
+    """Rewrite a hostapd node's security config to a named demo scenario and
+    restart hostapd — the webinar dashboard's segment switcher, so moving
+    from WEP to WPA2 to WPA3 between segments doesn't mean SSHing in and
+    hand-editing hostapd.conf on stage. Returns (ok, message); never raises.
+    """
+    if scenario not in ALL_WIFI_SCENARIOS:
+        return False, f"unknown scenario {scenario!r} — choose one of {sorted(ALL_WIFI_SCENARIOS)}"
+    if use_docker:
+        return False, "wifi scenarios only apply to VM (hostapd) nodes, not Docker containers"
+    if not vagrant_available():
+        return False, "vagrant is not on PATH"
+
+    if scenario in WIFI_ENTERPRISE_SCENARIOS:
+        radius_ip = _find_role_ip(workspace, "freeradius")
+        if radius_ip is None:
+            return False, (
+                f"scenario {scenario!r} needs a node with the 'freeradius' role "
+                "in this lab's topology — none found"
+            )
+        scenario_lines = (
+            f"{WIFI_ENTERPRISE_SCENARIOS[scenario]}"
+            f"auth_server_addr={radius_ip}\nauth_server_port=1812\n"
+            f"auth_server_shared_secret={_RADIUS_SHARED_SECRET}\n"
+        )
+    elif scenario in WIFI_MULTI_BSS_SCENARIOS:
+        scenario_lines = WIFI_MULTI_BSS_SCENARIOS[scenario]
+    else:
+        scenario_lines = WIFI_SCENARIOS[scenario]
+
+    conf_body = (
+        f"interface=$IFACE\ndriver=nl80211\nssid=LabForge-Demo-AP\n"
+        f"{scenario_lines}logger_syslog=-1\nlogger_syslog_level=2\n"
+    )
+    needs_second_bss = scenario in WIFI_MULTI_BSS_SCENARIOS
+    remote = (
+        "IFACE=$(sudo grep -oP '^interface=\\K.*' /etc/hostapd/hostapd.conf 2>/dev/null || true)\n"
+        "if [ -z \"$IFACE\" ]; then echo __NO_IFACE__; exit 0; fi\n"
+        + (
+            # Only computed for the OWE-transition scenario — every other
+            # scenario's config text has no $SECOND_IFACE/$IFACE_MAC/
+            # $SECOND_MAC references, so this is a no-op for them.
+            "SECOND_IFACE=\"${IFACE}1\"\n"
+            "if ! iw dev | grep -q \"$SECOND_IFACE\"; then echo __NO_SECOND_IFACE__; exit 0; fi\n"
+            "IFACE_MAC=$(cat /sys/class/net/$IFACE/address 2>/dev/null)\n"
+            "SECOND_MAC=$(cat /sys/class/net/$SECOND_IFACE/address 2>/dev/null)\n"
+            if needs_second_bss
+            else ""
+        )
+        # Unquoted heredoc delimiter is deliberate — $IFACE (and, for
+        # owe-transition, $SECOND_IFACE/$IFACE_MAC/$SECOND_MAC) must expand.
+        + "sudo tee /etc/hostapd/hostapd.conf >/dev/null <<LFCONF\n"
+        f"{conf_body}"
+        "LFCONF\n"
+        + (
+            f"sudo sh -c 'echo {_MAC_FILTER_ALLOWED} > /etc/hostapd/hostapd.accept'\n"
+            if scenario == "mac-filter"
+            else ""
+        )
+        # No `set -e`: a failed restart must still reach the status/journal
+        # checks below rather than aborting the script right there, which is
+        # all the caller would otherwise see (systemd's generic "Job failed"
+        # text) instead of hostapd's actual reason (e.g. the driver not
+        # supporting 802.11w for a WPA3 request).
+        + "T=$(date '+%Y-%m-%d %H:%M:%S')\n"
+        "sudo systemctl restart hostapd\n"
+        # Poll instead of a fixed sleep: done as soon as hostapd logs AP-ENABLED
+        # for this restart, or as soon as systemd reports it failed.
+        "for i in $(seq 1 40); do\n"
+        "  st=$(systemctl is-active hostapd)\n"
+        "  if [ \"$st\" = active ] && sudo journalctl -u hostapd --since \"$T\" --no-pager | grep -q AP-ENABLED; then break; fi\n"
+        "  [ \"$st\" = failed ] && break\n"
+        "  sleep 0.25\n"
+        "done\n"
+        "echo \"$st\"\n"
+        "sudo journalctl -u hostapd --no-pager -n 20\n"
+    )
+    try:
+        proc = guest_exec(workspace, hostname, remote, timeout=60)
+    except subprocess.TimeoutExpired:
+        return False, "timed out reaching the guest"
+    except OSError as exc:
+        return False, str(exc)
+    out = (proc.stdout or "").strip()
+    if "__NO_IFACE__" in out:
+        return False, (
+            "no interface found in this node's hostapd.conf yet — pass a USB "
+            "adapter through and let the hostapd role provision first"
+        )
+    if "__NO_SECOND_IFACE__" in out:
+        return False, (
+            f"scenario {scenario!r} needs a second AP-mode interface on this adapter "
+            "(real OWE-transition is two BSSIDs, unlike SAE's single-BSS transition "
+            "mode) — this adapter/driver only brought up one AP VIF, see the hostapd "
+            "role's provision log for what it tried"
+        )
+    out_lines = out.splitlines()
+    status_line = out_lines[0] if out_lines else ""
+    if status_line == "active":
+        return True, f"hostapd restarted in '{scenario}' mode"
+    # Lines after the is-active status are the journalctl tail. Restart=on-
+    # failure means systemd retries a few times, so the tail can be mostly
+    # "Failed to start"/"Scheduled restart" boilerplate — prefer hostapd's
+    # own log lines (its actual reason, e.g. a rejected config line or a
+    # driver that doesn't support a requested feature) when any are present.
+    journal_lines = [ln for ln in out_lines[1:] if ln.strip()]
+    hostapd_lines = [ln for ln in journal_lines if "hostapd[" in ln]
+    journal_tail = (hostapd_lines or journal_lines)[-3:]
+    reason = " | ".join(journal_tail) or (proc.stderr or "").strip() or "unknown error"
+    return False, f"hostapd did not come back up in '{scenario}' mode: {reason}"
+
+
+# Files the webinar dashboard is allowed to pull out of a guest. Like
+# NODE_LOG_SERVICES, kept to an allowlist on the caller side — this function
+# itself will fetch any path it's given.
+NODE_FILES = {"capture.pcap": "/var/log/labforge/capture.pcap"}
+
+
+def fetch_node_file(
+    workspace: Path, hostname: str, use_docker: bool, remote_path: str,
+    *, max_bytes: int = 50_000_000,
+) -> tuple[bytes | None, str | None]:
+    """Best-effort fetch of one file from inside a guest.
+
+    Piped through base64 over ``vagrant ssh`` / ``docker exec`` so binary
+    content (a pcap) survives the trip intact — these commands return text,
+    and a raw binary stream through the same channel as journalctl's text
+    output risks corruption on any newline/encoding translation along the
+    way. Returns (bytes, None) or (None, error); never raises.
+    """
+    if use_docker:
+        argv = ["docker", "compose", "exec", "-T", hostname, "sh", "-c", f"base64 '{remote_path}'"]
+    else:
+        if not vagrant_available():
+            return None, "vagrant is not on PATH"
+        argv = ["vagrant", "ssh", hostname, "-c", f"sudo base64 '{remote_path}' 2>&1"]
+    try:
+        proc = subprocess.run(
+            argv, cwd=str(workspace), capture_output=True, text=True,
+            errors="replace", timeout=90, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return None, "timed out reaching the guest"
+    except OSError as exc:
+        return None, str(exc)
+    if proc.returncode != 0 or not proc.stdout.strip():
+        tail_err = (proc.stderr or proc.stdout or "").strip().splitlines()[-2:]
+        return None, f"could not read {remote_path}: {' | '.join(tail_err) or 'no output'}"
+    try:
+        data = base64.b64decode(proc.stdout, validate=False)
+    except (binascii.Error, ValueError) as exc:
+        return None, f"could not decode file contents: {exc}"
+    if len(data) > max_bytes:
+        return None, f"file is {len(data)} bytes, over the {max_bytes} limit"
+    return data, None
+
+
+def destroy_lab(lab: Lab, session: Session, *, force: bool = False) -> None:
+    """Tear down a lab for real, then delete its workspace and row.
+
+    The VMs / containers are removed first and verified gone. If that fails and
+    ``force`` is false, ``DestroyFailed`` is raised and nothing else is deleted,
+    so the lab stays visible and can be retried. ``force`` removes the record
+    even when teardown failed (for orphans whose infrastructure is already gone).
+    """
+    lab_id = lab.id or 0
+    with _lab_lock(lab_id):
+        workspace = Path(lab.workspace_path) if lab.workspace_path else None
+        if workspace is not None and workspace.exists():
+            if read_build_status(workspace)["phase"] == "running":
+                stop_build(workspace, halt_containers=False)
+            _stop_daemon(workspace)
+            if runtime_of(workspace) == "docker":
+                result = docker_runtime.teardown(workspace)
+                error = None if result.ok else (result.error or "teardown failed")
+            else:
+                error = _vagrant_teardown(workspace)
+            if error and not force:
+                lab.status = "destroy_failed"
+                lab.updated_at = _utcnow()
+                session.add(lab)
+                session.commit()
+                raise DestroyFailed(error)
+            shutil.rmtree(workspace, ignore_errors=True)
+        session.delete(lab)
+        session.commit()
+    with _LAB_LOCKS_GUARD:
+        _LAB_LOCKS.pop(lab_id, None)
+
+
+def _run_vagrant_lifecycle(workspace: Path, verb: str, timeout: int = 180) -> None:
+    """Run a quick Vagrant lifecycle command (``halt``/``suspend``) and raise
+    ``HaltFailed`` with the real error tail on anything but a clean exit."""
+    if not vagrant_available():
+        raise HaltFailed("vagrant is not on PATH")
+    try:
+        proc = subprocess.run(
+            ["vagrant", verb], cwd=str(workspace), capture_output=True, text=True,
+            errors="replace", timeout=timeout, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        raise HaltFailed(f"vagrant {verb} timed out after {timeout}s") from None
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout).strip().splitlines()[-3:]
+        raise HaltFailed(f"vagrant {verb} exited {proc.returncode}: {' | '.join(tail)}")
+
+
+def _usb_radio_hosts(workspace: Path) -> list[str]:
+    """Hostnames of nodes running the AltoBeam driver role."""
+    try:
+        topo = json.loads((workspace / "topology.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [
+        n["config"]["hostname"]
+        for n in topo.get("nodes", [])
+        if any(str(r).split("@")[0] == "atbm-wifi-driver" for r in n.get("config", {}).get("roles", []))
+    ]
+
+
+def _release_usb_radios(workspace: Path) -> None:
+    """Cleanly unload the AltoBeam driver before a suspend.
+
+    Suspending drops the passed-through dongle mid-session, and these chips'
+    firmware hangs when the host side vanishes under a loaded driver (seen
+    repeatedly, see docs/labs/wifi/altobeam). Stop the AP and unload the module
+    first so the device is idle when VMware detaches it. Best effort: a
+    failure here must not block the pause.
+    """
+    try:
+        topo = json.loads((workspace / "topology.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    for node in topo.get("nodes", []):
+        cfg = node.get("config", {})
+        if any(str(r).split("@")[0] == "atbm-wifi-driver" for r in cfg.get("roles", [])):
+            with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+                subprocess.run(
+                    ["vagrant", "ssh", cfg.get("hostname", ""), "-c",
+                     "sudo systemctl stop hostapd dnsmasq; sudo rmmod atbm6012bx; sync"],
+                    cwd=str(workspace), capture_output=True, text=True, errors="replace",
+                    timeout=90, check=False,
+                )
+
+
+def halt_lab(lab: Lab, session: Session) -> None:
+    """Stop a lab's VMs/containers and keep its data. ``resume_lab`` brings it back.
+
+    Docker: ``compose stop``. Vagrant: ``vagrant halt`` (clean guest shutdown,
+    full poweroff — for a faster round-trip that keeps RAM state, see
+    ``pause_lab`` instead).
+    """
+    lab_id = lab.id or 0
+    with _lab_lock(lab_id):
+        workspace = Path(lab.workspace_path) if lab.workspace_path else None
+        if workspace is None or not workspace.exists():
+            raise HaltFailed("The lab workspace is gone, so there is nothing to stop. Destroy the lab instead.")
+        runtime = runtime_of(workspace)
+        if read_build_status(workspace)["phase"] == "running":
+            stop_build(workspace)
+        _stop_daemon(workspace)
+        if runtime == "docker":
+            result = docker_runtime.halt(workspace)
+            if not result.ok:
+                raise HaltFailed(result.error or "docker compose stop failed")
+        else:
+            _run_vagrant_lifecycle(workspace, "halt")
+        lab.status = "stopped"
+        lab.updated_at = _utcnow()
+        session.add(lab)
+        session.commit()
+
+
+def pause_lab(lab: Lab, session: Session) -> None:
+    """Pause a lab without tearing it down.
+
+    Vagrant: ``vagrant suspend`` — saves real guest RAM state to disk and
+    powers the VM off; ``resume`` restores exactly where it left off with
+    no boot sequence. Docker: ``docker compose pause`` — freezes every
+    container's processes in place via the cgroup freezer (no stop, no
+    restart on the way back); it uses no CPU while paused but still holds
+    its RAM, which is a different trade-off than Vagrant's suspend-to-disk
+    but still meaningfully faster/less disruptive to come back from than
+    Stop + Start.
+    """
+    lab_id = lab.id or 0
+    with _lab_lock(lab_id):
+        workspace = Path(lab.workspace_path) if lab.workspace_path else None
+        if workspace is None or not workspace.exists():
+            raise HaltFailed("The lab workspace is gone, so there is nothing to pause. Destroy the lab instead.")
+        runtime = runtime_of(workspace)
+        if read_build_status(workspace)["phase"] == "running":
+            stop_build(workspace)
+        _stop_daemon(workspace)
+        if runtime == "docker":
+            result = docker_runtime.pause(workspace)
+            if not result.ok:
+                raise HaltFailed(result.error or "docker compose pause failed")
+        else:
+            _release_usb_radios(workspace)
+            _run_vagrant_lifecycle(workspace, "suspend")
+        lab.status = "paused"
+        lab.updated_at = _utcnow()
+        session.add(lab)
+        session.commit()
+
+
+def resume_lab(lab: Lab, session: Session) -> int:
+    """Start a stopped or paused lab again. Returns the build pid.
+
+    Docker: ``compose up``. Vagrant: ``vagrant resume`` when the lab was
+    paused (fast, restores saved RAM state) or ``vagrant up`` when it was
+    halted/failed/partial (boots from poweroff — still fast, since nothing
+    needs reprovisioning, but a real boot sequence). Progress shows up in
+    the normal /build/status and /build/log endpoints either way.
+    """
+    lab_id = lab.id or 0
+    with _lab_lock(lab_id):
+        workspace = Path(lab.workspace_path) if lab.workspace_path else None
+        if workspace is None or not workspace.exists():
+            raise HaltFailed("The lab workspace is gone. Build the lab again.")
+        runtime = runtime_of(workspace)
+        if runtime == "docker":
+            if not (workspace / docker_runtime.COMPOSE_FILE).exists():
+                raise HaltFailed("The lab workspace is gone. Build the lab again.")
+            if lab.status not in ("stopped", "paused", "failed", "partial", "unknown"):
+                raise HaltFailed(f"The lab is {lab.status}, only a stopped or paused lab can be started.")
+            project = docker_runtime.read_project(workspace)
+            if not project:
+                raise HaltFailed("The lab has no .labforge-project file, build it again.")
+            if lab.status == "paused":
+                # Containers are frozen, not stopped — `compose unpause` is
+                # near-instant and needs none of the cold-start machinery
+                # below (no prereq re-check, no sentinel reset, no spawned
+                # build process to wait on).
+                result = docker_runtime.unpause(workspace, project)
+                if not result.ok:
+                    raise HaltFailed(result.error or "docker compose unpause failed")
+                lab.status = "running"
+                lab.updated_at = _utcnow()
+                session.add(lab)
+                session.commit()
+                _spawn_daemon(lab, workspace)
+                return 0
+            problem = docker_runtime.prereq_problem()
+            if problem:
+                raise BuildPrereqError(problem[1], problem[0])
+            for sentinel in (BUILD_EXIT, BUILD_ABORTED, BUILD_PID, ".labforge-daemon-stop"):
+                (workspace / sentinel).unlink(missing_ok=True)
+            topology = json.loads((workspace / "topology.json").read_text(encoding="utf-8"))
+            wait = 5400 if any(str(n.get("config", {}).get("os", "")).startswith("windows") for n in topology.get("nodes", [])) else 900
+            pid = _spawn_build(
+                workspace,
+                docker_runtime.up_command(project, wait_timeout=wait),
+                banner=f"--- resume runtime=docker project={project} ---",
+            )
+        else:
+            if not (workspace / "Vagrantfile").exists():
+                raise HaltFailed("The lab workspace is gone. Build the lab again.")
+            # "unknown" happens when the DB's last-known status can't be trusted —
+            # e.g. a VM process was killed outside the app (host crash, manual
+            # `taskkill`, VirtualBox itself wedging) rather than through halt/pause.
+            # `vagrant up` is the right recovery either way: idempotent against an
+            # already-running VM, and boots a genuinely stopped one.
+            if lab.status not in ("stopped", "paused", "failed", "partial", "unknown"):
+                raise HaltFailed(f"The lab is {lab.status}, only a stopped or paused lab can be started.")
+            if not vagrant_available():
+                raise BuildPrereqError("Vagrant is not installed or not on PATH.", "vagrant_missing")
+            for sentinel in (BUILD_EXIT, BUILD_ABORTED, BUILD_PID, ".labforge-daemon-stop"):
+                (workspace / sentinel).unlink(missing_ok=True)
+            # `vagrant up` on a suspended VM resumes it AND runs the run:"always"
+            # provisioners (USB radio recovery); a bare `vagrant resume` skips them.
+            verb = "up"
+            argv = ["vagrant", verb]
+            recover = _usb_radio_hosts(workspace)
+            if recover and verb == "up":
+                # Vagrant does not run the `run: "always"` USB recovery
+                # provisioner when it wakes a suspended VM, so chain it after
+                # the up: reload the dongle driver and bounce the AP.
+                steps = [["vagrant", "up"]] + [
+                    ["vagrant", "provision", h, "--provision-with", "usb-radio-recover"] for h in recover
+                ]
+                code = (
+                    "import subprocess, sys; rc = 0; "
+                    f"steps = {steps!r}; "
+                    "[globals().__setitem__('rc', subprocess.call(step) or rc) for step in steps]; "
+                    "sys.exit(rc)"
+                )
+                argv = [sys.executable, "-c", code]
+            pid = _spawn_build(
+                workspace,
+                argv,
+                banner=f"--- resume runtime=vagrant verb={verb} ---",
+            )
+        lab.status = "building"
+        lab.updated_at = _utcnow()
+        session.add(lab)
+        session.commit()
+    _spawn_daemon(lab, workspace)
+    return pid
 
 
 def read_log_chunk(workspace: Path, since: int = 0, max_bytes: int = 64 * 1024) -> dict:
@@ -297,6 +1311,23 @@ def _provider_vms_running(workspace: Path) -> int:
     # virsh + a session bus; bail to -1 in that case so the caller
     # doesn't make a decision on stale data.
     providers = {p for _, p, _ in expected}
+    if "vmware_desktop" in providers and "virtualbox" not in providers:
+        # `vmrun list` prints the .vmx path of each running VM; Vagrant keeps
+        # them under this workspace's .vagrant/machines tree.
+        vmrun = hostenv.vmrun_path()
+        if not vmrun:
+            return -1
+        try:
+            out = subprocess.run(
+                [vmrun, "list"], capture_output=True, text=True, errors="replace", timeout=10, check=False
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return -1
+        root = str(machines_dir).replace("/", "\\").lower()
+        return sum(
+            1 for line in (out.stdout or "").splitlines()
+            if line.strip().replace("/", "\\").lower().startswith(root)
+        )
     if "virtualbox" not in providers:
         return -1
 
@@ -304,7 +1335,7 @@ def _provider_vms_running(workspace: Path) -> int:
         out = subprocess.run(
             [*_vboxmanage_command(), "list", "runningvms"],
             capture_output=True,
-            text=True,
+            text=True, errors="replace",
             timeout=5,
             check=False,
         )
@@ -323,15 +1354,7 @@ def _provider_vms_running(workspace: Path) -> int:
 
 
 def _vboxmanage_command() -> list[str]:
-    """Locate VBoxManage on PATH or at the Windows default install dir."""
-    found = shutil.which("VBoxManage") or shutil.which("vboxmanage")
-    if found:
-        return [found]
-    if os.name == "nt":
-        default = Path(r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe")
-        if default.exists():
-            return [str(default)]
-    return ["VBoxManage"]
+    return hostenv.vboxmanage_command()
 
 
 def read_build_status(workspace: Path) -> dict:
@@ -365,7 +1388,10 @@ def read_build_status(workspace: Path) -> dict:
             # Build exited non-zero. Check if any VM is still alive in
             # the hypervisor — if so this is a partial success rather
             # than a hard failure.
-            alive = _provider_vms_running(workspace)
+            if runtime_of(workspace) == "docker":
+                alive = docker_runtime.running_count(workspace)
+            else:
+                alive = _provider_vms_running(workspace)
             phase = "partial" if alive > 0 else "failed"
         return {
             "phase": phase,
@@ -410,8 +1436,93 @@ _PHASE_ORDER: tuple[str, ...] = (
 _PHASE_RANK = {p: i for i, p in enumerate(_PHASE_ORDER)}
 
 
+_DOCKER_CONTAINER_RE = re.compile(r"^\s*Container\s+(\S+)\s+(\w+)\s*$")
+_DOCKER_IMAGE_RE = re.compile(r"^\s*(?:Image\s+)?(\S+)\s+(Pulling|Pulled|Building|Built)\s*$")
+_DOCKER_BUILD_STEP_RE = re.compile(r"^#\d+\s+\[([A-Za-z0-9._-]+)\s")
+_DOCKER_ACTION_PHASE = {
+    "pulling": "downloading",
+    "pulled": "importing",
+    "building": "importing",
+    "built": "importing",
+    "creating": "booting",
+    "created": "booting",
+    "starting": "booting",
+    "started": "booting",
+    "waiting": "provisioning",
+    "healthy": "ready",
+    "running": "ready",
+    "error": "failed",
+    "exited": "failed",
+}
+
+
+def _compose_services(workspace: Path) -> list[str]:
+    try:
+        import yaml
+
+        doc = yaml.safe_load((workspace / docker_runtime.COMPOSE_FILE).read_text(encoding="utf-8"))
+        return list((doc or {}).get("services", {}).keys())
+    except Exception:
+        return []
+
+
+def _parse_docker_phases(workspace: Path) -> dict[str, str]:
+    """Per-service phase from ``docker compose up --progress plain`` output."""
+    path = workspace / BUILD_LOG
+    if not path.exists():
+        return {}
+    project = docker_runtime.read_project(workspace) or ""
+    services = _compose_services(workspace)
+    out: dict[str, str] = dict.fromkeys(services, "defined")
+
+    def service_of(token: str) -> str:
+        if project and token.startswith(f"{project}-"):
+            token = token[len(project) + 1 :]
+        return re.sub(r"-\d+$", "", token)
+
+    def bump(service: str, phase: str) -> None:
+        if services and service not in out:
+            return
+        current = out.get(service)
+        advances = phase == "failed" or current is None or _PHASE_RANK[phase] > _PHASE_RANK[current]
+        if advances and current != "failed":
+            out[service] = phase
+
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            for raw in fh:
+                line = raw.rstrip("\n")
+                m = _DOCKER_CONTAINER_RE.match(line)
+                if m:
+                    phase = _DOCKER_ACTION_PHASE.get(m.group(2).lower())
+                    if phase:
+                        bump(service_of(m.group(1)), phase)
+                    continue
+                m = _DOCKER_IMAGE_RE.match(line)
+                if m:
+                    phase = _DOCKER_ACTION_PHASE.get(m.group(2).lower())
+                    if phase:
+                        bump(m.group(1), phase)
+                    continue
+                m = _DOCKER_BUILD_STEP_RE.match(line)
+                if m:
+                    bump(m.group(1), "importing")
+    except OSError:
+        return {}
+
+    # ``Started`` is final for services without a healthcheck, and compose
+    # only exits 0 once everything is up and healthy: trust the exit code.
+    exit_file = workspace / BUILD_EXIT
+    if exit_file.exists():
+        body = exit_file.read_text(encoding="utf-8").strip().splitlines()
+        if body and body[0].strip() == "0":
+            for service in services:
+                out[service] = "ready"
+    return {k: v for k, v in out.items() if v != "defined"}
+
+
 def parse_per_vm_phases(workspace: Path) -> dict[str, str]:
-    """Scan build.log and return ``{hostname: phase}`` per VM.
+    """Scan build.log and return ``{hostname: phase}`` per VM / container.
 
     The returned phase is the highest-ranked one we saw for that VM —
     so a brief "booting" line followed by "Running provisioner: shell"
@@ -422,6 +1533,8 @@ def parse_per_vm_phases(workspace: Path) -> dict[str, str]:
     Cheap regex pass; runs once per request, no caching. build.log
     rarely exceeds ~1 MB even for long builds so this is fine.
     """
+    if runtime_of(workspace) == "docker":
+        return _parse_docker_phases(workspace)
     path = workspace / BUILD_LOG
     if not path.exists():
         return {}
@@ -496,7 +1609,7 @@ def is_pid_alive(pid: int) -> bool:
         return False
 
 
-def stop_build(workspace: Path, *, kill_timeout_s: float = 5.0) -> dict:
+def stop_build(workspace: Path, *, kill_timeout_s: float = 5.0, halt_containers: bool = True) -> dict:
     """User-initiated abort of an in-flight build.
 
     Sends SIGTERM to the shim, waits up to ``kill_timeout_s`` for a
@@ -526,13 +1639,22 @@ def stop_build(workspace: Path, *, kill_timeout_s: float = 5.0) -> dict:
     force_killed = False
     if pid and is_pid_alive(pid):
         try:
-            if os.name == "nt":
-                # CTRL_BREAK only works because we spawn with
-                # CREATE_NEW_PROCESS_GROUP. SIGTERM doesn't exist on
-                # Windows in the POSIX sense.
-                os.kill(pid, signal.CTRL_BREAK_EVENT)  # type: ignore[attr-defined]
+            if hostenv.is_windows():
+                # The shim is detached from any console, so CTRL_BREAK cannot
+                # reach it. taskkill /T ends the whole tree (shim, vagrant,
+                # ruby, VBoxManage) in one go.
+                subprocess.call(
+                    ["taskkill", "/T", "/PID", str(pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
             else:
-                os.kill(pid, signal.SIGTERM)
+                # The shim leads its own session; signal the whole group so
+                # the vagrant / docker child dies with it.
+                try:
+                    os.killpg(pid, signal.SIGTERM)  # type: ignore[attr-defined]
+                except (ProcessLookupError, PermissionError):
+                    os.kill(pid, signal.SIGTERM)
         except (ProcessLookupError, OSError) as exc:
             _LOGGER.info("stop_build_signal_failed pid=%s err=%s", pid, exc)
 
@@ -543,22 +1665,59 @@ def stop_build(workspace: Path, *, kill_timeout_s: float = 5.0) -> dict:
             time.sleep(0.2)
         else:
             try:
-                if os.name == "nt":
-                    subprocess.call(["taskkill", "/F", "/T", "/PID", str(pid)])
+                if hostenv.is_windows():
+                    subprocess.call(
+                        ["taskkill", "/F", "/T", "/PID", str(pid)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
                 else:
-                    os.kill(pid, signal.SIGKILL)  # type: ignore[attr-defined]
+                    try:
+                        os.killpg(pid, signal.SIGKILL)  # type: ignore[attr-defined]
+                    except (ProcessLookupError, PermissionError):
+                        os.kill(pid, signal.SIGKILL)  # type: ignore[attr-defined]
                 force_killed = True
             except (ProcessLookupError, OSError) as exc:
                 _LOGGER.info("stop_build_kill_failed pid=%s err=%s", pid, exc)
 
     # Mark aborted regardless of whether we actually had to kill anything.
     (workspace / BUILD_ABORTED).write_text(
-        datetime.utcnow().isoformat(), encoding="utf-8"
+        _utcnow().isoformat(), encoding="utf-8"
     )
     if not exit_file.exists():
         exit_file.write_text(f"-1\n{int(time.time())}\n", encoding="utf-8")
 
+    if halt_containers and runtime_of(workspace) == "docker":
+        # Killing ``compose up`` leaves the containers it already created running.
+        docker_runtime.halt(workspace)
+
     return {"phase": "aborted", "killed_pid": pid, "force_killed": force_killed}
+
+
+def reattach_daemons(session: Session) -> int:
+    """API-startup sweep: restart the heartbeat daemon of every live lab that lost it.
+
+    The daemon is a child of the API run, so a restart of the API (or a reboot) leaves
+    running labs with no heartbeat and a blank monitor. Returns how many were restarted.
+    """
+    restarted = 0
+    rows = session.exec(select(Lab).where(Lab.status.in_(("running", "partial")))).all()  # type: ignore[attr-defined]
+    for lab in rows:
+        if not lab.workspace_path:
+            continue
+        ws = Path(lab.workspace_path)
+        if not ws.exists():
+            continue
+        pid_file = ws / DAEMON_PID
+        alive = False
+        if pid_file.exists():
+            with contextlib.suppress(ValueError, OSError):
+                alive = is_pid_alive(int(pid_file.read_text().strip()))
+        if not alive:
+            (ws / ".labforge-daemon-stop").unlink(missing_ok=True)
+            _spawn_daemon(lab, ws)
+            restarted += 1
+    return restarted
 
 
 def reconcile_orphan_builds(session: Session) -> int:
@@ -578,14 +1737,14 @@ def reconcile_orphan_builds(session: Session) -> int:
     for lab in rows:
         if not lab.workspace_path:
             lab.status = "failed"
-            lab.updated_at = datetime.utcnow()
+            lab.updated_at = _utcnow()
             session.add(lab)
             reconciled += 1
             continue
         ws = Path(lab.workspace_path)
         if not ws.exists():
             lab.status = "failed"
-            lab.updated_at = datetime.utcnow()
+            lab.updated_at = _utcnow()
             session.add(lab)
             reconciled += 1
             continue
@@ -611,7 +1770,7 @@ def reconcile_orphan_builds(session: Session) -> int:
             with contextlib.suppress(OSError):
                 pid_file.unlink()
         lab.status = "failed"
-        lab.updated_at = datetime.utcnow()
+        lab.updated_at = _utcnow()
         session.add(lab)
         reconciled += 1
     if reconciled:

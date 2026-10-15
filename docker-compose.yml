@@ -1,65 +1,58 @@
-# One-command dev stack: API + web, source mounted live for hot reload.
-# Vagrant + VirtualBox/VMware are intentionally NOT in here — they require
-# host-level kernel access and your real hypervisor; this compose file is
-# for editing/validating topologies and the canvas, not for `vagrant up`.
+# One-command LabForge, all in Docker:
 #
-# Usage:
-#   docker compose up           # build + run
-#   docker compose up -d        # detached
-#   docker compose logs -f api  # tail
+#   docker compose up --build        then open http://127.0.0.1:3000
 #
-# To exercise `vagrant up` end-to-end, run the agent (`labforge run …`) on
-# the host outside this stack.
+# The API container has the Docker CLI and the host's Docker socket, so the Build button starts
+# labs (Elasticsearch, Kibana, Windows guests ...) as sibling containers on your own engine.
+# Everything is published on 127.0.0.1 only.
+#
+# Things to know:
+#   * The Docker socket gives the API full control of your Docker engine. That is the point (it
+#     builds labs), and it is why the API is only reachable from this computer and why it
+#     requires LABFORGE_AGENT_TOKEN. Do not publish these ports on other interfaces.
+#   * Windows guests need /dev/kvm in the Docker engine, which Docker Desktop with WSL2 provides.
+#     Their first-boot script is injected by Compose, so it works from inside this container.
+#   * The Vagrant/VirtualBox/VMware path needs your real hypervisor and cannot run in a container.
+#     Use `pnpm dev` on the host for that. It is optional; Docker labs do not need it.
+#   * Port checks and the disk figure on the Home page describe this container, not the host.
+#     Published lab ports are still picked from Docker's own view of what is in use.
+#
+# Change the token before sharing the machine:  LABFORGE_AGENT_TOKEN=... docker compose up
+
+name: labforge
 
 services:
   api:
-    image: python:3.12-slim
-    working_dir: /repo/apps/api
-    command: >
-      bash -c "
-        set -e &&
-        pip install --quiet -e /repo/packages/schema/python &&
-        pip install --quiet -e /repo/packages/agent &&
-        pip install --quiet -e /repo/apps/api &&
-        exec uvicorn labforge_core.api.main:app --host 0.0.0.0 --port 8000 --reload
-      "
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
     environment:
-      LABFORGE_WORKSPACE_ROOT: /repo/.labforge/workspaces
       LABFORGE_AGENT_TOKEN: ${LABFORGE_AGENT_TOKEN:-devtoken-change-me}
-      PYTHONUNBUFFERED: "1"
+      LABFORGE_WORKSPACE_ROOT: /data/workspaces
+      LABFORGE_DATABASE_URL: sqlite:////data/labforge.db
+      LABFORGE_ALLOWED_HOSTS: '["api","localhost","127.0.0.1","::1"]'
+      LABFORGE_API_PORT: "8000"
     volumes:
-      - ./:/repo:cached
+      - /var/run/docker.sock:/var/run/docker.sock
+      - labforge-data:/data
     ports:
-      - "8000:8000"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()"]
-      interval: 10s
-      timeout: 3s
-      retries: 6
+      - "127.0.0.1:${LABFORGE_API_PORT:-8000}:8000"
+    restart: unless-stopped
 
   web:
-    image: node:20-bookworm
-    working_dir: /repo
-    command: >
-      bash -c "
-        set -e &&
-        corepack enable &&
-        corepack prepare pnpm@9.0.0 --activate &&
-        pnpm install --frozen-lockfile --ignore-scripts &&
-        cd apps/web &&
-        exec pnpm dev --hostname 0.0.0.0
-      "
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
     environment:
       LABFORGE_API_URL: http://api:8000
-      NEXT_TELEMETRY_DISABLED: "1"
-    volumes:
-      - ./:/repo:cached
-      - web-node-modules:/repo/node_modules
+      LABFORGE_AGENT_TOKEN: ${LABFORGE_AGENT_TOKEN:-devtoken-change-me}
+      LABFORGE_ALLOWED_HOSTS: web
     depends_on:
       api:
         condition: service_healthy
     ports:
-      - "3000:3000"
+      - "127.0.0.1:${LABFORGE_WEB_PORT:-3000}:3000"
+    restart: unless-stopped
 
 volumes:
-  web-node-modules:
+  labforge-data:

@@ -102,6 +102,28 @@ def limit(name: str, *, capacity: int, per_seconds: float):
     return wrap
 
 
+def rate_limited(name: str, *, capacity: int, per_seconds: float):
+    """FastAPI dependency twin of ``limit`` for handlers that are plain ``def`` (run in the thread
+    pool because they shell out to Docker). Use it as ``dependencies=[rate_limited(...)]``."""
+    from fastapi import Depends
+
+    async def check(request: Request) -> None:
+        key = _client_key(request)
+        if not await _consume(name, key, capacity, per_seconds):
+            _LOGGER.info("rate_limit_block", extra={"limiter": name, "key": key, "capacity": capacity})
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "detail": f"Rate limit exceeded ({name})",
+                    "code": "rate_limited",
+                    "retry_after_seconds": int(per_seconds),
+                },
+                headers={"Retry-After": str(int(per_seconds))},
+            )
+
+    return Depends(check)
+
+
 def reset_for_tests() -> None:
     """Used by the pytest harness to clear bucket state between cases."""
     _BUCKETS.clear()

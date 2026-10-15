@@ -87,7 +87,7 @@ export const Protocol = z.enum([
 ]);
 export type Protocol = z.infer<typeof Protocol>;
 
-export const Provider = z.enum(["virtualbox", "vmware", "libvirt"]);
+export const Provider = z.enum(["virtualbox", "vmware", "libvirt", "docker"]);
 export type Provider = z.infer<typeof Provider>;
 
 /**
@@ -181,6 +181,13 @@ const passwordRegex = /^[^"'`$;\\\r\n]+$/;
 // every downstream consumer.
 const topologyNameRegex = /^[A-Za-z0-9 \-_.,!?():]+$/;
 
+// Defence-in-depth, same reasoning as passwordRegex: a role string reaches a provisioner
+// script's shell/PowerShell text (the bare role name and a free-text "@version" suffix, e.g.
+// "siemens-simatic@TIA Portal V19") and must not be able to break out of the double-quoted lines
+// it's spliced into. Version suffixes in the bundled templates use spaces (vendor/product
+// names), so those stay allowed; shell and PowerShell metacharacters do not.
+const roleRegex = /^[A-Za-z0-9][A-Za-z0-9._-]*(@[A-Za-z0-9][A-Za-z0-9._ -]*)?$/;
+
 export const Credentials = z.object({
   username: z.string().min(1).max(64),
   password: z
@@ -200,7 +207,7 @@ export const NodeConfig = z.object({
     .max(63)
     .regex(hostnameRegex, "Invalid hostname"),
   cves: z.array(z.string().regex(cveRegex, "Must be CVE-YYYY-NNNN")).default([]),
-  roles: z.array(z.string()).default([]),
+  roles: z.array(z.string().regex(roleRegex, "Invalid role: use letters, digits, '.', '_', '-', and an optional '@version'")).default([]),
   memory_mb: z.number().int().min(256).max(65536).default(2048),
   cpus: z.number().int().min(1).max(32).default(2),
   credentials: Credentials,
@@ -213,6 +220,16 @@ export const NodeConfig = z.object({
   // Optional Docker image hint used by the docker-compose generator.
   // When set, the compose target runs the node as a container.
   compose_image: z.string().max(256).nullable().optional(),
+  // Optional host USB device to pass through to this VM (VirtualBox only).
+  // Four hex digits each, as reported by GET /api/v1/host/usb-devices or
+  // lsusb/Device Manager. Identifies the device only — no attack tooling
+  // or network config is implied by setting this.
+  usb_vendor_id: z.string().regex(/^[0-9a-fA-F]{4}$/).nullable().optional(),
+  usb_product_id: z.string().regex(/^[0-9a-fA-F]{4}$/).nullable().optional(),
+  // Boot this VM with a visible VirtualBox window instead of headless.
+  // Only meaningful alongside a desktop environment (e.g. the
+  // "desktop-xfce" role) — on its own it just shows an empty console.
+  gui: z.boolean().default(false),
 });
 export type NodeConfig = z.infer<typeof NodeConfig>;
 

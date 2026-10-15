@@ -8,10 +8,16 @@
  * apps/web/styles/labforge-d10.css (no inline cosmetic styles beyond grid
  * geometry / row highlight tints that the design markup also uses inline).
  *
- * Backend (frozen) endpoints:
+ * Backend endpoints:
  *   GET /api/v1/cves/search?q=…&limit=…  → CVEEntry[]
  *   GET /api/v1/cves/{id}                → CVEEntry
- *   GET /api/v1/cves/curated             → { [cveId]: description }
+ *   GET /api/v1/cves/curated             → CuratedCve[] (lib/api/client.ts)
+ *   GET /api/v1/cves/{id}/script         → CveScript — the real curated script, or the honest
+ *                                           stub/notes-only one, never a fabricated guess.
+ *
+ * The curated list is fetched once via useCuratedCves() (lib/api/hooks.ts) — the same hook
+ * NodeCvePopover and CuratedCveGrid use — rather than this page rolling its own fetch, which is
+ * what let it drift out of sync with the endpoint's shape before.
  *
  * Deep-link support: `?q=CVE-YYYY-NNNNN` pre-fills the search input AND
  * relaxes severity/score filters so the linked CVE is never hidden.
@@ -22,7 +28,12 @@ import { useSearchParams } from "next/navigation";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { toast } from "sonner";
 
+import Link from "next/link";
+
 import { api } from "@/lib/api/client";
+import { useCuratedCves } from "@/lib/api/hooks";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useTopologyStore } from "@/lib/store/topology-store";
 import { PageToolbars } from "@/components/dashboard/AppShell";
 import type { CVEEntry } from "@labforge/schema";
 
@@ -49,10 +60,6 @@ const PINNED_MAP_KEY = "labforge.pinned-cve-nodes";
 
 type SeverityKey = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
 type TabKey = "all" | "curated" | "stubs" | "pinned";
-
-interface CuratedMap {
-  [cveId: string]: string;
-}
 
 interface PinnedNodeMap {
   [cveId: string]: string;
@@ -213,6 +220,14 @@ function writePinnedSet(set: Set<string>): void {
   }
 }
 
+function writePinnedNodeMap(map: PinnedNodeMap): void {
+  try {
+    window.localStorage.setItem(PINNED_MAP_KEY, JSON.stringify(map));
+  } catch {
+    /* storage blocked, the pin still lands on the node */
+  }
+}
+
 function readPinnedNodeMap(): PinnedNodeMap {
   if (typeof window === "undefined") return {};
   try {
@@ -281,21 +296,13 @@ function CvesPageInner(): React.ReactElement {
   const trimmed = debouncedQuery.trim();
   const searchQ = useQuery<CVEEntry[]>({
     queryKey: ["cves", trimmed],
-    queryFn: () => api.searchCves(trimmed, 100),
+    queryFn: () => api.searchCves(trimmed, 50),
     enabled: trimmed.length > 0,
     placeholderData: keepPreviousData,
     staleTime: 30_000,
   });
 
-  const curatedQ = useQuery<CuratedMap>({
-    queryKey: ["cves-curated"],
-    queryFn: async () => {
-      const r = await fetch("/api/v1/cves/curated");
-      if (!r.ok) throw new Error("curated fetch failed");
-      return (await r.json()) as CuratedMap;
-    },
-    staleTime: 5 * 60_000,
-  });
+  const curatedQ = useCuratedCves();
 
   const detailQ = useQuery<CVEEntry>({
     queryKey: ["cve-detail", selectedId],
@@ -309,7 +316,7 @@ function CvesPageInner(): React.ReactElement {
   // The list is small (the bundled curated map ships ~8 entries) so a fan-out
   // here is cheap, and react-query dedupes overlapping keys.
   const curatedIds = React.useMemo<string[]>(
-    () => Object.keys(curatedQ.data ?? {}).map((x) => x.toUpperCase()),
+    () => (curatedQ.data ?? []).map((c) => c.cve_id.toUpperCase()),
     [curatedQ.data],
   );
   const curatedDetailsQ = useQuery<CVEEntry[]>({
@@ -350,9 +357,11 @@ function CvesPageInner(): React.ReactElement {
     () => searchQ.data ?? [],
     [searchQ.data],
   );
-  const curatedSet = React.useMemo<Set<string>>(() => {
-    return new Set(Object.keys(curatedQ.data ?? {}).map((x) => x.toUpperCase()));
-  }, [curatedQ.data]);
+  const curatedSet = React.useMemo<Set<string>>(() => new Set(curatedIds), [curatedIds]);
+  const fullyProvisionedSet = React.useMemo<Set<string>>(
+    () => new Set((curatedQ.data ?? []).filter((c) => c.fully_provisioned).map((c) => c.cve_id.toUpperCase())),
+    [curatedQ.data],
+  );
 
   // Re-read pinned set whenever `pinnedTick` bumps.
   const pinnedSet = React.useMemo<Set<string>>(() => {
@@ -375,10 +384,14 @@ function CvesPageInner(): React.ReactElement {
       seen.add(k);
       out.push(e);
     };
-    for (const e of curatedDetailsQ.data ?? []) push(e);
+    const q = trimmed.toLowerCase();
+    for (const e of curatedDetailsQ.data ?? []) {
+      // While searching, curated entries only show when they match, like every other result.
+      if (!q || e.id.toLowerCase().includes(q) || (e.description ?? "").toLowerCase().includes(q)) push(e);
+    }
     for (const e of allResults) push(e);
     return out;
-  }, [allResults, curatedDetailsQ.data]);
+  }, [allResults, curatedDetailsQ.data, trimmed]);
 
   const searchTotal = mergedAllResults.length;
   const curatedTotal = curatedSet.size;
@@ -466,30 +479,50 @@ function CvesPageInner(): React.ReactElement {
     });
   };
 
+  const canvasNodes = useTopologyStore((st) => st.nodes);
+  const updateNodeConfig = useTopologyStore((st) => st.updateNodeConfig);
+  const [pinOpen, setPinOpen] = React.useState(false);
+  const pickable = canvasNodes.filter((n) => n.type !== "zone") as Array<{
+    id: string;
+    data: { topologyNode: { config: { hostname: string; os: string; cves: string[] }; label: string } };
+  }>;
+
   const handlePinToNode = (): void => {
     if (!selectedId) return;
+    setPinOpen(true);
+  };
+
+  const pinTo = (nodeId: string): void => {
+    if (!selectedId) return;
+    const target = pickable.find((n) => n.id === nodeId);
+    updateNodeConfig(nodeId, (node) => ({
+      ...node,
+      config: { ...node.config, cves: Array.from(new Set([...(node.config.cves ?? []), selectedId])) },
+    }));
     const next = new Set(pinnedSet);
     next.add(selectedId);
     writePinnedSet(next);
+    writePinnedNodeMap({ ...readPinnedNodeMap(), [selectedId]: target?.data.topologyNode.config.hostname ?? nodeId });
     setPinnedTick((n) => n + 1);
-    // TODO(LabForge): show a real node-picker popover backed by
-    // /api/v1/labs latest topology — currently we only stash the CVE ID.
-    toast.success(`Pinned ${selectedId}`, {
-      description: "Pick a node first · node-picker coming soon.",
+    setPinOpen(false);
+    toast.success(`${selectedId} pinned to ${target?.data.topologyNode.config.hostname ?? "the machine"}`, {
+      description: "It is part of the lab now. Open the canvas to see it on the machine.",
     });
   };
 
   const handleSyncNVD = (): void => {
     // TODO(LabForge): wire to POST /api/v1/cves/sync once backend exposes it.
-    toast.info("NVD sync queued", {
-      description: "Backend trigger not yet exposed — stale-while-revalidate active.",
+    toast.info("Sync is not available yet", {
+      description: "The API has no sync endpoint, so results come live from NVD when you search.",
     });
   };
 
   const handleAddCurated = (): void => {
     // TODO(LabForge): open the "Add curated CVE" wizard once
     // /api/v1/cves/curated supports POST.
-    toast.info("Add curated CVE", { description: "Authoring flow coming soon." });
+    toast.info("Not available yet", {
+      description: "Adding your own curated CVE needs an API endpoint that does not exist. Curated entries are the script files in the API's provisioner folder.",
+    });
   };
 
   /* ------- Selected CVE detail ------- */
@@ -500,29 +533,16 @@ function CvesPageInner(): React.ReactElement {
     : false;
   const detailSeverity = detail ? severityFromScore(detail.cvss_score) : "LOW";
 
-  // The /cves/{id} endpoint returns CVEEntry without a script body, so the
-  // curated-script string isn't actually shipped over the wire. We show the
-  // curated description here as a placeholder until the API exposes the
-  // shell text — the structure & token highlighter is wired and ready.
-  // TODO(LabForge): extend /api/v1/cves/{id} (or add /provisioner) to ship
-  // the bundled .sh body so we can render the real script.
-  const provisionerScript = React.useMemo(() => {
-    if (!detail) return "";
-    if (!detailCurated) {
-      return "# No curated provisioner — manual exploitation only.\n# Refer to the NVD reference list for vendor advisories.";
-    }
-    const desc = curatedQ.data?.[detail.id] ?? detail.description ?? "";
-    const slug = detail.id.toLowerCase();
-    return [
-      "#!/usr/bin/env bash",
-      `# ${slug}.sh — ${desc}`,
-      "apt-get update -y",
-      "apt-get install -y curl wget",
-      `curl -L "$PROVISIONER_BUNDLE_URL" -o /opt/${slug}.tar.gz`,
-      `tar -xzf /opt/${slug}.tar.gz -C /opt`,
-      `systemctl start ${slug}`,
-    ].join("\n");
-  }, [detail, detailCurated, curatedQ.data]);
+  // The real script GET /cves/{id}/script would write into a build, not a guess at what one
+  // might look like. Fetched lazily (only once a CVE is selected), and only for an id that looks
+  // like a CVE — the endpoint 422s on anything else, which would just be noise while typing.
+  const scriptQ = useQuery({
+    queryKey: ["cve-script", detail?.id],
+    queryFn: () => api.getCveScript(detail!.id),
+    enabled: Boolean(detail && CVE_ID_RE.test(detail.id)),
+    staleTime: Infinity,
+  });
+  const provisionerScript = scriptQ.data?.script ?? (scriptQ.isLoading ? "# Loading…" : "");
 
   /* -------------------------------------------------------------- *
    * Render                                                         *
@@ -563,13 +583,7 @@ function CvesPageInner(): React.ReactElement {
             onSelect: () => setActiveTab("pinned"),
           },
         ]}
-        tabHint={
-          <span style={{ color: "var(--d10-fg-faint)" }}>
-            {latestPublished
-              ? `NVD feed updated ${formatRelative(latestPublished)}`
-              : "NVD feed updated —"}
-          </span>
-        }
+        tabHint={<span style={{ color: "var(--d10-fg-faint)" }}>Live from NVD, curated entries first</span>}
         actions={
           <>
             <input
@@ -580,10 +594,6 @@ function CvesPageInner(): React.ReactElement {
               onChange={(e) => setRawQuery(e.target.value)}
               aria-label="Search CVEs"
             />
-            <button type="button" className="btn">⛛ Severity ▾</button>
-            <button type="button" className="btn">⛛ Year: 2024</button>
-            <button type="button" className="btn">⛛ Vendor</button>
-            <button type="button" className="btn">⛛ Has exploit ✓</button>
             <div className="right">
               <button type="button" className="btn" onClick={handleSyncNVD}>
                 ↻ Sync NVD
@@ -603,7 +613,7 @@ function CvesPageInner(): React.ReactElement {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "220px 1fr 380px",
+          gridTemplateColumns: selectedId ? "200px minmax(0, 1fr) 380px" : "200px minmax(0, 1fr)",
           flex: 1,
           minHeight: 0,
         }}
@@ -681,8 +691,11 @@ function CvesPageInner(): React.ReactElement {
         </div>
 
         {/* -------- Centre: results table -------- */}
-        <div style={{ overflowY: "auto", minHeight: 0 }}>
-          <table>
+        <div style={{ overflow: "auto", minHeight: 0 }}>
+          <div className="home-sub" style={{ padding: "10px 14px 0" }}>
+            Click a row to see its details, the provisioner script and the pin to topology action.
+          </div>
+          <table style={{ minWidth: 780 }}>
             <thead>
               <tr>
                 <th>CVE</th>
@@ -720,6 +733,7 @@ function CvesPageInner(): React.ReactElement {
               {filtered.map((entry) => {
                 const upper = entry.id.toUpperCase();
                 const isCurated = curatedSet.has(upper);
+                const isFullyProvisioned = fullyProvisionedSet.has(upper);
                 const isSelected = upper === selectedId;
                 const sev = severityFromScore(entry.cvss_score);
                 const pinnedTo = pinnedNodes[upper];
@@ -730,7 +744,7 @@ function CvesPageInner(): React.ReactElement {
                     style={
                       isSelected
                         ? {
-                            background: "rgba(255,138,61,0.04)",
+                            background: "rgba(var(--d10-accent-rgb), 0.04)",
                             cursor: "pointer",
                           }
                         : { cursor: "pointer" }
@@ -750,8 +764,10 @@ function CvesPageInner(): React.ReactElement {
                       <span className={`pill ${pillToneFor(sev)}`}>{sev}</span>
                     </td>
                     <td>
-                      {isCurated ? (
+                      {isFullyProvisioned ? (
                         <span className="pill act">curated.sh</span>
+                      ) : isCurated ? (
+                        <span className="pill warn">notes only</span>
                       ) : (
                         <span className="pill mute">stub</span>
                       )}
@@ -775,7 +791,7 @@ function CvesPageInner(): React.ReactElement {
 
         {/* -------- Right: detail panel -------- */}
         {/* Only this panel scrolls when CPE/references lists overflow. */}
-        <div style={{ padding: 14, overflowY: "auto", minHeight: 0 }}>
+        {selectedId && <div style={{ padding: 14, overflowY: "auto", minHeight: 0 }}>
           {!detail ? (
             <div
               className="card"
@@ -796,7 +812,7 @@ function CvesPageInner(): React.ReactElement {
                     width: 24,
                     height: 24,
                     borderRadius: 4,
-                    background: "rgba(255,138,61,0.15)",
+                    background: "rgba(var(--d10-accent-rgb), 0.15)",
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
@@ -807,7 +823,11 @@ function CvesPageInner(): React.ReactElement {
                 <span className="title">{detail.id}</span>
                 <span className="sub">
                   {detail.severity.toLowerCase()} ·{" "}
-                  {detailCurated ? "curated provisioner" : "stub"}
+                  {scriptQ.data?.fully_provisioned
+                    ? "curated provisioner"
+                    : detailCurated
+                      ? "notes only, nothing is set up"
+                      : "stub"}
                 </span>
               </div>
               <div className="card-b">
@@ -839,11 +859,18 @@ function CvesPageInner(): React.ReactElement {
                       No affected products listed.
                     </span>
                   ) : (
-                    detail.affected_products.map((p) => (
-                      <span key={p} className="role-chip mono">
-                        {p}
-                      </span>
-                    ))
+                    <>
+                      {detail.affected_products.slice(0, 8).map((p) => (
+                        <span key={p} className="role-chip mono" title={p}>
+                          {p}
+                        </span>
+                      ))}
+                      {detail.affected_products.length > 8 && (
+                        <span className="muted" style={{ fontSize: 11 }}>
+                          and {detail.affected_products.length - 8} more
+                        </span>
+                      )}
+                    </>
                   )}
                 </div>
 
@@ -852,13 +879,13 @@ function CvesPageInner(): React.ReactElement {
                   {highlightBash(provisionerScript)}
                 </pre>
 
-                <div style={{ display: "flex", gap: 6, marginTop: 14 }}>
+                <div style={{ display: "flex", gap: 6, marginTop: 14, position: "sticky", bottom: 0, paddingTop: 10, background: "var(--d10-bg-elev-1)" }}>
                   <button
                     type="button"
                     className="btn primary"
                     onClick={handlePinToNode}
                   >
-                    📌 Pin to node…
+                    Pin to topology…
                   </button>
                   <a
                     className="btn"
@@ -866,14 +893,39 @@ function CvesPageInner(): React.ReactElement {
                     target="_blank"
                     rel="noopener noreferrer"
                   >
-                    ↗ NVD page
+                    NVD page
                   </a>
                 </div>
               </div>
             </div>
           )}
-        </div>
+        </div>}
       </div>
+      <Dialog open={pinOpen} onOpenChange={setPinOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Pin {selectedId} to a machine</DialogTitle>
+            <DialogDescription>
+              The CVE is added to the machine on your canvas and its provisioner script is included when the lab is built.
+            </DialogDescription>
+          </DialogHeader>
+          {pickable.length === 0 ? (
+            <div className="home-sub">
+              The canvas has no machines yet. <Link href="/build" style={{ color: "var(--d10-accent)" }}>Open the canvas</Link>, add a
+              machine, then come back and pin the CVE.
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {pickable.map((n) => (
+                <button key={n.id} type="button" className="btn" style={{ justifyContent: "space-between" }} onClick={() => pinTo(n.id)}>
+                  <span>{n.data.topologyNode.config.hostname}</span>
+                  <span className="home-sub">{n.data.topologyNode.config.os.replace(/_/g, " ")}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

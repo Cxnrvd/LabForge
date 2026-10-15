@@ -20,7 +20,11 @@ router = APIRouter(prefix="/generate", tags=["generate"])
 async def generate(
     request: Request,
     payload: GenerateRequest,
-    target: str = Query(default="vagrant", description="vagrant | docker-compose"),
+    target: str | None = Query(
+        default=None,
+        description="vagrant | docker-compose. Defaults to docker-compose for "
+        "topologies whose provider is docker, vagrant otherwise.",
+    ),
 ) -> Response:
     """Render the topology to a downloadable bundle.
 
@@ -30,12 +34,22 @@ async def generate(
     (web apps, OpenPLC, MediaMTX, databases). See
     ``services.generator.generate_zip`` for the per-target file list.
     """
+    if target is None:
+        target = "docker-compose" if payload.topology.provider.value == "docker" else "vagrant"
     if target not in {"vagrant", "docker-compose"}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
                 "detail": f"Unknown target: {target}",
                 "code": "unknown_target",
+            },
+        )
+    if target == "vagrant" and payload.topology.provider.value == "docker":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "detail": "This topology's provider is docker; use target=docker-compose",
+                "code": "provider_target_mismatch",
             },
         )
     result = validate_topology(payload.topology)
@@ -54,6 +68,7 @@ async def generate(
         include_readme=payload.include_readme,
         include_hosts_file=payload.include_hosts_file,
         target=target,
+        publish=payload.publish,
     )
     safe_name = re.sub(r"[^a-zA-Z0-9_-]+", "-", payload.topology.name.lower()).strip("-")
     suffix = "" if target == "vagrant" else f"-{target}"

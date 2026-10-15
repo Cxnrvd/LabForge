@@ -27,7 +27,7 @@ import type { ValidationIssue } from "@labforge/schema";
 const TABS: TabSpec[] = [
   { id: "canvas", label: "Canvas", href: "/build" },
   { id: "validate", label: "Validate", active: true, href: "/build/validate" },
-  { id: "generate", label: "Generate", href: "/build/generate" },
+  { id: "generate", label: "Launch", href: "/build/generate" },
 ];
 
 /* ============================================================

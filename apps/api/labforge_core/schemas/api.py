@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from labforge_schema import LabConfig
 from pydantic import BaseModel, ConfigDict, Field
@@ -13,14 +14,21 @@ class GenerateRequest(BaseModel):
     topology: LabConfig
     include_readme: bool = True
     include_hosts_file: bool = True
+    # Docker runtime only: bind service ports to 127.0.0.1 ("loopback") or
+    # publish nothing ("none").
+    publish: Literal["none", "loopback"] = "loopback"
 
 
 class BuildRequest(BaseModel):
-    """In-app `Build Lab` — same payload as Generate, plus optional name override."""
+    """In-app `Build Lab` — same payload as Generate, plus build options."""
 
     model_config = ConfigDict(extra="forbid")
     topology: LabConfig
     workspace_name: str | None = None
+    # Tear down any existing lab built from the same topology name first.
+    # Without it a second Build of a running lab is refused (409).
+    replace: bool = False
+    publish: Literal["none", "loopback"] = "loopback"
 
 
 class BuildResponse(BaseModel):
@@ -126,12 +134,25 @@ class FlowSample(BaseModel):
     protocol: str | None = None
 
 
+class NeverBuilt(BaseModel):
+    """A node the topology asked for that this lab never attempted — not down, not failed,
+    never started. On Docker: a node type with no container path (a domain controller, ICS HMI)
+    or whose role has none (see compose_generator._SOFT_VM_ONLY). The agent reads this straight
+    from the notes/<hostname>.txt files the build itself already wrote, so it can never drift
+    from what was actually skipped."""
+
+    model_config = ConfigDict(extra="forbid")
+    hostname: str
+    reason: str
+
+
 class HeartbeatPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
     lab_status: str = "unknown"
     vms: list[VmState] = Field(default_factory=list)
     log_tail: list[str] = Field(default_factory=list)
     flows: list[FlowSample] = Field(default_factory=list)
+    never_built: list[NeverBuilt] = Field(default_factory=list)
     captured_at: datetime | None = None
 
 

@@ -72,8 +72,247 @@ def test_each_template_generates(all_template_paths, load_template):
     assert all_template_paths, "no templates discovered"
     for path in all_template_paths:
         topology = load_template(path)
-        data = generate_zip(topology)
+        docker = topology.provider.value == "docker"
+        data = generate_zip(topology, target="docker-compose" if docker else "vagrant")
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
             names = set(zf.namelist())
+        if docker:
+            assert "docker-compose.yml" in names, f"{path.name} missing compose file"
+            assert ".labforge-project" in names
+            continue
         assert "Vagrantfile" in names, f"{path.name} missing Vagrantfile"
         assert "manifest.json" in names, f"{path.name} missing manifest"
+
+
+def test_coverage_warnings_flag_an_unmatched_role_and_a_notes_only_cve():
+    """generate_artifacts().warnings is what the Launch/README/build-log fix for the
+    splunk-enterprise and pfsense-emulator bugs relies on — prove it actually fires."""
+    from labforge_schema import (
+        Credentials,
+        LabConfig,
+        NodeConfig,
+        NodeType,
+        OsType,
+        Position,
+        TopologyNode,
+    )
+
+    from labforge_core.services.generator import generate_artifacts
+
+    node = TopologyNode(
+        id="srv",
+        type=NodeType.SERVER,
+        label="srv",
+        position=Position(x=0, y=0),
+        config=NodeConfig(
+            os=OsType.UBUNTU_2204,
+            ip="192.168.56.10",
+            hostname="srv",
+            roles=["not-a-real-role"],
+            cves=["CVE-2020-1472"],  # Zerologon: known but notes-only
+            credentials=Credentials(username="vagrant", password="vagrant"),
+        ),
+    )
+    topology = LabConfig(name="warn-test", network_cidr="192.168.56.0/24", nodes=[node])
+    artifacts = generate_artifacts(topology)
+    assert any("not-a-real-role" in w and "no curated installer" in w for w in artifacts.warnings)
+    assert any("CVE-2020-1472" in w and "notes only" in w for w in artifacts.warnings)
+    assert "## Warnings" in artifacts.readme
+    assert "not-a-real-role" in artifacts.readme or "CVE-2020-1472" in artifacts.readme
+
+
+def test_readme_cve_status_distinguishes_real_notes_only_and_unknown():
+    from labforge_schema import (
+        Credentials,
+        LabConfig,
+        NodeConfig,
+        NodeType,
+        OsType,
+        Position,
+        TopologyNode,
+    )
+
+    from labforge_core.services.generator import generate_artifacts
+
+    node = TopologyNode(
+        id="srv",
+        type=NodeType.SERVER,
+        label="srv",
+        position=Position(x=0, y=0),
+        config=NodeConfig(
+            os=OsType.UBUNTU_2204,
+            ip="192.168.56.10",
+            hostname="srv",
+            cves=["CVE-2021-44228", "CVE-2020-1472", "CVE-1999-9999"],
+            credentials=Credentials(username="vagrant", password="vagrant"),
+        ),
+    )
+    topology = LabConfig(name="cve-status-test", network_cidr="192.168.56.0/24", nodes=[node])
+    readme = generate_artifacts(topology).readme
+    assert "CVE-2021-44228` — a real vulnerable target is set up" in readme
+    assert "CVE-2020-1472` — notes only, nothing is set up" in readme
+    assert "CVE-1999-9999` — no curated provisioner" in readme
+
+
+def test_role_install_echo_line_shows_the_description_not_just_the_label():
+    """Previously 'begin role: X' looked identical whether X installed something real or had no
+    curated installer at all. The description must now be inline so a build log doesn't hide it."""
+    from labforge_schema import (
+        Credentials,
+        LabConfig,
+        NodeConfig,
+        NodeType,
+        OsType,
+        Position,
+        TopologyNode,
+    )
+
+    from labforge_core.services.generator import generate_artifacts
+
+    real = TopologyNode(
+        id="web",
+        type=NodeType.SERVER,
+        label="web",
+        position=Position(x=0, y=0),
+        config=NodeConfig(
+            os=OsType.UBUNTU_2204,
+            ip="192.168.56.10",
+            hostname="web",
+            roles=["apache"],
+            credentials=Credentials(username="vagrant", password="vagrant"),
+        ),
+    )
+    stub = TopologyNode(
+        id="bad",
+        type=NodeType.SERVER,
+        label="bad",
+        position=Position(x=0, y=0),
+        config=NodeConfig(
+            os=OsType.UBUNTU_2204,
+            ip="192.168.56.11",
+            hostname="bad",
+            roles=["not-a-real-role"],
+            credentials=Credentials(username="vagrant", password="vagrant"),
+        ),
+    )
+    topology = LabConfig(name="echo-test", network_cidr="192.168.56.0/24", nodes=[real, stub])
+    artifacts = generate_artifacts(topology)
+    # block.label/description are shell-quoted (see test_injection_fixtures.py), so check for the
+    # content rather than an exact literal substring of the quoting.
+    web_sh = artifacts.provisioner_scripts["provision_web.sh"]
+    assert "begin role:" in web_sh and "apache" in web_sh
+    bad_sh = artifacts.provisioner_scripts["provision_bad.sh"]
+    assert "begin role:" in bad_sh and "not-a-real-role" in bad_sh and "no curated installer" in bad_sh
+
+
+def test_dfir_lab_splunk_and_telecom_ad_rts_firewall_now_have_real_installers():
+    """Regression test for the two role-name-typo bugs: dfir-lab's splunk01 used
+    'splunk-enterprise@9.3.0' and telecom-ad-rts's fw01 used 'pfsense-emulator', neither of which
+    matched the registered 'splunk' / 'pfsense' installers, so neither node got anything installed."""
+    from labforge_core.services.generator import generate_artifacts
+    from labforge_core.services.template_loader import get_template
+
+    dfir = get_template("dfir-lab")
+    splunk_node = next(n for n in dfir.nodes if n.config.hostname == "splunk01")
+    assert splunk_node.config.roles == ["splunk-enterprise@9.3.0"]
+    dfir_artifacts = generate_artifacts(dfir)
+    assert dfir_artifacts.warnings == []
+    assert "splunkforwarder" in dfir_artifacts.provisioner_scripts["provision_splunk01.sh"]
+
+    telecom = get_template("telecom-ad-rts")
+    fw_node = next(n for n in telecom.nodes if n.config.hostname == "fw01")
+    assert fw_node.config.roles == ["pfsense-emulator"]
+    telecom_artifacts = generate_artifacts(telecom)
+    assert telecom_artifacts.warnings == []
+    assert "nftables" in telecom_artifacts.provisioner_scripts["provision_fw01.sh"]
+
+
+def test_wifi_pentest_env_role_installs_no_attack_tooling():
+    """wifi-pentest-env must only install diagnostics (iw/usbutils/rfkill) for a
+    passed-through adapter — never aircrack-ng, hostapd, wifite, hcxtools, or hashcat.
+    That line is load-bearing: everything past it is the user's own, run by hand
+    inside the VM, not something LabForge pre-wires."""
+    from labforge_schema import (
+        Credentials,
+        LabConfig,
+        NodeConfig,
+        NodeType,
+        OsType,
+        Position,
+        Provider,
+        TopologyNode,
+    )
+
+    from labforge_core.services.generator import generate_artifacts
+
+    node = TopologyNode(
+        id="wifi1",
+        type=NodeType.ATTACKER,
+        label="wifi vm",
+        position=Position(x=0, y=0),
+        config=NodeConfig(
+            os=OsType.KALI_ROLLING,
+            ip="192.168.56.20",
+            hostname="wifiattacker",
+            roles=["wifi-pentest-env"],
+            credentials=Credentials(username="vagrant", password="vagrant"),
+            usb_vendor_id="0bda",
+            usb_product_id="8812",
+        ),
+    )
+    topology = LabConfig(
+        name="wifi-test",
+        network_cidr="192.168.56.0/24",
+        provider=Provider.VIRTUALBOX,
+        nodes=[node],
+    )
+    artifacts = generate_artifacts(topology)
+    assert artifacts.warnings == []
+
+    script = artifacts.provisioner_scripts["provision_wifiattacker.sh"]
+    assert "iw dev" in script
+    assert "usbutils" in script
+    for forbidden in ("aircrack", "hostapd", "wifite", "hcxdumptool", "hcxtools", "hashcat", "reaver"):
+        assert forbidden not in script.lower(), f"{forbidden!r} must never appear in wifi-pentest-env"
+
+    # The USB filter must reach the Vagrantfile so the device actually gets attached.
+    assert 'v.customize ["modifyvm", :id, "--usb", "on"]' in artifacts.vagrantfile
+    assert '"--vendorid", "0x0bda"' in artifacts.vagrantfile
+    assert '"--productid", "0x8812"' in artifacts.vagrantfile
+
+
+def test_usb_passthrough_omitted_without_both_ids():
+    """No vendor/product ID pair -> no usbfilter block at all, not a broken one."""
+    from labforge_schema import (
+        Credentials,
+        LabConfig,
+        NodeConfig,
+        NodeType,
+        OsType,
+        Position,
+        Provider,
+        TopologyNode,
+    )
+
+    from labforge_core.services.generator import generate_artifacts
+
+    node = TopologyNode(
+        id="plain1",
+        type=NodeType.SERVER,
+        label="plain vm",
+        position=Position(x=0, y=0),
+        config=NodeConfig(
+            os=OsType.UBUNTU_2204,
+            ip="192.168.56.21",
+            hostname="plainvm",
+            credentials=Credentials(username="vagrant", password="vagrant"),
+        ),
+    )
+    topology = LabConfig(
+        name="no-usb-test",
+        network_cidr="192.168.56.0/24",
+        provider=Provider.VIRTUALBOX,
+        nodes=[node],
+    )
+    artifacts = generate_artifacts(topology)
+    assert "usbfilter" not in artifacts.vagrantfile

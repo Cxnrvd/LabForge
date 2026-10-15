@@ -92,6 +92,9 @@ class Provider(str, Enum):
     VIRTUALBOX = "virtualbox"
     VMWARE = "vmware"
     LIBVIRT = "libvirt"
+    # Container runtime: the lab is rendered to a docker-compose project and
+    # started with ``docker compose up`` instead of ``vagrant up``.
+    DOCKER = "docker"
 
 
 class AttackTactic(str, Enum):
@@ -152,6 +155,13 @@ _PASSWORD_RE = re.compile(r"^[^\"'`$;\\\r\n]+$")
 # quoting and Ruby-interpolation metas so the value is safe across
 # every downstream consumer.
 _TOPOLOGY_NAME_RE = re.compile(r"^[A-Za-z0-9 \-_.,!?():]+$")
+# Defence-in-depth alongside the bash_q / ps_q escaping in the generator, same reasoning as
+# _PASSWORD_RE: a role string reaches a provisioner script's shell/PowerShell text (both the
+# bare role name and the free-text "@version" suffix, e.g. "siemens-simatic@TIA Portal V19") and
+# must not be able to break out of the double-quoted lines it's spliced into. Version suffixes in
+# the bundled templates use spaces (vendor/product names), so those stay allowed; shell and
+# PowerShell metacharacters do not.
+_ROLE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(@[A-Za-z0-9][A-Za-z0-9._ -]*)?$")
 
 
 class Credentials(BaseModel):
@@ -197,6 +207,18 @@ class NodeConfig(BaseModel):
     # When set, the compose target runs the node as a container instead
     # of a VM (where the OS/role mix allows it).
     compose_image: Optional[str] = Field(default=None, max_length=256)
+    # Optional host USB device to pass through to this VM (VirtualBox only).
+    # Four hex digits each, as reported by the host adapter-listing endpoint
+    # or `lsusb`/Device Manager. Both must be set together to take effect —
+    # see docker_roles.py / generator.py for the "what this does and doesn't
+    # do" note; this field only identifies the device, it carries no
+    # attack tooling or network configuration of its own.
+    usb_vendor_id: Optional[str] = Field(default=None, pattern=r"^[0-9a-fA-F]{4}$")
+    usb_product_id: Optional[str] = Field(default=None, pattern=r"^[0-9a-fA-F]{4}$")
+    # Boot this VM with a visible VirtualBox window instead of headless.
+    # Only meaningful alongside a desktop environment (e.g. the
+    # "desktop-xfce" role) — on its own it just shows an empty console.
+    gui: bool = Field(default=False)
 
     @field_validator("ip")
     @classmethod
@@ -228,6 +250,17 @@ class NodeConfig(BaseModel):
                 raise ValueError(f"Invalid CVE id (expected CVE-YYYY-NNNN): {cve}")
             normalized.append(cve.upper())
         return normalized
+
+    @field_validator("roles")
+    @classmethod
+    def _validate_roles(cls, v: list[str]) -> list[str]:
+        for role in v:
+            if not _ROLE_RE.match(role):
+                raise ValueError(
+                    f"Invalid role {role!r}: use letters, digits, '.', '_', '-', and an "
+                    "optional '@version' (spaces allowed in the version only)"
+                )
+        return v
 
 
 class AttackTag(BaseModel):

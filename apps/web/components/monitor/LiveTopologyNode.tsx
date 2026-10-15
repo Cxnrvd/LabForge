@@ -14,6 +14,13 @@ export type LiveNodeState = "defined" | "provisioning" | "running" | "failed";
 // React Flow's Node generic constrains data to `Record<string, unknown>`,
 // so the interface must be assignable to that. Using a type intersection
 // keeps the named fields IDE-friendly while still satisfying the constraint.
+interface NodeAccessEndpoint {
+  ip: string;
+  port: number;
+  label: string;
+  scheme?: "http" | "https";
+}
+
 export type LiveTopologyNodeData = Record<string, unknown> & {
   type: NodeType;
   hostname: string;
@@ -24,6 +31,8 @@ export type LiveTopologyNodeData = Record<string, unknown> & {
   state: LiveNodeState;
   /** Phase reported by build.log (used for tooltip detail). */
   buildPhase?: BuildPhase;
+  /** Same list the AccessPanel renders — lets the node itself be clickable. */
+  endpoints?: NodeAccessEndpoint[];
 };
 
 /**
@@ -121,9 +130,37 @@ export function LiveTopologyNode({ data }: { data: LiveTopologyNodeData }) {
         <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
           {data.label}
         </p>
-        <code className="mt-1 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] leading-tight">
-          {data.ip}
-        </code>
+        {data.endpoints && data.endpoints.length > 0 ? (
+          <div className="mt-1 flex flex-wrap items-center justify-center gap-1">
+            {data.endpoints.map((ep) => {
+              const address = `${ep.ip}:${ep.port}`;
+              return ep.scheme ? (
+                <a
+                  key={ep.port}
+                  href={`${ep.scheme}://${ep.ip}:${ep.port}/`}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={`${ep.label} — opens ${ep.scheme}://${address}/ in a new tab`}
+                  className="nodrag nopan rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] leading-tight underline decoration-dotted underline-offset-2 hover:bg-muted/70 hover:text-foreground"
+                >
+                  {address}
+                </a>
+              ) : (
+                <code
+                  key={ep.port}
+                  title={ep.label}
+                  className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] leading-tight"
+                >
+                  {address}
+                </code>
+              );
+            })}
+          </div>
+        ) : (
+          <code className="mt-1 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] leading-tight">
+            {data.ip}
+          </code>
+        )}
         {data.buildPhase && data.state !== "running" && (
           <span className="mt-0.5 text-[10px] text-muted-foreground">
             {data.buildPhase}

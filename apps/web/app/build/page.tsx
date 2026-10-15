@@ -69,7 +69,7 @@ function CanvasLoader(): null {
 const TABS: TabSpec[] = [
   { id: "canvas", label: "Canvas", active: true, href: "/build" },
   { id: "validate", label: "Validate", href: "/build/validate" },
-  { id: "generate", label: "Generate", href: "/build/generate" },
+  { id: "generate", label: "Launch", href: "/build/generate" },
 ];
 
 export default function BuildPage(): React.ReactElement {

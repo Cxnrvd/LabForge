@@ -3,13 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --port 3000",
+    "dev": "next dev --turbo --hostname 127.0.0.1 --port 3000",
     "build": "next build",
     "start": "next start --port 3000",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "generate:api-types": "node scripts/generate-api-types.mjs",
-    "postinstall": "node scripts/generate-api-types.mjs || true"
+    "postinstall": "node scripts/generate-api-types.mjs",
+    "test": "vitest run",
+    "ui:sweep": "node scripts/ui-sweep.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",
@@ -50,8 +52,10 @@
     "@types/react-dom": "^18.3.1",
     "eslint": "^9.14.0",
     "eslint-config-next": "15.0.3",
+    "playwright": "1.63.0",
     "postcss": "^8.4.49",
     "tailwindcss": "^4.0.0-beta.4",
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "vitest": "^5.0.3"
   }
 }

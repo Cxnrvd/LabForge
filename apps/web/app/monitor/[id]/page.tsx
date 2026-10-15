@@ -8,8 +8,9 @@ import { toast } from "sonner";
 
 import type { LabConfig } from "@labforge/schema";
 import { cn } from "@/lib/utils/cn";
-import { api, type ApiError, type BuildPhasesPayload, type BuildStatusPayload } from "@/lib/api/client";
+import { api, type ApiError, type BuildPhasesPayload, type BuildStatusPayload, type LabEndpoint } from "@/lib/api/client";
 import { useLiveBus, type LiveBusEvent } from "@/lib/api/live-bus";
+import { useImageActions } from "@/lib/api/images";
 import { LiveTopologyView } from "@/components/monitor/LiveTopologyView";
 import { TimeScrubber, type ScrubberSample } from "@/components/monitor/TimeScrubber";
 
@@ -32,10 +33,18 @@ interface HeartbeatVm {
   roles?: string[];
 }
 
+/** A node the topology asked for that this lab never attempted — not down, not failed, never
+ * started (a domain controller, or a firewall/router/camera whose role has no container path). */
+interface NeverBuiltNode {
+  hostname: string;
+  reason: string;
+}
+
 interface HeartbeatPayload {
   lab_status?: string;
   vms?: HeartbeatVm[];
   log_tail?: string[];
+  never_built?: NeverBuiltNode[];
   captured_at?: string | null;
 }
 
@@ -104,6 +113,12 @@ export default function BuildMonitorPage() {
   const offsetRef = React.useRef(0);
   const [autoScroll, setAutoScroll] = React.useState(true);
   const scrollRef = React.useRef<HTMLPreElement | null>(null);
+  // Build log can run thousands of lines across every node's provisioning
+  // output in one blob (e.g. the Wazuh dashboard password only ever gets
+  // printed once, buried in the middle of it) — a client-side filter is the
+  // only way to find a specific line without scrolling the whole thing by
+  // eye. Filtering is free: `lines` is already fully buffered in state.
+  const [logFilter, setLogFilter] = React.useState("");
 
   // Tab state, persisted in ?view= so refresh keeps the selection.
   const initialView = React.useMemo(
@@ -131,6 +146,11 @@ export default function BuildMonitorPage() {
 
   // SSH modal + Events filter local state.
   const [sshOpen, setSshOpen] = React.useState(false);
+  const [sshFocusHost, setSshFocusHost] = React.useState<string | null>(null);
+  const handleSshFocus = React.useCallback((hostname: string) => {
+    setSshFocusHost(hostname);
+    setSshOpen(true);
+  }, []);
   const [eventsFilter, setEventsFilter] = React.useState<"" | "op" | "warn" | "err">("");
 
   // Heartbeat-derived feed (live event log) — populated from WS.
@@ -171,6 +191,14 @@ export default function BuildMonitorPage() {
     queryFn: () => api.getLabTopology(id),
     enabled,
     staleTime: Infinity,
+  });
+
+  const endpointsQ = useQuery<LabEndpoint[]>({
+    queryKey: ["lab-endpoints", id],
+    queryFn: () => api.labEndpoints(id),
+    enabled: enabled && labQ.data?.provider === "docker",
+    staleTime: 60_000,
+    retry: 0,
   });
 
   const statusQ = useQuery<BuildStatusPayload>({
@@ -233,6 +261,7 @@ export default function BuildMonitorPage() {
   const { status: wsStatus } = useLiveBus(enabled ? id : null, { onEvent: onLiveEvent });
 
   const qc = useQueryClient();
+  const { golden: goldenMut } = useImageActions();
   const stopMut = useMutation<BuildStatusPayload, ApiError>({
     mutationFn: () => api.buildStop(id),
     onSuccess: (data) => {
@@ -262,38 +291,89 @@ export default function BuildMonitorPage() {
     stopMut.mutate();
   };
 
-  // ----- Halt action: maps to the existing /build/stop endpoint.
-  // (There is no dedicated /labs/{id}/halt route on the backend, so we
-  // reuse buildStop which already SIGTERMs vagrant and leaves the
-  // workspace in place.)
+  // ----- Stop / Start: Docker labs stop their containers and keep the data,
+  // then start again from the same workspace. Other providers keep the old
+  // behaviour (signal the build process).
+  const haltMut = useMutation<unknown, ApiError>({
+    mutationFn: () => api.haltLab(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["lab", id] });
+      qc.invalidateQueries({ queryKey: ["labs"] });
+      toast.success("Lab stopped", {
+        description:
+          labQ.data?.provider === "docker"
+            ? "Containers are stopped. Data is kept; press Start to run it again."
+            : "The VMs are powered off. Data is kept; press Start to boot them again.",
+      });
+    },
+    onError: (err) => {
+      toast.error("Could not stop the lab", { description: err.detail });
+    },
+  });
+  const pauseMut = useMutation<unknown, ApiError>({
+    mutationFn: () => api.pauseLab(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["lab", id] });
+      qc.invalidateQueries({ queryKey: ["labs"] });
+      toast.success("Lab paused", { description: "VM state is saved to disk. Press Resume for a fast restore." });
+    },
+    onError: (err) => {
+      toast.error("Could not pause the lab", { description: err.detail });
+    },
+  });
+  const resumeMut = useMutation<unknown, ApiError>({
+    mutationFn: () => api.resumeLab(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["lab", id] });
+      qc.invalidateQueries({ queryKey: ["labs"] });
+      qc.invalidateQueries({ queryKey: ["build-status", id] });
+      toast.success("Starting the lab", {
+        description:
+          labQ.data?.provider === "docker" ? "Containers are coming back up." : "The VMs are booting/restoring.",
+      });
+    },
+    onError: (err) => {
+      toast.error("Could not start the lab", { description: err.detail });
+    },
+  });
+
   const handleHalt = (): void => {
-    if (stopMut.isPending) return;
+    if (haltMut.isPending || stopMut.isPending) return;
+    const isDocker = labQ.data?.provider === "docker";
     const ok = window.confirm(
-      "Halt this lab?\n\nThe vagrant subprocess will be signalled. " +
-        "Running VMs and the workspace will be left intact so you can " +
-        "resume or destroy later.",
+      isDocker
+        ? "Stop this lab?\n\nThe containers are stopped. Your data and the workspace are kept, " +
+            "and you can start it again later."
+        : "Stop this lab?\n\nThe VMs are powered off (vagrant halt). Your data and the workspace " +
+            "are kept, and you can start it again later. For a faster round-trip that keeps RAM " +
+            "state, use Pause instead.",
     );
     if (!ok) return;
-    stopMut.mutate();
+    haltMut.mutate();
+  };
+
+  const handlePause = (): void => {
+    if (pauseMut.isPending) return;
+    const isDocker = labQ.data?.provider === "docker";
+    const ok = window.confirm(
+      isDocker
+        ? "Pause this lab?\n\nThe containers are frozen in place (docker compose pause) — no CPU " +
+            "use, but they stay fully resident in memory. Resume unfreezes them instantly, with no " +
+            "restart."
+        : "Pause this lab?\n\nThe VMs are suspended to disk (vagrant suspend), keeping their running " +
+            "state in memory. Resume restores them quickly rather than rebooting.",
+    );
+    if (!ok) return;
+    pauseMut.mutate();
   };
 
   // ----- Destroy action: DELETE /labs/{id} (the only backend route
   // that tears a lab down). On success we navigate to /labs.
   const destroyMut = useMutation<void, ApiError>({
-    mutationFn: async () => {
-      const res = await fetch(`/api/v1/labs/${id}`, { method: "DELETE" });
-      if (!res.ok && res.status !== 204) {
-        let detail = `${res.status} ${res.statusText}`;
-        try {
-          const body = (await res.json()) as { detail?: string };
-          if (body.detail) detail = body.detail;
-        } catch {
-          // ignore
-        }
-        throw { detail, code: "destroy_failed" } satisfies ApiError;
-      }
-    },
+    mutationFn: () => api.destroyLab(id),
     onSuccess: () => {
+      // Stop every poll of this lab first, otherwise they answer 404 while the page navigates away.
+      qc.removeQueries({ predicate: (q) => Array.isArray(q.queryKey) && q.queryKey.includes(id) });
       toast.success("Lab destroyed");
       qc.invalidateQueries({ queryKey: ["labs"] });
       router.push("/labs");
@@ -306,8 +386,8 @@ export default function BuildMonitorPage() {
   const handleDestroy = (): void => {
     if (destroyMut.isPending) return;
     const ok = window.confirm(
-      "Destroy this lab?\n\nAll VMs and the workspace directory will be " +
-        "removed. This cannot be undone.",
+      "Destroy this lab?\n\nAll VMs/containers, their data and the workspace " +
+        "directory will be removed. This cannot be undone.",
     );
     if (!ok) return;
     destroyMut.mutate();
@@ -362,9 +442,45 @@ export default function BuildMonitorPage() {
   }
 
   const lab = labQ.data;
+  // A Docker lab that is stopped, or whose build failed or only half came up, can be started again.
+  // Windows machines whose disk can be saved as a local golden image.
+  const windowsHosts = (topologyQ.data?.nodes ?? [])
+    .filter((n) => String(n.config.os).startsWith("windows"))
+    .map((n) => n.config.hostname);
+  const handleGolden = (): void => {
+    const hostName =
+      windowsHosts.length === 1 ? windowsHosts[0] : window.prompt(`Which machine? (${windowsHosts.join(", ")})`, windowsHosts[0]);
+    if (!hostName || !windowsHosts.includes(hostName)) return;
+    const name = window.prompt(
+      "Name for the golden image? It is a copy of this machine's disk, kept only on this computer. The machine is stopped while it is copied.",
+      `${hostName}-golden`,
+    );
+    if (!name) return;
+    goldenMut.mutate(
+      { source_id: `lab:${id}:${hostName}`, name },
+      {
+        onSuccess: () => toast.success("Saving the golden image", { description: "Follow it on the Images page." }),
+        onError: (e) => toast.error("Could not save the image", { description: e.message }),
+      },
+    );
+  };
+
+  const canResume =
+    !!lab && ["stopped", "paused", "failed", "partial"].includes(lab.status) && phase !== "running";
+  // Vagrant pause = vagrant suspend (RAM state saved to disk, VM powered
+  // off). Docker pause = docker compose pause (cgroup-freeze, containers
+  // stay resident in memory) — a different mechanism, but available for
+  // every lab either way.
+  const canPause = lab?.status === "running" && phase !== "running";
   const vms = latestHb?.vms ?? [];
   const runningVms = vms.filter((v) => v.state === "running").length;
   const totalVms = vms.length;
+  // Nodes the topology asked for that this build never attempted (Docker: a domain controller,
+  // or a firewall/router/camera whose role has no container path). These are not part of
+  // runningVms/totalVms — that ratio is honestly 100% of what was actually built — but a lab
+  // that's quietly missing nodes it was supposed to have must never just read as "N/N healthy"
+  // with no sign anything is missing.
+  const neverBuilt = latestHb?.never_built ?? [];
   const overall = phasesQ.data?.overall ?? "unknown";
   const buildFailed = phase === "failed";
   const wsHealthy = wsStatus === "open";
@@ -397,13 +513,35 @@ export default function BuildMonitorPage() {
 
         <div style={{ flex: 1 }} />
 
+        {(endpointsQ.data ?? []).map((ep) =>
+          ep.url ? (
+            <a
+              key={`${ep.host}-${ep.host_port}`}
+              className="btn sm primary"
+              href={ep.url}
+              target="_blank"
+              rel="noreferrer"
+              title={ep.url}
+            >
+              Open {ep.label}
+            </a>
+          ) : (
+            <span key={`${ep.host}-${ep.host_port}`} className="badge mono" title={`${ep.label} on ${ep.host}`}>
+              {ep.label} {ep.address}
+            </span>
+          ),
+        )}
+
         <button
           className="btn sm"
           type="button"
-          onClick={() => setSshOpen(true)}
-          aria-label="Show SSH commands"
+          onClick={() => {
+            setSshFocusHost(null);
+            setSshOpen(true);
+          }}
+          aria-label={lab?.provider === "docker" ? "Show container shell commands" : "Show SSH commands"}
         >
-          SSH
+          {lab?.provider === "docker" ? "Shell" : "SSH"}
         </button>
         <button
           className="btn"
@@ -413,15 +551,52 @@ export default function BuildMonitorPage() {
         >
           Reload
         </button>
-        <button
-          className="btn"
-          type="button"
-          onClick={phase === "running" ? handleStop : handleHalt}
-          disabled={stopMut.isPending}
-          aria-label="Halt lab"
-        >
-          {stopMut.isPending ? "Halting…" : "Halt"}
-        </button>
+        {windowsHosts.length > 0 && lab?.provider === "docker" && lab.status === "running" && (
+          <button className="btn sm" type="button" onClick={handleGolden} disabled={goldenMut.isPending}>
+            Save Windows disk
+          </button>
+        )}
+        {canResume && (
+          <button
+            className="btn primary"
+            type="button"
+            onClick={() => resumeMut.mutate()}
+            disabled={resumeMut.isPending}
+            aria-label="Start lab"
+          >
+            {resumeMut.isPending
+              ? "Starting…"
+              : lab?.status === "stopped"
+                ? "Start"
+                : lab?.status === "paused"
+                  ? "Resume"
+                  : "Retry start"}
+          </button>
+        )}
+        {canPause && (
+          <button
+            className="btn"
+            type="button"
+            onClick={handlePause}
+            disabled={pauseMut.isPending}
+            aria-label="Pause lab"
+          >
+            {pauseMut.isPending ? "Pausing…" : "Pause"}
+          </button>
+        )}
+        {lab?.status !== "stopped" && lab?.status !== "paused" && (
+          <button
+            className="btn"
+            type="button"
+            onClick={phase === "running" ? handleStop : handleHalt}
+            disabled={stopMut.isPending || haltMut.isPending}
+            aria-label={phase === "running" ? "Cancel build" : "Stop lab"}
+          >
+            {phase === "running"
+              ? stopMut.isPending ? "Cancelling…" : "Cancel build"
+              : haltMut.isPending || stopMut.isPending ? "Stopping…" : "Stop"}
+          </button>
+        )}
         <button
           className="btn danger"
           type="button"
@@ -435,10 +610,12 @@ export default function BuildMonitorPage() {
 
       {sshOpen && (
         <SshModal
+          provider={lab?.provider ?? "virtualbox"}
           vms={vms}
           topologyHostnames={
             topologyQ.data?.nodes.map((n) => n.config.hostname) ?? []
           }
+          focusHost={sshFocusHost}
           onClose={() => setSshOpen(false)}
         />
       )}
@@ -466,6 +643,12 @@ export default function BuildMonitorPage() {
           <div className="meta mono">
             {latestHb?.captured_at ? `last heartbeat ${shortTime(latestHb.captured_at)} · ` : ""}
             {runningVms}/{totalVms || "?"} healthy
+            {neverBuilt.length > 0 && (
+              <span style={{ color: "var(--amber, #f59e0b)" }}>
+                {" "}
+                · {neverBuilt.length} never built ({neverBuilt.map((n) => n.hostname).join(", ")})
+              </span>
+            )}
             {lab?.provider ? ` · ${lab.provider}` : ""}
             {lab?.topology_slug ? ` · ${lab.topology_slug}` : ""}
           </div>
@@ -481,11 +664,6 @@ export default function BuildMonitorPage() {
                 aria-selected={active}
                 onClick={() => setViewPersist(t.id)}
                 className={cn("btn sm", active && "act primary")}
-                style={
-                  active
-                    ? { borderColor: "var(--amber, #c87a00)", color: "var(--amber, #c87a00)" }
-                    : undefined
-                }
               >
                 {t.label}
               </button>
@@ -507,6 +685,12 @@ export default function BuildMonitorPage() {
               <span className="mono" style={{ color: "var(--ink-mute)" }}>
                 {latestHb?.captured_at ? shortTime(latestHb.captured_at) : "—"}
               </span>
+              {neverBuilt.length > 0 && (
+                <span className="mono" style={{ color: "var(--amber, #f59e0b)" }}>
+                  {" "}
+                  · {neverBuilt.length} never built
+                </span>
+              )}
             </div>
           </div>
           <div className="stat">
@@ -611,7 +795,19 @@ export default function BuildMonitorPage() {
                 }}
               >
                 {vms.map((vm) => (
-                  <VmCard key={vm.hostname} vm={vm} />
+                  <VmCard key={vm.hostname} vm={vm} labId={id} onSsh={handleSshFocus} />
+                ))}
+              </div>
+            )}
+            {neverBuilt.length > 0 && (
+              <div className="card-b" style={{ borderTop: "1px solid var(--line)" }}>
+                <div className="sub" style={{ marginBottom: 6, color: "var(--amber, #f59e0b)" }}>
+                  Never built — these nodes do not exist in this lab at all
+                </div>
+                {neverBuilt.map((n) => (
+                  <div key={n.hostname} className="mono" style={{ fontSize: 12.5, color: "var(--ink-mute)", padding: "2px 0" }}>
+                    <span style={{ color: "var(--ink)" }}>{n.hostname}</span> — {n.reason}
+                  </div>
                 ))}
               </div>
             )}
@@ -651,11 +847,6 @@ export default function BuildMonitorPage() {
                   type="button"
                   className={cn("btn sm", eventsFilter === lv && "act primary")}
                   onClick={() => setEventsFilter(lv)}
-                  style={
-                    eventsFilter === lv
-                      ? { borderColor: "var(--amber, #c87a00)", color: "var(--amber, #c87a00)" }
-                      : undefined
-                  }
                 >
                   {lv === "" ? "all" : lv}
                 </button>
@@ -734,7 +925,7 @@ export default function BuildMonitorPage() {
                         }}
                       >
                         {snapVms.map((vm) => (
-                          <VmCard key={vm.hostname} vm={vm} />
+                          <VmCard key={vm.hostname} vm={vm} labId={id} onSsh={handleSshFocus} />
                         ))}
                       </div>
                     );
@@ -755,7 +946,11 @@ export default function BuildMonitorPage() {
           <div className="card s8">
             <div className="card-h">
               <h3>Build log</h3>
-              <div className="sub mono">{lines.length} lines</div>
+              <div className="sub mono">
+                {logFilter
+                  ? `${lines.filter((ln) => ln.toLowerCase().includes(logFilter.toLowerCase())).length} / ${lines.length} lines`
+                  : `${lines.length} lines`}
+              </div>
               <div className="grow" />
               <button
                 className="btn sm"
@@ -764,6 +959,25 @@ export default function BuildMonitorPage() {
               >
                 {autoScroll ? "Auto-scroll on" : "Auto-scroll off"}
               </button>
+            </div>
+            <div style={{ padding: "0 14px 10px" }}>
+              <input
+                type="text"
+                value={logFilter}
+                onChange={(e) => setLogFilter(e.target.value)}
+                placeholder='Search this log (e.g. "dashboard login", "error", a hostname)'
+                className="mono"
+                style={{
+                  width: "100%",
+                  boxSizing: "border-box",
+                  padding: "6px 10px",
+                  fontSize: 12,
+                  borderRadius: 6,
+                  border: "1px solid var(--line)",
+                  background: "var(--bg)",
+                  color: "var(--ink)",
+                }}
+              />
             </div>
             <pre
               ref={scrollRef}
@@ -782,10 +996,27 @@ export default function BuildMonitorPage() {
             >
               {lines.length === 0 ? (
                 <span style={{ color: "var(--ink-faint)" }}>
-                  {logQ.isLoading ? "Connecting…" : "Waiting for vagrant up to start…"}
+                  {logQ.isLoading
+                    ? "Connecting…"
+                    : lab?.provider === "docker"
+                      ? "Waiting for docker compose up to start…"
+                      : "Waiting for vagrant up to start…"}
                 </span>
-              ) : (
-                lines.map((ln, idx) => {
+              ) : (() => {
+                const needle = logFilter.trim().toLowerCase();
+                const visible = needle
+                  ? lines
+                      .map((ln, idx) => ({ ln, idx }))
+                      .filter(({ ln }) => ln.toLowerCase().includes(needle))
+                  : lines.map((ln, idx) => ({ ln, idx }));
+                if (visible.length === 0) {
+                  return (
+                    <span style={{ color: "var(--ink-faint)" }}>
+                      No lines match &quot;{logFilter}&quot;.
+                    </span>
+                  );
+                }
+                return visible.map(({ ln, idx }) => {
                   const lower = ln.toLowerCase();
                   let color: string | undefined;
                   if (lower.includes("error")) color = "var(--red)";
@@ -797,8 +1028,8 @@ export default function BuildMonitorPage() {
                       {ln || " "}
                     </div>
                   );
-                })
-              )}
+                });
+              })()}
             </pre>
           </div>
           <SidePanel
@@ -838,8 +1069,28 @@ export default function BuildMonitorPage() {
   );
 }
 
-function VmCard({ vm }: { vm: HeartbeatVm }) {
+// Service to tail by default per role tag — falls back to the first
+// allowlisted service the API will actually accept (see NODE_LOG_SERVICES
+// in build_runner.py) rather than guessing something it'll just 400 on.
+function defaultLogService(roles: string[] | undefined): string {
+  const r = roles ?? [];
+  if (r.includes("freeradius") || r.includes("radius")) return "freeradius";
+  if (r.includes("wazuh-manager") || r.includes("wazuh-agent") || r.includes("siem")) return "wazuh-agent";
+  if (r.includes("captive-portal")) return "labforge-captive-portal";
+  return "hostapd";
+}
+
+function VmCard({
+  vm,
+  labId,
+  onSsh,
+}: {
+  vm: HeartbeatVm;
+  labId: number;
+  onSsh: (hostname: string) => void;
+}) {
   const up = vm.state === "running";
+  const [logsOpen, setLogsOpen] = React.useState(false);
   return (
     <div style={{ background: "var(--bg)", padding: 16 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
@@ -874,15 +1125,158 @@ function VmCard({ vm }: { vm: HeartbeatVm }) {
         </div>
       )}
       <div style={{ display: "flex", gap: 4, marginTop: 10 }}>
-        <button className="btn sm" type="button" disabled style={{ flex: 1, justifyContent: "center" }}>
+        <button
+          className="btn sm"
+          type="button"
+          style={{ flex: 1, justifyContent: "center" }}
+          onClick={() => onSsh(vm.hostname)}
+        >
           SSH
         </button>
-        <button className="btn sm" type="button" disabled style={{ flex: 1, justifyContent: "center" }}>
-          Web
-        </button>
-        <button className="btn sm" type="button" disabled style={{ flex: 1, justifyContent: "center" }}>
+        {vm.ip ? (
+          <a
+            className="btn sm"
+            href={`http://${vm.ip}/`}
+            target="_blank"
+            rel="noreferrer"
+            style={{ flex: 1, justifyContent: "center" }}
+            title="Opens the node's IP on port 80 in a new tab — not every role serves a web UI, so a connection error here just means this node doesn't"
+          >
+            Web
+          </a>
+        ) : (
+          <button
+            className="btn sm"
+            type="button"
+            disabled
+            style={{ flex: 1, justifyContent: "center" }}
+            title="No IP yet — waiting on a heartbeat"
+          >
+            Web
+          </button>
+        )}
+        <button
+          className="btn sm"
+          type="button"
+          disabled={!up}
+          style={{ flex: 1, justifyContent: "center" }}
+          onClick={() => setLogsOpen(true)}
+          title={up ? undefined : "VM isn't running"}
+        >
           Logs
         </button>
+      </div>
+      {logsOpen && (
+        <NodeLogModal
+          labId={labId}
+          hostname={vm.hostname}
+          defaultService={defaultLogService(vm.roles)}
+          onClose={() => setLogsOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+const LOG_SERVICES = ["hostapd", "dnsmasq", "wazuh-agent", "freeradius", "labforge-captive-portal"] as const;
+
+function NodeLogModal({
+  labId,
+  hostname,
+  defaultService,
+  onClose,
+}: {
+  labId: number;
+  hostname: string;
+  defaultService: string;
+  onClose: () => void;
+}) {
+  const [service, setService] = React.useState(defaultService);
+  const logQ = useQuery<string[]>({
+    queryKey: ["node-log", labId, hostname, service],
+    queryFn: () => api.getNodeLog(labId, hostname, service, 200),
+    refetchInterval: 4000,
+  });
+
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${hostname} logs`}
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.45)",
+        zIndex: 1000,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 24,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "var(--bg)",
+          border: "1px solid var(--line)",
+          borderRadius: 6,
+          maxWidth: 760,
+          width: "100%",
+          maxHeight: "80vh",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        <div className="card-h" style={{ borderBottom: "1px solid var(--line)" }}>
+          <h3>{hostname} — logs</h3>
+          <select
+            className="btn sm"
+            value={service}
+            onChange={(e) => setService(e.target.value)}
+            aria-label="Service to tail"
+          >
+            {LOG_SERVICES.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+          <div className="sub mono">
+            {logQ.isFetching ? "refreshing…" : logQ.dataUpdatedAt ? "live · every 4s" : ""}
+          </div>
+          <div className="grow" />
+          <button className="btn sm" type="button" onClick={onClose}>
+            Close
+          </button>
+        </div>
+        <pre
+          className="mono"
+          style={{
+            margin: 0,
+            padding: 14,
+            fontSize: 12,
+            overflow: "auto",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-all",
+            color: "var(--ink-mute)",
+            flex: 1,
+          }}
+        >
+          {logQ.isLoading
+            ? "Loading…"
+            : (logQ.data ?? []).length === 0
+              ? "No output — the guest may not be reachable, or this service hasn't logged anything yet."
+              : logQ.data!.join("\n")}
+        </pre>
       </div>
     </div>
   );
@@ -941,19 +1335,26 @@ function SidePanel({
 }
 
 function SshModal({
+  provider,
   vms,
   topologyHostnames,
+  focusHost,
   onClose,
 }: {
+  provider: string;
   vms: HeartbeatVm[];
   topologyHostnames: string[];
+  focusHost?: string | null;
   onClose: () => void;
 }) {
   // Prefer running VMs; if none are up yet, fall back to topology
   // hostnames so the user at least sees what the lab WILL expose.
   const upHosts = vms.filter((v) => v.state === "running").map((v) => v.hostname);
-  const hosts = upHosts.length > 0 ? upHosts : topologyHostnames;
+  const allHosts = upHosts.length > 0 ? upHosts : topologyHostnames;
+  const [showAll, setShowAll] = React.useState(!focusHost);
+  const hosts = !showAll && focusHost ? allHosts.filter((h) => h === focusHost) : allHosts;
   const stillBuilding = upHosts.length === 0;
+  const isDocker = provider === "docker";
 
   const copy = React.useCallback((cmd: string) => {
     if (typeof navigator !== "undefined" && navigator.clipboard) {
@@ -1003,14 +1404,30 @@ function SshModal({
         }}
       >
         <div className="card-h" style={{ borderBottom: "1px solid var(--line)" }}>
-          <h3>SSH commands</h3>
-          <div className="sub mono">{hosts.length} VM(s)</div>
+          <h3>{isDocker ? "Container shell commands" : "SSH commands"}</h3>
+          <div className="sub mono">{hosts.length} {isDocker ? "container(s)" : "VM(s)"}</div>
           <div className="grow" />
           <button className="btn sm" type="button" onClick={onClose}>
             Close
           </button>
         </div>
         <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ color: "var(--ink-mute)", fontSize: 12, display: "flex", alignItems: "center", gap: 8 }}>
+            <span>
+              Run from this lab&apos;s workspace folder (shown on this page), the folder holding{" "}
+              <code className="mono">{isDocker ? "docker-compose.yml" : "Vagrantfile"}</code>.
+            </span>
+            {!showAll && focusHost && (
+              <button
+                className="btn sm"
+                type="button"
+                style={{ flexShrink: 0 }}
+                onClick={() => setShowAll(true)}
+              >
+                Show all hosts
+              </button>
+            )}
+          </div>
           {stillBuilding && (
             <div className="banner warn">
               <span>Lab is still building.</span>
@@ -1022,7 +1439,9 @@ function SshModal({
             </div>
           ) : (
             hosts.map((h) => {
-              const cmd = `vagrant ssh ${h}`;
+              const cmd = isDocker
+                ? `docker compose exec ${h} bash || docker compose exec ${h} sh`
+                : `vagrant ssh ${h}`;
               return (
                 <div
                   key={h}

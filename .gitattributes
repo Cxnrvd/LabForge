@@ -1,0 +1,19 @@
+# Keep line endings stable no matter the OS or core.autocrlf: these files run
+# inside Linux guests and containers, where a CRLF shebang or heredoc fails.
+* text=auto
+*.sh text eol=lf
+*.py text eol=lf
+*.j2 text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.yar text eol=lf
+*.c text eol=lf
+Dockerfile text eol=lf
+apps/api/labforge_core/docker_roles/**/esq text eol=lf
+apps/api/labforge_core/docker_roles/**/triage text eol=lf
+*.ps1 text eol=lf
+*.png binary
+*.ico binary
+*.gif binary

@@ -5,6 +5,7 @@
 # time you click "Generate Lab".
 set -uo pipefail
 
+FAILED_BLOCKS=()
 LOG=/var/log/labforge-provision.log
 exec > >(tee -a "$LOG") 2>&1
 echo "[$(date -Is)] === LabForge provisioner start for {{ node.config.hostname }} ==="
@@ -19,14 +20,35 @@ hostnamectl set-hostname {{ node.config.hostname | bash_q }} 2>/dev/null || true
 # shlex-quoted values can't break out of the chpasswd line.
 printf '%s\n' "vagrant:"{{ node.config.credentials.password | bash_q }} | chpasswd 2>/dev/null || true
 
+# NetworkManager guests (Kali) ignore the /etc/network/interfaces entry Vagrant
+# writes for the private network, leaving the lab NIC without its address.
+# If the topology IP is missing and NetworkManager is running, give the second
+# NIC that address through nmcli.
+if ! ip -4 -o addr show | grep -qF " {{ node.config.ip }}/" && systemctl is-active --quiet NetworkManager 2>/dev/null; then
+    LAB_NIC=$(ls /sys/class/net | grep -E '^(eth|ens|enp)' | sed -n 2p)
+    if [ -n "$LAB_NIC" ]; then
+        nmcli connection delete labforge-lan >/dev/null 2>&1 || true
+        nmcli connection add type ethernet ifname "$LAB_NIC" con-name labforge-lan \
+            ipv4.method manual ipv4.addresses {{ node.config.ip }}/{{ prefix_len | default(24) }} >/dev/null 2>&1 \
+            && nmcli connection up labforge-lan >/dev/null 2>&1 \
+            && echo "[+] set {{ node.config.ip }}/{{ prefix_len | default(24) }} on $LAB_NIC via NetworkManager" || true
+    fi
+fi
+
 {% if install_blocks %}
 echo "[+] Applying {{ install_blocks | length }} role install block(s)..."
 {% for block in install_blocks %}
-echo "----- begin role: {{ block.label }} -----"
-set +e
-{{ block.body }}
+echo "----- begin role: "{{ block.label | bash_q }}" ("{{ block.description | bash_q }}")" "-----"
+(
 set -e
-echo "----- end role: {{ block.label }} -----"
+{{ block.body }}
+)
+rc=$?
+if [ "$rc" -ne 0 ]; then
+    echo "[!] role '"{{ block.label | bash_q }}"' FAILED with exit code $rc"
+    FAILED_BLOCKS+=("role "{{ block.label | bash_q }})
+fi
+echo "----- end role: "{{ block.label | bash_q }}" -----"
 {% endfor %}
 {% else %}
 echo "[i] No roles attached — nothing to install beyond base OS."
@@ -35,13 +57,23 @@ echo "[i] No roles attached — nothing to install beyond base OS."
 {% if cve_blocks %}
 echo "[+] Applying {{ cve_blocks | length }} CVE provisioner(s)..."
 {% for block in cve_blocks %}
-echo "----- begin CVE: {{ block.cve_id }} ({{ block.description }}) -----"
-set +e
-{{ block.script }}
+echo "----- begin CVE: "{{ block.cve_id | bash_q }}" ("{{ block.description | bash_q }}")" "-----"
+(
 set -e
-echo "----- end CVE: {{ block.cve_id }} -----"
+{{ block.script }}
+)
+rc=$?
+if [ "$rc" -ne 0 ]; then
+    echo "[!] CVE "{{ block.cve_id | bash_q }}" FAILED with exit code $rc"
+    FAILED_BLOCKS+=("CVE "{{ block.cve_id | bash_q }})
+fi
+echo "----- end CVE: "{{ block.cve_id | bash_q }}" -----"
 {% endfor %}
 {% endif %}
 
+if [ -n "${FAILED_BLOCKS[*]:-}" ]; then
+    echo "[$(date -Is)] === LabForge provisioner FINISHED WITH ERRORS for {{ node.config.hostname }}: ${FAILED_BLOCKS[*]} ==="
+    exit 1
+fi
 echo "[$(date -Is)] === LabForge provisioner complete for {{ node.config.hostname }} ==="
 exit 0

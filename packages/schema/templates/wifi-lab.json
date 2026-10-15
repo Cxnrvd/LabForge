@@ -1,0 +1,153 @@
+{
+  "id": "wifi-lab",
+  "name": "WiFi Lab",
+  "description": "HTB Academy-style WiFi Pentester range on VMware Workstation: a real hostapd access point on a passed-through AltoBeam ATBM6012B-X USB dongle (007a:888b; open/WEP/WPA2/WPA3/WPS/hidden-SSID/MAC-filter/enterprise scenarios, switchable live), a Kali GUI attacker with a passed-through USB WiFi adapter (MediaTek 0e8d:7610), FreeRADIUS for 802.1x/Enterprise scenarios, and a Wazuh SIEM that ingests the AP's hostapd journal so attacks show on a dashboard with MITRE ATT&CK tags. Needs two USB WiFi adapters plugged into the host. VirtualBox cannot pass the AltoBeam through (see docs/labs/wifi/altobeam), so this template uses VMware.",
+  "network_cidr": "10.71.0.0/24",
+  "provider": "vmware",
+  "version": "1.0",
+  "nodes": [
+    {
+      "id": "kali-wifi",
+      "type": "attacker",
+      "label": "kali-wifi",
+      "position": {
+        "x": -320,
+        "y": -80
+      },
+      "config": {
+        "os": "kali_rolling",
+        "ip": "10.71.0.10",
+        "hostname": "kali-wifi",
+        "cves": [],
+        "roles": [
+          "wifi-pentest-env",
+          "desktop-xfce",
+          "kali-attack-tooling"
+        ],
+        "memory_mb": 4096,
+        "cpus": 2,
+        "credentials": {
+          "username": "vagrant",
+          "password": "vagrant"
+        },
+        "vlan": null,
+        "gateway": "10.71.0.1",
+        "usb_vendor_id": "0e8d",
+        "usb_product_id": "7610",
+        "gui": true
+      }
+    },
+    {
+      "id": "ap-target",
+      "type": "target",
+      "label": "ap-target",
+      "position": {
+        "x": 0,
+        "y": 80
+      },
+      "config": {
+        "os": "debian_12",
+        "ip": "10.71.0.20",
+        "hostname": "ap-target",
+        "cves": [],
+        "roles": [
+          "atbm-wifi-driver",
+          "hostapd",
+          "captive-portal",
+          "wazuh"
+        ],
+        "memory_mb": 2048,
+        "cpus": 2,
+        "credentials": {
+          "username": "vagrant",
+          "password": "vagrant"
+        },
+        "vlan": null,
+        "gateway": "10.71.0.1",
+        "usb_vendor_id": "007a",
+        "usb_product_id": "888b",
+        "gui": false
+      }
+    },
+    {
+      "id": "radius",
+      "type": "server",
+      "label": "radius",
+      "position": {
+        "x": 320,
+        "y": -80
+      },
+      "config": {
+        "os": "debian_12",
+        "ip": "10.71.0.25",
+        "hostname": "radius",
+        "cves": [],
+        "roles": [
+          "freeradius"
+        ],
+        "memory_mb": 1024,
+        "cpus": 1,
+        "credentials": {
+          "username": "vagrant",
+          "password": "vagrant"
+        },
+        "vlan": null,
+        "gateway": "10.71.0.1",
+        "gui": false
+      }
+    },
+    {
+      "id": "siem",
+      "type": "server",
+      "label": "siem",
+      "position": {
+        "x": 320,
+        "y": 160
+      },
+      "config": {
+        "os": "debian_12",
+        "ip": "10.71.0.30",
+        "hostname": "siem",
+        "cves": [],
+        "roles": [
+          "wazuh-manager"
+        ],
+        "memory_mb": 4096,
+        "cpus": 2,
+        "credentials": {
+          "username": "vagrant",
+          "password": "vagrant"
+        },
+        "vlan": null,
+        "gateway": "10.71.0.1",
+        "gui": false
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "source": "kali-wifi",
+      "target": "ap-target",
+      "protocol": "udp",
+      "port": null,
+      "label": "802.11 (over-the-air)"
+    },
+    {
+      "id": "e2",
+      "source": "ap-target",
+      "target": "radius",
+      "protocol": "udp",
+      "port": 1812,
+      "label": "RADIUS (Enterprise/802.1x scenarios)"
+    },
+    {
+      "id": "e3",
+      "source": "ap-target",
+      "target": "siem",
+      "protocol": "tcp",
+      "port": 1514,
+      "label": "Wazuh agent -> manager (hostapd journal)"
+    }
+  ]
+}

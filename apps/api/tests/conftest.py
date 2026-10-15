@@ -131,3 +131,9 @@ __all__ = [
     "minimal_topology",
     "two_node_topology",
 ]
+
+
+@pytest.fixture(autouse=True)
+def _isolated_config_dir(tmp_path_factory, monkeypatch):
+    """The saved workspace choice lives in the config dir. Tests must never touch the real one."""
+    monkeypatch.setenv("LABFORGE_CONFIG_DIR", str(tmp_path_factory.mktemp("lf-config")))

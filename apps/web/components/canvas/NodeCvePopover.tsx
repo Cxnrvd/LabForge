@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
 import { lookupVendor, parseRole } from "@/lib/icons/catalog";
-import { useRoleCves } from "@/lib/api/hooks";
+import { useCuratedCves, useRoleCves } from "@/lib/api/hooks";
 import { useTopologyStore } from "@/lib/store/topology-store";
 
 const SEVERITY_TONE: Record<string, string> = {
@@ -30,6 +30,11 @@ export function NodeCvePopover({ nodeId, role, children }: NodeCvePopoverProps) 
   const parsed = parseRole(role);
   const vendor = lookupVendor(role);
   const cves = useRoleCves(role, open);
+  const curated = useCuratedCves();
+  const curatedById = React.useMemo(
+    () => new Map((curated.data ?? []).map((c) => [c.cve_id, c])),
+    [curated.data],
+  );
   const updateNodeConfig = useTopologyStore((s) => s.updateNodeConfig);
 
   const handlePin = (cveId: string, e: React.MouseEvent): void => {
@@ -97,43 +102,64 @@ export function NodeCvePopover({ nodeId, role, children }: NodeCvePopoverProps) 
 
         {parsed.version && cves.data && cves.data.length > 0 && (
           <ul className="max-h-72 divide-y overflow-y-auto">
-            {cves.data.map((c) => (
-              <li key={c.id} className="space-y-1 px-3 py-2">
-                <div className="flex items-center justify-between gap-2">
-                  <a
-                    href={`https://nvd.nist.gov/vuln/detail/${c.id}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1 font-mono text-xs font-semibold hover:underline"
-                  >
-                    {c.id} <ExternalLink className="h-3 w-3" />
-                  </a>
-                  <Badge className={SEVERITY_TONE[c.severity] ?? SEVERITY_TONE.NONE}>
-                    {c.severity}
-                    {c.cvss_score != null && (
-                      <span className="ml-1 tabular-nums">{c.cvss_score.toFixed(1)}</span>
-                    )}
-                  </Badge>
-                </div>
-                <p className="line-clamp-2 text-[11px] text-muted-foreground">
-                  {c.description}
-                </p>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-6 px-2 text-[11px]"
-                  onClick={(e) => handlePin(c.id, e)}
-                >
-                  <Pin className="mr-1 h-3 w-3" /> Pin to node
-                </Button>
-              </li>
-            ))}
+            {cves.data.map((c) => {
+              const match = curatedById.get(c.id);
+              const provisionLabel = match
+                ? match.fully_provisioned
+                  ? "Runs a real vulnerable target"
+                  : "Notes only, nothing is set up"
+                : "No lab script — documentation only";
+              const provisionTone = match
+                ? match.fully_provisioned
+                  ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                  : "bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                : "bg-muted text-muted-foreground";
+              return (
+                <li key={c.id} className="space-y-1 px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <a
+                      href={`https://nvd.nist.gov/vuln/detail/${c.id}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 font-mono text-xs font-semibold hover:underline"
+                    >
+                      {c.id} <ExternalLink className="h-3 w-3" />
+                    </a>
+                    <Badge className={SEVERITY_TONE[c.severity] ?? SEVERITY_TONE.NONE}>
+                      {c.severity}
+                      {c.cvss_score != null && (
+                        <span className="ml-1 tabular-nums">{c.cvss_score.toFixed(1)}</span>
+                      )}
+                    </Badge>
+                  </div>
+                  <p className="line-clamp-2 text-[11px] text-muted-foreground">
+                    {c.description}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${provisionTone}`}
+                      title="Applies to the Vagrant/VirtualBox build only — Docker builds never read a node's CVE list."
+                    >
+                      {curated.isLoading ? "Checking…" : provisionLabel}
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-6 px-2 text-[11px]"
+                      onClick={(e) => handlePin(c.id, e)}
+                    >
+                      <Pin className="mr-1 h-3 w-3" /> Pin to node
+                    </Button>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         )}
 
         <Separator />
         <p className="px-3 py-2 text-[10px] text-muted-foreground">
-          Source: NIST NVD · cached for 1 hour
+          Source: NIST NVD · cached for 1 hour · pinned CVEs only provision on the Vagrant/VirtualBox build
         </p>
       </PopoverContent>
     </Popover>

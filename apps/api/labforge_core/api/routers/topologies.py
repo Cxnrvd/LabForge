@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -75,7 +75,7 @@ def upsert_topology(
     slug = _slugify(topology.name)
     payload_json = topology.model_dump_json()
     row = session.exec(select(StoredTopology).where(StoredTopology.slug == slug)).first()
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     if row is None:
         row = StoredTopology(
             slug=slug,

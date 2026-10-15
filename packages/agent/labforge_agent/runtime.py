@@ -21,7 +21,7 @@ def vagrant_version() -> Optional[str]:
         out = subprocess.run(
             ["vagrant", "--version"],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=5,
             check=False,
         )
@@ -55,7 +55,7 @@ def vagrant_plugins() -> list[str]:
         out = subprocess.run(
             ["vagrant", "plugin", "list"],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=10,
             check=False,
         )
@@ -89,6 +89,6 @@ def capture_vagrant(args: Iterable[str], *, cwd: Path) -> str:
         cwd=str(cwd),
         check=False,
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
     )
     return out.stdout

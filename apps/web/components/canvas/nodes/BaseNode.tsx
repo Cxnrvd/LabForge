@@ -97,13 +97,13 @@ export function BaseNode({ id, data, selected, type }: BaseNodeProps) {
       <Handle
         type="target"
         position={Position.Left}
-        className="!h-3 !w-3 !rounded-full !border-2 !border-transparent !bg-transparent transition-colors duration-150 group-hover:!border-[#ff8a3d] group-hover:!bg-[#ff8a3d] group-focus-within:!border-[#ff8a3d] group-focus-within:!bg-[#ff8a3d]"
+        className="!h-3 !w-3 !rounded-full !border-2 !border-transparent !bg-transparent transition-colors duration-150 group-hover:!border-[var(--d10-accent)] group-hover:!bg-[var(--d10-accent)] group-focus-within:!border-[var(--d10-accent)] group-focus-within:!bg-[var(--d10-accent)]"
         style={{ top: "50%", transform: "translate(-50%, -50%)" }}
       />
       <Handle
         type="source"
         position={Position.Right}
-        className="!h-3 !w-3 !rounded-full !border-2 !border-transparent !bg-transparent transition-colors duration-150 group-hover:!border-[#ff8a3d] group-hover:!bg-[#ff8a3d] group-focus-within:!border-[#ff8a3d] group-focus-within:!bg-[#ff8a3d]"
+        className="!h-3 !w-3 !rounded-full !border-2 !border-transparent !bg-transparent transition-colors duration-150 group-hover:!border-[var(--d10-accent)] group-hover:!bg-[var(--d10-accent)] group-focus-within:!border-[var(--d10-accent)] group-focus-within:!bg-[var(--d10-accent)]"
         style={{ top: "50%", transform: "translate(50%, -50%)" }}
       />
 

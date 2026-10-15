@@ -6,7 +6,7 @@ import io
 import re
 import shlex
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
 from labforge_schema import LabConfig, NodeType, OsType, Provider, TopologyNode
@@ -17,7 +17,8 @@ from labforge_core.provisioners.role_installers import (
     linux_snippet,
     windows_snippet,
 )
-from labforge_core.services.compose_generator import render as render_compose
+from labforge_core.services import hostenv
+from labforge_core.services.compose_generator import build_bundle as build_compose_bundle
 from labforge_core.services.provenance import build_manifest
 from labforge_core.services.validator import is_windows
 from labforge_core.settings import get_settings
@@ -59,11 +60,14 @@ BOX_MAP: dict[OsType, str] = {
     OsType.MACOS_SONOMA: SAFE_FALLBACK_BOX,
     OsType.MACOS_SEQUOIA: SAFE_FALLBACK_BOX,
     # ---- Offensive / privacy
-    # The official kalilinux/rolling box is ~3 GB and isn't always in the
-    # local cache; bootstrap an Ubuntu base instead and let the role
-    # installers (nmap, metasploit, impacket, etc.) add the offensive
-    # toolchain on top. Same VM, faster first build.
-    OsType.KALI_ROLLING: "bento/ubuntu-22.04",
+    # Official box (kalilinux/rolling on Vagrant Cloud — verified: ships
+    # virtualbox/vmware_desktop/libvirt/hyperv providers, actively
+    # maintained, currently 2026.2.0). ~3-4 GB first download, but it's the
+    # real Kali: full offensive toolchain (aircrack-ng, wifite, hcxtools,
+    # hashcat, Wireshark, Metasploit, ...) already present, so role
+    # installers don't need to re-stage any of it. No public Vagrant box
+    # exists for Parrot OS, so it still bootstraps on Ubuntu.
+    OsType.KALI_ROLLING: "kalilinux/rolling",
     OsType.PARROT_SECURITY: "bento/ubuntu-22.04",
     OsType.BLACKARCH_ROLLING: "archlinux/archlinux",
     OsType.TAILS_6: "debian/bookworm64",
@@ -90,14 +94,18 @@ BOX_MAP: dict[OsType, str] = {
 }
 
 # Whether a given OsType has a "real" Vagrant box (used to flag emulated
-# nodes in the generated README).
+# nodes in the generated README). PARROT_SECURITY still boots on
+# bento/ubuntu-22.04 (no public Parrot box exists) and is correctly flagged
+# emulated for that. KALI_ROLLING now boots the real kalilinux/rolling box
+# (see BOX_MAP) and belongs here.
 _REAL_BOX_OSES = {
     OsType.WINDOWS_10, OsType.WINDOWS_11,
     OsType.WINDOWS_SERVER_2019, OsType.WINDOWS_SERVER_2022,
     OsType.UBUNTU_2204, OsType.UBUNTU_2404,
     OsType.DEBIAN_12, OsType.CENTOS_STREAM_9,
     OsType.ALPINE_LATEST, OsType.FREEBSD_14,
-    OsType.KALI_ROLLING, OsType.ARCH_ROLLING,
+    OsType.KALI_ROLLING,
+    OsType.ARCH_ROLLING,
     OsType.RASPBIAN_12,
 }
 
@@ -130,6 +138,11 @@ class GeneratedArtifacts:
     provisioner_scripts: dict[str, str]
     hosts_file: str
     readme: str
+    # A role with no curated installer, or a CVE that is a stub or notes-only (see
+    # provisioners/cve_lookup.is_fully_provisioned) — things the build will silently do nothing
+    # for. Also written into build.log and the README, the same way the Docker generator's
+    # warnings are.
+    warnings: list[str] = field(default_factory=list)
 
 
 def _safe_slug(value: str) -> str:
@@ -188,8 +201,16 @@ def _compute_endpoints(topology: LabConfig) -> dict[str, str]:
     can wire agents up automatically (Wazuh agent → Wazuh manager, etc.)."""
     endpoints: dict[str, str] = {}
     role_to_endpoint = {
+        # Only the manager role should populate this key. "wazuh" (the
+        # agent role) must NOT map here too: it previously did, under the
+        # assumption that only the manager node ever carries it — but an
+        # agent node processed earlier than the manager (e.g. ap-target
+        # before siem in the WiFi lab) would then claim this slot with
+        # its own IP first, pointing every agent's enrollment at itself
+        # instead of the real manager. Confirmed in the wild: ap-target's
+        # wazuh-agent was stuck retrying enrollment against 10.71.0.20
+        # (itself) instead of siem's 10.71.0.30.
         "wazuh-manager": "wazuh_manager_ip",
-        "wazuh": "wazuh_manager_ip",  # the first node carrying wazuh wins
         "splunk-enterprise": "splunk_indexer_ip",
         "splunk-uf-receiver": "splunk_indexer_ip",
         "elasticstack": "elastic_ip",
@@ -200,6 +221,7 @@ def _compute_endpoints(topology: LabConfig) -> dict[str, str]:
         "mongodb": "mongodb_ip",
         "openplc": "openplc_ip",
         "mediamtx": "mediamtx_ip",
+        "freeradius": "radius_server_ip",
     }
     for node in topology.nodes:
         if node.type == NodeType.INTERNET:
@@ -253,6 +275,30 @@ def _render_role_block(
     }
 
 
+def _coverage_warnings(topology: LabConfig) -> list[str]:
+    """Roles with no curated installer, and CVEs that are a stub or notes-only — the things a
+    build will produce no error for but also won't actually set up. Mirrors the Docker
+    generator's warnings, which the Launch dialog and README already show for that provider."""
+    warnings: list[str] = []
+    for node in topology.nodes:
+        if not _is_provisionable(node):
+            continue
+        host = node.config.hostname
+        windows = is_windows(node)
+        for role in node.config.roles:
+            bare, _ = _parse_role(role)
+            snippet = windows_snippet(bare) if windows else linux_snippet(bare)
+            if snippet is None:
+                warnings.append(f"{host}: role '{bare}' has no curated installer, nothing was installed for it")
+        for cve in node.config.cves:
+            payload = resolve_cve_payload(cve)
+            if not payload.known:
+                warnings.append(f"{host}: {cve} has no curated provisioner, only a stub comment was added")
+            elif not payload.fully_provisioned:
+                warnings.append(f"{host}: {cve} is notes only ({payload.description}) — nothing vulnerable was set up")
+    return warnings
+
+
 def _render_node(
     env: Environment,
     node: TopologyNode,
@@ -281,6 +327,7 @@ def _render_node(
     contents = env.get_template(template_name).render(
         node=node,
         is_dc=node.type == NodeType.DOMAIN_CONTROLLER,
+        prefix_len=topology.network_cidr.split("/")[-1],
         cve_blocks=cve_blocks,
         install_blocks=install_blocks,
         endpoints=endpoints,
@@ -298,12 +345,19 @@ def generate_artifacts(
     *,
     include_readme: bool = True,
     include_hosts_file: bool = True,
+    box_overrides: dict[OsType, str] | None = None,
 ) -> GeneratedArtifacts:
+    if topology.provider is Provider.DOCKER:
+        raise ValueError(
+            "topology.provider is 'docker': use the docker-compose target, not the Vagrant generator"
+        )
     env = _jinja_env()
+    boxes = {**BOX_MAP, **(box_overrides or {})}
 
     provisionable_nodes = [n for n in topology.nodes if _is_provisionable(n)]
     external_nodes = [n for n in topology.nodes if not _is_provisionable(n)]
     endpoints = _compute_endpoints(topology)
+    warnings = _coverage_warnings(topology)
 
     provisioners: dict[str, tuple[str, TopologyNode]] = {}
     for node in provisionable_nodes:
@@ -318,7 +372,7 @@ def generate_artifacts(
             {
                 "id": node.id,
                 "hostname": node.config.hostname,
-                "box": BOX_MAP.get(node.config.os, SAFE_FALLBACK_BOX),
+                "box": boxes.get(node.config.os, SAFE_FALLBACK_BOX),
                 "is_windows": is_windows(node),
                 "is_emulated": is_emulated_os(node.config.os),
                 "os_label": node.config.os.value,
@@ -327,14 +381,32 @@ def generate_artifacts(
                 "cpus": node.config.cpus,
                 "provision_script": f"provision/{filename}",
                 "node_type": node.type.value,
+                "usb_vendor_id": node.config.usb_vendor_id,
+                "usb_product_id": node.config.usb_product_id,
+                "gui": node.config.gui,
+                # Out-of-tree kernel modules need headers for the running kernel;
+                # the box's own kernel is usually gone from the apt archive, so
+                # these nodes get a kernel upgrade + reboot before provisioning.
+                "needs_kernel_upgrade": any(
+                    _parse_role(r)[0] == "atbm-wifi-driver" for r in node.config.roles
+                )
+                and not is_windows(node),
             }
         )
+
+    # Only matters for nodes with usb_vendor_id/usb_product_id set, but it's
+    # a single cheap probe so it's simplest to always compute: without the
+    # (separately-licensed) VirtualBox Extension Pack, USB passthrough only
+    # gets a USB 1.1 (OHCI) controller, which silently breaks USB 2.0 wifi
+    # dongles — they enumerate but their driver never brings up a wiphy.
+    usb_ehci_available = topology.provider is Provider.VIRTUALBOX and hostenv.virtualbox_extpack_installed()
 
     vagrantfile = env.get_template("Vagrantfile.j2").render(
         topology=topology,
         vagrant_nodes=vagrant_nodes,
         external_nodes=external_nodes,
         vagrant_provider=vagrant_provider_name(topology.provider),
+        usb_ehci_available=usb_ehci_available,
     )
 
     hosts_file = ""
@@ -349,8 +421,10 @@ def generate_artifacts(
         readme = env.get_template("README.md.j2").render(
             topology=topology,
             vagrant_nodes=vagrant_nodes,
-            box_map=BOX_MAP,
+            box_map=boxes,
             external_nodes=external_nodes,
+            warnings=warnings,
+            cve_status=lambda cve: resolve_cve_payload(cve),
         )
 
     flat_scripts: dict[str, str] = {}
@@ -364,6 +438,7 @@ def generate_artifacts(
         provisioner_scripts=flat_scripts,
         hosts_file=hosts_file,
         readme=readme,
+        warnings=warnings,
     )
 
 
@@ -373,6 +448,8 @@ def generate_zip(
     include_readme: bool = True,
     include_hosts_file: bool = True,
     target: str = "vagrant",
+    publish: str = "loopback",
+    project: str | None = None,
 ) -> bytes:
     """Build the downloadable zip for either target.
 
@@ -384,7 +461,7 @@ def generate_zip(
     ``manifest.json`` with sha256 digests + tool/schema versions so the
     bundle is reproducibly identifiable.
     """
-    file_contents: dict[str, str] = {}
+    file_contents: dict[str, str | bytes] = {}
 
     if target == "vagrant":
         artifacts = generate_artifacts(
@@ -400,20 +477,14 @@ def generate_zip(
         if artifacts.readme:
             file_contents["README.md"] = artifacts.readme
     elif target == "docker-compose":
-        compose = render_compose(topology)
-        file_contents["docker-compose.yml"] = compose.compose_yaml
-        for filename, body in compose.env_files.items():
-            file_contents[filename] = body
-        for hostname, note in compose.fallback_notes.items():
-            file_contents[f"notes/{hostname}.txt"] = note
-        if include_hosts_file:
-            file_contents["hosts"] = "\n".join(
-                f"{n.config.ip}\t{n.config.hostname}"
-                for n in topology.nodes
-                if n.type.value != "internet"
-            ) + "\n"
-        if include_readme:
-            file_contents["README.md"] = _compose_readme(topology, compose.fallback_notes)
+        files, _artifacts = build_compose_bundle(
+            topology,
+            publish=publish,
+            project=project,
+            include_readme=include_readme,
+            include_hosts_file=include_hosts_file,
+        )
+        file_contents.update(files)
     else:
         raise ValueError(f"Unknown target: {target!r}")
 
@@ -423,37 +494,6 @@ def generate_zip(
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for filename, body in file_contents.items():
-            zf.writestr(filename, body)
+        for zip_filename, zip_body in file_contents.items():
+            zf.writestr(zip_filename, zip_body)
     return buf.getvalue()
-
-
-def _compose_readme(topology: LabConfig, fallback_notes: dict[str, str]) -> str:
-    lines = [
-        f"# {topology.name} — docker-compose target",
-        "",
-        topology.description or "_(no description)_",
-        "",
-        "## Quick start",
-        "",
-        "```bash",
-        "docker compose up -d",
-        "docker compose ps",
-        "```",
-        "",
-        f"All services share the bridge network `labforge` ({topology.network_cidr}).",
-        "Per-service env files live in `env/`.",
-        "",
-    ]
-    if fallback_notes:
-        lines.extend([
-            "## Nodes that fall back to Vagrant",
-            "",
-            "The following nodes can't usefully run as containers — use the",
-            "Vagrant target for them:",
-            "",
-        ])
-        for hostname, note in fallback_notes.items():
-            lines.append(f"- **{hostname}** — {note.strip()}")
-        lines.append("")
-    return "\n".join(lines)
