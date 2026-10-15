@@ -1,0 +1,59 @@
+node_modules/
+.next/
+out/
+dist/
+build/
+.turbo/
+.pnpm-store/
+
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+*.sqlite
+*.sqlite3
+*.db
+
+.env
+.env.local
+.env.*.local
+.DS_Store
+*.swp
+*.swo
+
+.vagrant/
+*.box
+
+.vscode/
+.idea/
+
+# OS metadata
+._*
+Thumbs.db
+desktop.ini
+
+# Local agent workspaces (outside repo by default, but defensive)
+.labforge/
+
+coverage/
+*.log
+
+# Design source files — these are reference mockups and proposals used during
+# UI iteration; the implemented UI is the source of truth.
+design.md
+designs/
+dashboard-proposals.html
+labforge-designs.html
+
+# Claude Code session data (per-machine).
+.claude/
+
+# Tool caches that occasionally end up tracked.
+*.tsbuildinfo

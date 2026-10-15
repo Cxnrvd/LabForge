@@ -1,0 +1,150 @@
+@import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap");
+@import "../styles/labforge-ds.css";
+@import "../styles/labforge-d10.css";
+
+@plugin "tailwindcss-animate";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+}
+
+/* shadcn HSL tokens, retuned to match the labforge-ds.css palette
+   (Vercel-inspired neutrals — pure black/white, no blue cast). */
+:root {
+  --background: 0 0% 100%;     /* #ffffff */
+  --foreground: 0 0% 4%;       /* #0a0a0a */
+  --card: 0 0% 100%;
+  --card-foreground: 0 0% 4%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 0 0% 4%;
+  --primary: 0 0% 4%;
+  --primary-foreground: 0 0% 98%;
+  --secondary: 0 0% 96%;       /* #f5f5f5 */
+  --secondary-foreground: 0 0% 4%;
+  --muted: 0 0% 96%;
+  --muted-foreground: 0 0% 45%; /* #737373 */
+  --accent: 0 0% 96%;
+  --accent-foreground: 0 0% 4%;
+  --destructive: 0 100% 40%;   /* #cc0000 */
+  --destructive-foreground: 0 0% 98%;
+  --border: 0 0% 90%;          /* #e6e6e6 */
+  --input: 0 0% 90%;
+  --ring: 0 0% 4%;
+  --radius: 0.5rem;
+}
+
+.dark {
+  --background: 0 0% 4%;       /* #0a0a0a — TRUE BLACK, no blue cast */
+  --foreground: 0 0% 98%;      /* #fafafa */
+  --card: 0 0% 7%;             /* #111111 */
+  --card-foreground: 0 0% 98%;
+  --popover: 0 0% 9%;
+  --popover-foreground: 0 0% 98%;
+  --primary: 0 0% 98%;
+  --primary-foreground: 0 0% 4%;
+  --secondary: 0 0% 9%;        /* #171717 */
+  --secondary-foreground: 0 0% 98%;
+  --muted: 0 0% 9%;
+  --muted-foreground: 0 0% 64%; /* #a3a3a3 */
+  --accent: 0 0% 12%;
+  --accent-foreground: 0 0% 98%;
+  --destructive: 0 100% 65%;   /* #ff4d4d */
+  --destructive-foreground: 0 0% 98%;
+  --border: 0 0% 15%;          /* #262626 */
+  --input: 0 0% 15%;
+  --ring: 0 0% 84%;
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-feature-settings: "rlig" 1, "calt" 1;
+    font-family: "Inter", "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+    letter-spacing: -0.003em;
+  }
+  html,
+  body,
+  #__next {
+    height: 100%;
+  }
+}
+
+/* Bridge shadcn's `.dark` class to the design system's [data-theme="dark"]
+   attribute so the same toggle drives both worlds — shadcn primitives keep
+   working, design-system classes (.side, .topbar, .card, etc.) get themed
+   without a duplicate theme-toggle implementation. */
+html.dark {
+  /* The DS picks dark via [data-theme="dark"]; mirror that here so the
+     existing next-themes hook (which flips `.dark`) lights up both. */
+  --ds-theme-mirror: dark;
+}
+html.dark .side,
+html.dark .topbar,
+html.dark .card,
+html.dark .stats,
+html.dark .modal,
+html.dark .drawer,
+html.dark .canvas-area {
+  color-scheme: dark;
+}
+
+/* React Flow theming */
+.react-flow__attribution {
+  display: none;
+}
+
+.dark .react-flow__background {
+  background-color: hsl(var(--background));
+}
+
+/* Stronger default edge stroke so connections are visible in light mode */
+.react-flow__edge-path {
+  stroke: hsl(var(--foreground) / 0.85);
+  stroke-width: 2.5;
+}
+.react-flow__edge.selected .react-flow__edge-path,
+.react-flow__edge:focus .react-flow__edge-path,
+.react-flow__edge:focus-visible .react-flow__edge-path,
+.react-flow__edge:hover .react-flow__edge-path {
+  stroke: hsl(var(--primary));
+  stroke-width: 3.5;
+}
+.react-flow__connectionline {
+  stroke: hsl(var(--primary));
+  stroke-width: 2.5;
+}
+/* Small arrowhead at the target end of each edge */
+.react-flow__edge-path,
+.react-flow__connection-path {
+  marker-end: url(#labforge-arrow);
+}

@@ -1,0 +1,292 @@
+{
+  "id": "telecom-ad-rts",
+  "name": "Telecom AD Red Team Range",
+  "description": "Mirrors the CWL AD-RTS (AD Red Team Specialist) telecom cyber-range topology: a perimeter firewall, an IIS web front-end, an externally-exposed DNS service, a Windows AD forest backed by MSSQL, an Active Directory Certificate Authority, and an Exchange mail server — all driven from a Kali adversary that walks RECON → PRIV-ESC → LATERAL MOVEMENT → DATA EXFIL across the lab. Sized for a single host: 6 Windows VMs at 2 GB each plus the Kali attacker (~14 GB RAM total).",
+  "network_cidr": "192.168.70.0/24",
+  "provider": "virtualbox",
+  "version": "1.0",
+  "nodes": [
+    {
+      "id": "kali01",
+      "type": "attacker",
+      "label": "Red Team / Adversary",
+      "position": { "x": -700, "y": 0 },
+      "config": {
+        "os": "kali_rolling",
+        "ip": "192.168.70.50",
+        "hostname": "kali",
+        "cves": [],
+        "roles": ["impacket", "bloodhound", "crackmapexec", "metasploit", "nmap"],
+        "memory_mb": 2048,
+        "cpus": 2,
+        "credentials": { "username": "vagrant", "password": "kali" },
+        "vlan": null,
+        "gateway": "192.168.70.1"
+      },
+      "attack_tags": [
+        { "tactic": "reconnaissance", "note": "Adversary origin host" }
+      ]
+    },
+    {
+      "id": "fw01",
+      "type": "firewall",
+      "label": "Perimeter Firewall",
+      "position": { "x": -400, "y": 0 },
+      "config": {
+        "os": "pfsense_2_7",
+        "ip": "192.168.70.1",
+        "hostname": "fw01",
+        "cves": [],
+        "roles": ["pfsense-emulator"],
+        "memory_mb": 1024,
+        "cpus": 2,
+        "credentials": { "username": "admin", "password": "PfLab2025" },
+        "vlan": null,
+        "gateway": null
+      },
+      "attack_tags": [
+        { "tactic": "initial_access", "technique": "T1190", "note": "Perimeter — exposes DNS + Web" }
+      ]
+    },
+    {
+      "id": "dns01",
+      "type": "server",
+      "label": "DNS Server",
+      "position": { "x": -100, "y": -260 },
+      "config": {
+        "os": "windows_server_2019",
+        "ip": "192.168.70.5",
+        "hostname": "DNS01",
+        "cves": [],
+        "roles": ["DNS"],
+        "memory_mb": 2048,
+        "cpus": 2,
+        "credentials": { "username": "Administrator", "password": "DnsLab2025" },
+        "vlan": null,
+        "gateway": "192.168.70.1"
+      },
+      "attack_tags": [
+        { "tactic": "discovery", "technique": "T1018", "note": "DNS enumeration target" }
+      ]
+    },
+    {
+      "id": "iis01",
+      "type": "server",
+      "label": "IIS Web Server",
+      "position": { "x": -100, "y": 260 },
+      "config": {
+        "os": "windows_server_2019",
+        "ip": "192.168.70.10",
+        "hostname": "IIS01",
+        "cves": [],
+        "roles": ["sysmon", "winlogbeat"],
+        "memory_mb": 2048,
+        "cpus": 2,
+        "credentials": { "username": "Administrator", "password": "IisLab2025" },
+        "vlan": null,
+        "gateway": "192.168.70.1"
+      },
+      "attack_tags": [
+        { "tactic": "initial_access", "technique": "T1190", "note": "Authenticated foothold via web" },
+        { "tactic": "execution", "technique": "T1059.001", "note": "PowerShell post-exploitation" }
+      ]
+    },
+    {
+      "id": "mssql01",
+      "type": "database",
+      "label": "MSSQL Server",
+      "position": { "x": 220, "y": -260 },
+      "config": {
+        "os": "windows_server_2019",
+        "ip": "192.168.70.15",
+        "hostname": "MSSQL01",
+        "cves": [],
+        "roles": ["sysmon"],
+        "memory_mb": 2048,
+        "cpus": 2,
+        "credentials": { "username": "sa", "password": "Sql!Lab2025" },
+        "vlan": null,
+        "gateway": "192.168.70.1"
+      },
+      "attack_tags": [
+        { "tactic": "privilege_escalation", "technique": "T1078.002", "note": "Service-account abuse" },
+        { "tactic": "credential_access", "technique": "T1003.002", "note": "Kerberoasting target" }
+      ]
+    },
+    {
+      "id": "dc01",
+      "type": "domain_controller",
+      "label": "Domain Controller",
+      "position": { "x": 220, "y": 0 },
+      "config": {
+        "os": "windows_server_2019",
+        "ip": "192.168.70.20",
+        "hostname": "DC01",
+        "cves": [],
+        "roles": ["AD-Domain-Services", "DNS", "sysmon", "winlogbeat"],
+        "memory_mb": 4096,
+        "cpus": 2,
+        "credentials": { "username": "Administrator", "password": "DcLab2025" },
+        "vlan": null,
+        "gateway": "192.168.70.1"
+      },
+      "attack_tags": [
+        { "tactic": "lateral_movement", "technique": "T1021.002", "note": "Crown jewel — DC takeover" },
+        { "tactic": "credential_access", "technique": "T1003.006", "note": "DCSync" }
+      ]
+    },
+    {
+      "id": "ca01",
+      "type": "server",
+      "label": "Certificate Authority",
+      "position": { "x": 220, "y": 260 },
+      "config": {
+        "os": "windows_server_2019",
+        "ip": "192.168.70.25",
+        "hostname": "CA01",
+        "cves": [],
+        "roles": ["sysmon"],
+        "memory_mb": 2048,
+        "cpus": 2,
+        "credentials": { "username": "Administrator", "password": "CaLab2025" },
+        "vlan": null,
+        "gateway": "192.168.70.1"
+      },
+      "attack_tags": [
+        { "tactic": "privilege_escalation", "technique": "T1649", "note": "ESC1/ESC8 cert template abuse" }
+      ]
+    },
+    {
+      "id": "exch01",
+      "type": "server",
+      "label": "Exchange Server",
+      "position": { "x": 540, "y": 0 },
+      "config": {
+        "os": "windows_server_2019",
+        "ip": "192.168.70.30",
+        "hostname": "EXCH01",
+        "cves": [],
+        "roles": ["sysmon"],
+        "memory_mb": 2048,
+        "cpus": 2,
+        "credentials": { "username": "Administrator", "password": "ExchLab2025" },
+        "vlan": null,
+        "gateway": "192.168.70.1"
+      },
+      "attack_tags": [
+        { "tactic": "collection", "technique": "T1114.002", "note": "Mailbox harvesting" },
+        { "tactic": "exfiltration", "technique": "T1048.003", "note": "Data exfil via SMTP" }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-kali-fw",
+      "source": "kali01",
+      "target": "fw01",
+      "protocol": "tcp",
+      "port": null,
+      "label": "Un-authenticated attack path",
+      "attack_tags": [
+        { "tactic": "reconnaissance", "technique": "T1595", "note": "External-facing scan" }
+      ]
+    },
+    {
+      "id": "e-fw-dns",
+      "source": "fw01",
+      "target": "dns01",
+      "protocol": "udp",
+      "port": 53,
+      "label": "DNS",
+      "attack_tags": [
+        { "tactic": "discovery", "technique": "T1018" }
+      ]
+    },
+    {
+      "id": "e-fw-iis",
+      "source": "fw01",
+      "target": "iis01",
+      "protocol": "https",
+      "port": 443,
+      "label": "HTTPS (auth path)",
+      "attack_tags": [
+        { "tactic": "initial_access", "technique": "T1190" }
+      ]
+    },
+    {
+      "id": "e-iis-dc",
+      "source": "iis01",
+      "target": "dc01",
+      "protocol": "kerberos",
+      "port": 88,
+      "label": "Kerberos",
+      "attack_tags": [
+        { "tactic": "lateral_movement", "technique": "T1021.002" }
+      ]
+    },
+    {
+      "id": "e-dc-mssql",
+      "source": "dc01",
+      "target": "mssql01",
+      "protocol": "tcp",
+      "port": 1433,
+      "label": "MSSQL service",
+      "attack_tags": [
+        { "tactic": "credential_access", "technique": "T1003.002" }
+      ]
+    },
+    {
+      "id": "e-dc-ca",
+      "source": "dc01",
+      "target": "ca01",
+      "protocol": "tcp",
+      "port": 135,
+      "label": "AD CS RPC",
+      "attack_tags": [
+        { "tactic": "privilege_escalation", "technique": "T1649" }
+      ]
+    },
+    {
+      "id": "e-dc-exch",
+      "source": "dc01",
+      "target": "exch01",
+      "protocol": "ldap",
+      "port": 389,
+      "label": "LDAP / mail relay",
+      "attack_tags": [
+        { "tactic": "collection", "technique": "T1114.002" }
+      ]
+    },
+    {
+      "id": "e-exch-out",
+      "source": "exch01",
+      "target": "kali01",
+      "protocol": "smb",
+      "port": 445,
+      "label": "Exfiltration path",
+      "attack_tags": [
+        { "tactic": "exfiltration", "technique": "T1048.003" }
+      ]
+    }
+  ],
+  "zones": [
+    {
+      "id": "z-trust-zone",
+      "label": "Internal trust zone",
+      "shape": "rectangle",
+      "position": { "x": -200, "y": -340 },
+      "size": { "width": 900, "height": 700 },
+      "color": "#22d3ee",
+      "opacity": 0.08
+    },
+    {
+      "id": "z-edge",
+      "label": "Edge / DMZ",
+      "shape": "rectangle",
+      "position": { "x": -480, "y": -340 },
+      "size": { "width": 220, "height": 700 },
+      "color": "#f59e0b",
+      "opacity": 0.10
+    }
+  ]
+}

@@ -1,0 +1,1410 @@
+/* ============================================================
+   LabForge — Dashboard 10 (Pro Toolbar + Sidebar)
+   Verbatim port of labforge-designs.html token set so every page
+   can use the same `.lf .…` class vocabulary the mockup uses.
+   ============================================================ */
+
+:root,
+[data-theme="dark"] {
+  --d10-bg: #0a0b0d;
+  --d10-bg-frame: #131418;
+  --d10-bg-elev-1: #181a1f;
+  --d10-bg-elev-2: #0e0f12;
+  --d10-bg-elev-3: #21232a;
+  --d10-border: #21232a;
+  --d10-border-strong: #2a2d36;
+  --d10-border-soft: #1c1e24;
+  --d10-fg: #d6d8de;
+  --d10-fg-strong: #ffffff;
+  --d10-fg-mute: #b6b9c3;
+  --d10-fg-dim: #8b8f9b;
+  --d10-fg-faint: #6c707b;
+  --d10-accent: #ff8a3d;
+  --d10-accent-hot: #ffa05c;
+  --d10-accent-deep: #c0492c;
+  --d10-accent-ink: #1a1108;
+  --d10-ok: #4cd964;
+  --d10-warn: #ff8a3d;
+  --d10-err: #ff7070;
+  --d10-info: #5096ff;
+  --d10-purple: #aa6eff;
+  --d10-yellow: #ffd166;
+  --d10-shadow-frame: 0 8px 32px rgba(0, 0, 0, 0.4);
+  --d10-shadow-node: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+[data-theme="light"] {
+  /* Light fallback — the design only specifies a gradient swatch,
+     so this is a high-contrast inversion that keeps the orange
+     accent and edge tokens stable. Foreground at 0.65 alpha for
+     edges is honoured in the canvas itself. */
+  --d10-bg: #f7f5f0;
+  --d10-bg-frame: #ffffff;
+  --d10-bg-elev-1: #f1eee6;
+  --d10-bg-elev-2: #e8e4dc;
+  --d10-bg-elev-3: #d8d3c8;
+  --d10-border: #d8d3c8;
+  --d10-border-strong: #b9b4a8;
+  --d10-border-soft: #e0dcd2;
+  --d10-fg: #1a1c22;
+  --d10-fg-strong: #000000;
+  --d10-fg-mute: #3a3c44;
+  --d10-fg-dim: #6c707b;
+  --d10-fg-faint: #8b8f9b;
+  --d10-accent: #ff8a3d;
+  --d10-accent-hot: #ffa05c;
+  --d10-accent-deep: #c0492c;
+  --d10-accent-ink: #1a1108;
+  --d10-ok: #0a7c4a;
+  --d10-warn: #c87a00;
+  --d10-err: #cc0000;
+  --d10-info: #0070f3;
+  --d10-purple: #6b3aff;
+  --d10-yellow: #c8a000;
+  --d10-shadow-frame: 0 8px 32px rgba(0, 0, 0, 0.08);
+  --d10-shadow-node: 0 4px 12px rgba(0, 0, 0, 0.06);
+}
+
+/* The `.lf` wrapper is the LabForge Dashboard 10 root. Every page
+   sits inside one so the design tokens cascade locally.
+
+   Layout note: we use flex (sidebar = fixed 220 px, right column = flex:1
+   with min-width:0 / min-height:0 so internal scroll regions can shrink).
+   Height is locked to 100vh and `overflow: hidden` so the outer document
+   never produces its own scrollbar — the right column scrolls internally
+   via `.content { overflow: auto }`. */
+.lf {
+  background: var(--d10-bg-frame);
+  color: var(--d10-fg);
+  font-family: "Inter", -apple-system, "Segoe UI", sans-serif;
+  font-size: 13px;
+  height: 100vh;
+  max-height: 100vh;
+  display: flex;
+  overflow: hidden;
+}
+
+.lf .mono,
+.lf code,
+.lf pre,
+.lf kbd {
+  font-family: "JetBrains Mono", ui-monospace, "Consolas", monospace;
+}
+
+/* ============================================================
+   SIDEBAR
+   ============================================================ */
+.lf .sidebar {
+  flex: 0 0 220px;
+  width: 220px;
+  background: var(--d10-bg-elev-2);
+  border-right: 1px solid var(--d10-border);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow-y: auto;
+}
+.lf .sidebar .brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--d10-border);
+}
+.lf .sidebar .brand .logo {
+  width: 26px;
+  height: 26px;
+  background: linear-gradient(135deg, var(--d10-accent), var(--d10-accent-deep));
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--d10-accent-ink);
+  font-weight: 700;
+  font-size: 13px;
+}
+.lf .sidebar .brand .ws {
+  font-weight: 600;
+  color: var(--d10-fg-strong);
+  font-size: 14px;
+}
+.lf .sidebar .brand .ws small {
+  display: block;
+  font-size: 10px;
+  color: var(--d10-fg-faint);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+}
+.lf .sidebar .section-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--d10-fg-faint);
+  padding: 16px 16px 6px;
+}
+.lf .sidebar a.nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 16px;
+  color: var(--d10-fg-mute);
+  text-decoration: none;
+  font-size: 13px;
+  border-left: 2px solid transparent;
+  cursor: pointer;
+}
+.lf .sidebar a.nav:hover {
+  background: var(--d10-bg-elev-1);
+  color: var(--d10-fg-strong);
+}
+.lf .sidebar a.nav.active {
+  background: var(--d10-bg-elev-1);
+  color: var(--d10-fg-strong);
+  border-left-color: var(--d10-accent);
+  font-weight: 500;
+}
+.lf .sidebar a.nav .icn {
+  width: 16px;
+  display: inline-flex;
+  justify-content: center;
+  color: var(--d10-fg-dim);
+  font-size: 13px;
+}
+.lf .sidebar a.nav.active .icn {
+  color: var(--d10-accent);
+}
+.lf .sidebar a.nav .badge {
+  margin-left: auto;
+  background: var(--d10-bg-elev-3);
+  color: var(--d10-fg);
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-weight: 600;
+}
+.lf .sidebar a.nav .badge.hot {
+  background: rgba(255, 138, 61, 0.18);
+  color: var(--d10-accent);
+}
+.lf .sidebar .footer {
+  margin-top: auto;
+  padding: 12px 16px;
+  border-top: 1px solid var(--d10-border);
+  font-size: 11px;
+  color: var(--d10-fg-faint);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.lf .sidebar .footer .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--d10-ok);
+  box-shadow: 0 0 8px rgba(76, 217, 100, 0.5);
+}
+
+/* ============================================================
+   TOP TOOLBAR (tb1)
+   ============================================================ */
+.lf .tb1 {
+  background: var(--d10-bg-elev-2);
+  border-bottom: 1px solid var(--d10-border);
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 12px;
+}
+.lf .tb1 .crumb {
+  color: var(--d10-fg-faint);
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex-wrap: wrap;
+}
+.lf .tb1 .crumb span {
+  color: var(--d10-fg);
+  margin-left: 8px;
+}
+.lf .tb1 .crumb span.head {
+  color: var(--d10-fg-strong);
+  font-weight: 500;
+}
+.lf .tb1 .right {
+  margin-left: auto;
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  color: var(--d10-fg-faint);
+}
+.lf .tb1 .right .kbd,
+.lf .kbd {
+  background: var(--d10-bg-elev-1);
+  border: 1px solid var(--d10-border);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+}
+.lf .tb1 .avtar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--d10-accent);
+  color: var(--d10-accent-ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+}
+.lf .tb1 .autosave {
+  color: var(--d10-ok);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+.lf .tb1 .autosave .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--d10-ok);
+  box-shadow: 0 0 6px rgba(76, 217, 100, 0.5);
+}
+
+/* ============================================================
+   TAB TOOLBAR (tb2)
+   ============================================================ */
+.lf .tb2 {
+  background: var(--d10-bg-elev-1);
+  border-bottom: 1px solid var(--d10-border);
+  padding: 6px 16px;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.lf .tb2 .tab {
+  padding: 7px 14px;
+  font-size: 12px;
+  color: var(--d10-fg-dim);
+  border-radius: 5px;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  font-family: inherit;
+}
+.lf .tb2 .tab:hover {
+  color: var(--d10-fg-strong);
+}
+.lf .tb2 .tab.act {
+  background: var(--d10-bg-elev-3);
+  color: var(--d10-fg-strong);
+}
+.lf .tb2 .tab.act .ct {
+  color: var(--d10-accent);
+}
+.lf .tb2 .tab .ct {
+  color: var(--d10-fg-faint);
+  margin-left: 4px;
+}
+.lf .tb2 .tab .ct.err {
+  color: var(--d10-err);
+}
+.lf .tb2 .tab .ct.warn {
+  color: var(--d10-accent);
+}
+.lf .tb2 .tab .ct.ok {
+  color: var(--d10-ok);
+}
+.lf .tb2 .right {
+  margin-left: auto;
+  color: var(--d10-fg-faint);
+  font-size: 11px;
+}
+
+/* ============================================================
+   ACTION TOOLBAR (tb3)
+   ============================================================ */
+.lf .tb3 {
+  background: var(--d10-bg-frame);
+  border-bottom: 1px solid var(--d10-border);
+  padding: 8px 16px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.lf .tb3 .btn,
+.lf .btn {
+  background: var(--d10-bg-elev-3);
+  border: 1px solid var(--d10-border-strong);
+  color: var(--d10-fg);
+  padding: 5px 11px;
+  border-radius: 5px;
+  font-size: 12px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+  font-family: inherit;
+}
+.lf .tb3 .btn:hover,
+.lf .btn:hover {
+  border-color: var(--d10-accent);
+  color: var(--d10-fg-strong);
+}
+.lf .tb3 .btn.primary,
+.lf .btn.primary {
+  background: var(--d10-accent);
+  color: var(--d10-accent-ink);
+  border: none;
+  font-weight: 600;
+}
+.lf .tb3 .btn.primary:hover,
+.lf .btn.primary:hover {
+  background: var(--d10-accent-hot);
+  color: var(--d10-accent-ink);
+}
+.lf .tb3 .btn.danger,
+.lf .btn.danger {
+  background: #2a1a1a;
+  border-color: #5c2a2a;
+  color: var(--d10-err);
+}
+.lf .tb3 .btn .accent,
+.lf .btn .accent {
+  color: var(--d10-accent);
+}
+.lf .tb3 .search,
+.lf .search {
+  background: var(--d10-bg-elev-2);
+  border: 1px solid var(--d10-border);
+  color: var(--d10-fg);
+  padding: 5px 11px;
+  border-radius: 5px;
+  width: 240px;
+  font-size: 12px;
+  font-family: inherit;
+}
+.lf .tb3 .search:focus,
+.lf .search:focus {
+  outline: none;
+  border-color: var(--d10-accent);
+}
+.lf .tb3 .right {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+.lf .tb3 .divider,
+.lf .divider {
+  width: 1px;
+  height: 20px;
+  background: var(--d10-border);
+  margin: 0 4px;
+}
+
+/* Stepper inside tb3 (Generate page) */
+.lf .steps {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--d10-fg-dim);
+}
+.lf .steps .st {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.lf .steps .st.done {
+  color: var(--d10-ok);
+}
+.lf .steps .st.act {
+  color: var(--d10-fg-strong);
+  font-weight: 500;
+}
+.lf .steps .st.act .num {
+  color: var(--d10-accent);
+}
+.lf .steps .arrow {
+  color: var(--d10-fg-faint);
+}
+
+/* ============================================================
+   CONTENT AREA
+   ============================================================ */
+.lf .content {
+  background: var(--d10-bg-frame);
+  overflow: auto;
+  min-height: 0;
+}
+/* Per-page opt-in: pages that manage their own internal scroll regions
+   (e.g. /cves, /vendors, /labs, /labs/[id], /build/validate) use this
+   modifier so the outer .content stops producing a vertical scrollbar.
+   Each pane within the page is then responsible for `overflow-y: auto`. */
+.lf .content.content--noscroll {
+  overflow: hidden;
+}
+
+/* ============================================================
+   PILLS / STATUS DOTS
+   ============================================================ */
+.lf .pill {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+}
+.lf .pill.act {
+  background: rgba(76, 217, 100, 0.15);
+  color: var(--d10-ok);
+}
+.lf .pill.warn {
+  background: rgba(255, 138, 61, 0.15);
+  color: var(--d10-accent);
+}
+.lf .pill.mute {
+  background: rgba(108, 112, 123, 0.18);
+  color: #a4a7b1;
+}
+.lf .pill.danger {
+  background: rgba(255, 80, 80, 0.15);
+  color: var(--d10-err);
+}
+.lf .pill.info {
+  background: rgba(80, 150, 255, 0.15);
+  color: var(--d10-info);
+}
+.lf .pill.purple {
+  background: rgba(170, 110, 255, 0.15);
+  color: var(--d10-purple);
+}
+
+.lf .av-s {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--d10-border-strong);
+  color: var(--d10-fg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 600;
+  margin-right: 8px;
+  vertical-align: middle;
+}
+
+.lf .sd {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+.lf .sd.run {
+  background: var(--d10-ok);
+  box-shadow: 0 0 8px rgba(76, 217, 100, 0.55);
+}
+.lf .sd.prov {
+  background: var(--d10-accent);
+  box-shadow: 0 0 8px rgba(255, 138, 61, 0.55);
+  animation: d10-pulse 1.4s ease-in-out infinite;
+}
+.lf .sd.stop {
+  background: var(--d10-fg-faint);
+}
+.lf .sd.err {
+  background: var(--d10-err);
+  box-shadow: 0 0 8px rgba(255, 112, 112, 0.55);
+}
+@keyframes d10-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(0.85); }
+}
+
+/* ============================================================
+   TABLES
+   ============================================================ */
+.lf table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.lf thead {
+  background: var(--d10-bg-elev-1);
+}
+.lf th {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--d10-fg-faint);
+  font-weight: 500;
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--d10-border);
+}
+.lf td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--d10-border-soft);
+  font-size: 13px;
+}
+.lf tr:hover td {
+  background: var(--d10-bg-elev-1);
+}
+.lf td strong {
+  color: var(--d10-fg-strong);
+  font-weight: 500;
+}
+.lf td .sub {
+  color: var(--d10-fg-faint);
+  font-size: 11px;
+  display: block;
+  margin-top: 2px;
+}
+
+/* ============================================================
+   CARDS
+   ============================================================ */
+.lf .card {
+  background: var(--d10-bg-elev-1);
+  border: 1px solid var(--d10-border);
+  border-radius: 6px;
+}
+.lf .card-h {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--d10-border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--d10-fg-faint);
+}
+.lf .card-h .title {
+  color: var(--d10-fg-strong);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.lf .card-h .actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+.lf .card-b {
+  padding: 14px;
+}
+
+/* ============================================================
+   KPI TILES + SPARKLINES
+   ============================================================ */
+.lf .g-4 {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+.lf .g-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.lf .g-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.lf .kpi {
+  background: var(--d10-bg-elev-1);
+  border: 1px solid var(--d10-border);
+  border-radius: 6px;
+  padding: 14px;
+}
+.lf .kpi .lbl {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--d10-fg-faint);
+  margin-bottom: 6px;
+}
+.lf .kpi .val {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--d10-fg-strong);
+  font-family: "Inter", sans-serif;
+}
+.lf .kpi .trend {
+  font-size: 11px;
+  margin-top: 4px;
+}
+.lf .kpi .trend.up { color: var(--d10-ok); }
+.lf .kpi .trend.down { color: var(--d10-err); }
+.lf .kpi .trend.neutral { color: var(--d10-fg-faint); }
+
+.lf .spark {
+  display: flex;
+  gap: 2px;
+  align-items: flex-end;
+  height: 28px;
+  margin-top: 8px;
+}
+.lf .spark span {
+  flex: 1;
+  background: rgba(255, 138, 61, 0.4);
+  border-radius: 1px;
+}
+
+/* ============================================================
+   FILTER RAIL
+   ============================================================ */
+.lf .filt {
+  border-right: 1px solid var(--d10-border);
+  padding: 14px;
+  background: var(--d10-bg-frame);
+  overflow-y: auto;
+}
+.lf .filt .group {
+  margin-bottom: 18px;
+}
+.lf .filt .group .lh {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--d10-fg-faint);
+  margin-bottom: 8px;
+  display: flex;
+  justify-content: space-between;
+}
+.lf .filt .group label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+  color: var(--d10-fg-mute);
+  cursor: pointer;
+}
+.lf .filt .group label:hover {
+  color: var(--d10-fg-strong);
+}
+.lf .filt .group label input {
+  accent-color: var(--d10-accent);
+}
+.lf .filt .group label .ct {
+  margin-left: auto;
+  color: var(--d10-fg-faint);
+}
+.lf .filt .group label .ct.err { color: var(--d10-err); }
+.lf .filt .group label .ct.warn { color: var(--d10-accent); }
+.lf .filt .group label .ct.ok { color: var(--d10-ok); }
+.lf .filt .group label .ct.yellow { color: var(--d10-yellow); }
+.lf .filt .group .chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.lf .filt .group .chip {
+  font-size: 10px;
+  padding: 3px 7px;
+  border-radius: 3px;
+  background: var(--d10-bg-elev-3);
+  color: var(--d10-fg-mute);
+  cursor: pointer;
+  border: 0;
+  font-family: inherit;
+}
+.lf .filt .group .chip.act {
+  background: rgba(255, 138, 61, 0.2);
+  color: var(--d10-accent);
+}
+
+/* ============================================================
+   TOPOLOGY CANVAS (cosmetic frame around React Flow)
+   ============================================================ */
+.lf .canvas-area {
+  background:
+    radial-gradient(circle at center, #1a1c22 1px, transparent 1px) 0 0 / 24px 24px,
+    var(--d10-bg-frame);
+  position: relative;
+  min-height: 70vh;
+  overflow: hidden;
+}
+.lf .minimap {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  width: 160px;
+  height: 80px;
+  background: rgba(14, 15, 18, 0.92);
+  border: 1px solid var(--d10-border);
+  border-radius: 6px;
+  font-size: 10px;
+  color: var(--d10-fg-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 6px 8px;
+  font-family: "JetBrains Mono", monospace;
+}
+.lf .vchip {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  background: rgba(14, 15, 18, 0.92);
+  border: 1px solid var(--d10-border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-family: "JetBrains Mono", monospace;
+  color: var(--d10-fg-mute);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.lf .vchip .ok { color: var(--d10-ok); }
+.lf .vchip .warn { color: var(--d10-accent); }
+.lf .vchip .err { color: var(--d10-err); }
+
+/* ============================================================
+   INSPECTOR (right drawer-style column on canvas + node config)
+   ============================================================ */
+.lf .inspector {
+  background: var(--d10-bg-frame);
+  border-left: 1px solid var(--d10-border);
+  overflow-y: auto;
+}
+.lf .inspector .ih {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--d10-border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.lf .inspector .ih .ic {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #2a4a6c, #1a2a40);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+}
+.lf .inspector .ih .nm {
+  color: var(--d10-fg-strong);
+  font-weight: 600;
+  font-size: 13px;
+}
+.lf .inspector .ih .ty {
+  color: var(--d10-fg-faint);
+  font-size: 11px;
+  font-family: "JetBrains Mono", monospace;
+}
+.lf .inspector .tabs {
+  display: flex;
+  padding: 0 14px;
+  gap: 4px;
+  border-bottom: 1px solid var(--d10-border);
+  background: var(--d10-bg-elev-2);
+}
+.lf .inspector .tabs .t {
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--d10-fg-dim);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  border-left: 0;
+  border-right: 0;
+  border-top: 0;
+  font-family: inherit;
+}
+.lf .inspector .tabs .t.act {
+  color: var(--d10-fg-strong);
+  border-bottom-color: var(--d10-accent);
+}
+.lf .inspector .body {
+  padding: 14px;
+}
+.lf .inspector .field {
+  margin-bottom: 12px;
+}
+.lf .inspector .field .l {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--d10-fg-faint);
+  margin-bottom: 4px;
+}
+.lf .inspector .field input,
+.lf .inspector .field select,
+.lf .inspector .field textarea,
+.lf .field input,
+.lf .field select,
+.lf .field textarea {
+  width: 100%;
+  background: var(--d10-bg-elev-2);
+  border: 1px solid var(--d10-border);
+  color: var(--d10-fg);
+  padding: 6px 9px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: inherit;
+}
+.lf .inspector .field input:focus,
+.lf .inspector .field select:focus,
+.lf .inspector .field textarea:focus {
+  outline: none;
+  border-color: var(--d10-accent);
+}
+
+/* Role chips inside the inspector */
+.lf .role-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--d10-bg-elev-3);
+  color: var(--d10-fg);
+  padding: 3px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  margin: 0 4px 4px 0;
+  border: 1px solid var(--d10-border-strong);
+}
+.lf .role-chip .v {
+  color: var(--d10-accent);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+}
+.lf .role-chip .x {
+  color: var(--d10-fg-faint);
+  cursor: pointer;
+}
+
+/* ============================================================
+   TEMPLATE CARDS
+   ============================================================ */
+.lf .tpl-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+  padding: 14px;
+}
+.lf .tpl {
+  background: var(--d10-bg-elev-1);
+  border: 1px solid var(--d10-border);
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-decoration: none;
+  color: inherit;
+  display: block;
+}
+.lf .tpl:hover {
+  border-color: var(--d10-accent);
+  transform: translateY(-2px);
+}
+.lf .tpl .preview {
+  height: 120px;
+  position: relative;
+  background:
+    radial-gradient(circle at center, var(--d10-bg-elev-3) 1px, transparent 1px) 0 0 / 16px 16px,
+    linear-gradient(135deg, #1a1c22, var(--d10-bg-elev-2));
+}
+.lf .tpl .info {
+  padding: 12px 14px;
+}
+.lf .tpl .info .nm {
+  font-weight: 600;
+  color: var(--d10-fg-strong);
+  font-size: 13px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.lf .tpl .info .nm code {
+  font-size: 10px;
+  color: var(--d10-fg-faint);
+  background: var(--d10-bg-elev-2);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.lf .tpl .info .desc {
+  color: var(--d10-fg-dim);
+  font-size: 11px;
+  margin-top: 4px;
+  line-height: 1.45;
+}
+.lf .tpl .info .stats {
+  margin-top: 10px;
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--d10-fg-faint);
+}
+.lf .tpl .info .stats strong {
+  color: var(--d10-accent);
+  font-weight: 600;
+}
+.lf .tpl.custom {
+  background: transparent;
+  border: 1px dashed var(--d10-border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 240px;
+  color: var(--d10-fg-faint);
+  text-align: center;
+  flex-direction: column;
+  gap: 12px;
+}
+.lf .tpl.custom:hover {
+  border-color: var(--d10-accent);
+  color: var(--d10-accent);
+}
+.lf .tpl.custom .plus {
+  font-size: 32px;
+  color: var(--d10-accent);
+}
+
+/* ============================================================
+   QUICK-START TEMPLATE CARDS (dashboard `.qt-card`)
+   ------------------------------------------------------------
+   A denser, more visual variant of `.tpl` used on the dashboard's
+   Quick-start row. Includes a node-illustration thumbnail strip,
+   a stats footer of three pills, and an orange-accent hover lift.
+   ============================================================ */
+.lf .qt-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  padding: 12px;
+}
+.lf .qt-card {
+  background: var(--d10-bg-elev-1);
+  border: 1px solid var(--d10-border);
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+  text-decoration: none;
+  color: inherit;
+  display: flex;
+  flex-direction: column;
+}
+.lf .qt-card:hover {
+  border-color: var(--d10-accent);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 14px -8px rgba(255, 138, 61, 0.45);
+}
+.lf .qt-card .qt-thumb {
+  height: 72px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background:
+    radial-gradient(circle at 18% 24%, var(--d10-bg-elev-3) 1px, transparent 1px) 0 0 / 14px 14px,
+    linear-gradient(135deg, #1a1c22, var(--d10-bg-elev-2));
+  border-bottom: 1px solid var(--d10-border);
+  overflow: hidden;
+}
+.lf .qt-card .qt-thumb .qt-thumb-node {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.lf .qt-card .qt-thumb .qt-thumb-more {
+  font-size: 10px;
+  color: var(--d10-fg-faint);
+  font-family: var(--d10-font-mono, monospace);
+  margin-left: auto;
+}
+.lf .qt-card .qt-thumb .qt-thumb-empty {
+  font-size: 10px;
+  color: var(--d10-fg-faint);
+  font-family: var(--d10-font-mono, monospace);
+  margin: 0 auto;
+}
+.lf .qt-card .qt-body {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+.lf .qt-card .qt-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--d10-fg-strong);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.lf .qt-card .qt-slug {
+  font-size: 10px;
+  color: var(--d10-fg-faint);
+  background: var(--d10-bg-elev-2);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: var(--d10-font-mono, monospace);
+  white-space: nowrap;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lf .qt-card .qt-desc {
+  font-size: 11px;
+  color: var(--d10-fg-dim);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.lf .qt-card .qt-stats {
+  margin-top: auto;
+  padding-top: 8px;
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.lf .qt-card .qt-pill {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--d10-bg-elev-2);
+  color: var(--d10-fg-dim);
+  border: 1px solid var(--d10-border);
+  white-space: nowrap;
+}
+.lf .qt-card .qt-pill.ram {
+  background: rgba(255, 138, 61, 0.10);
+  color: var(--d10-accent);
+  border-color: rgba(255, 138, 61, 0.35);
+}
+.lf .qt-card .qt-pill.ram strong {
+  font-weight: 700;
+}
+
+/* ============================================================
+   VENDOR CARDS
+   ============================================================ */
+.lf .vendor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+  padding: 14px;
+}
+.lf .v-card {
+  background: var(--d10-bg-elev-1);
+  border: 1px solid var(--d10-border);
+  border-radius: 6px;
+  padding: 12px;
+  cursor: pointer;
+}
+.lf .v-card:hover {
+  border-color: var(--d10-accent);
+}
+.lf .v-card.selected {
+  border-color: var(--d10-accent);
+  box-shadow: 0 0 0 2px rgba(255, 138, 61, 0.18);
+}
+.lf .v-card .top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.lf .v-card .logo {
+  width: 30px;
+  height: 30px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 12px;
+  color: #fff;
+  flex-shrink: 0;
+}
+.lf .v-card .nm {
+  color: var(--d10-fg-strong);
+  font-weight: 600;
+  font-size: 13px;
+}
+.lf .v-card .cat {
+  color: var(--d10-fg-faint);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.lf .v-card .v-row {
+  margin-top: 8px;
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.lf .v-card .v-chip {
+  font-size: 10px;
+  padding: 2px 6px;
+  background: var(--d10-bg-elev-3);
+  border-radius: 3px;
+  color: var(--d10-fg-mute);
+  font-family: "JetBrains Mono", monospace;
+}
+.lf .v-card .v-chip.act {
+  background: rgba(255, 138, 61, 0.18);
+  color: var(--d10-accent);
+}
+
+/* Vendor brand logo backgrounds (subset; extend as needed) */
+.lf .lg-splunk { background: #65a637; }
+.lf .lg-wazuh { background: #1f5dc4; }
+.lf .lg-elastic { background: #00bfb3; }
+.lf .lg-claude { background: #c47857; }
+.lf .lg-ollama { background: #2a2a2a; }
+.lf .lg-suricata { background: #b71c1c; }
+.lf .lg-mdf { background: #00bcf2; }
+.lf .lg-grafana { background: #f46800; }
+.lf .lg-docker { background: #0db7ed; }
+.lf .lg-postgres { background: #336791; }
+.lf .lg-redis { background: #d82c20; }
+.lf .lg-kibana { background: #f04e98; }
+.lf .lg-kali { background: #267fb7; }
+.lf .lg-openai { background: #10a37f; }
+.lf .lg-cisco { background: #1ba0d7; }
+.lf .lg-siemens { background: #009999; }
+.lf .lg-meta { background: #1877f2; }
+.lf .lg-zeek { background: #ffd166; color: #1a1108; }
+.lf .lg-snort { background: #ed2024; }
+.lf .lg-pfsense { background: #1a2540; }
+.lf .lg-prom { background: #e6522c; }
+.lf .lg-sentinel { background: #0078d4; }
+.lf .lg-cs { background: #e3142d; }
+.lf .lg-s1 { background: #6b46c1; }
+.lf .lg-sophos { background: #1a4d8c; }
+.lf .lg-sysmon { background: #666; }
+.lf .lg-winlog { background: #005571; }
+.lf .lg-falco { background: #326ce5; }
+.lf .lg-modicon { background: #3dad2b; }
+.lf .lg-ab { background: #cc0000; }
+.lf .lg-mits { background: #d50000; }
+.lf .lg-openplc { background: #ed7d31; }
+.lf .lg-rapidscada { background: #0a6cba; }
+.lf .lg-modbus { background: #1f88a5; }
+.lf .lg-opcua { background: #003c71; }
+.lf .lg-lc { background: #1ca0f1; }
+.lf .lg-hf { background: #ffd21e; color: #1a1108; }
+
+/* ============================================================
+   CVE TABLE TOKENS
+   ============================================================ */
+.lf .cve-id {
+  font-family: "JetBrains Mono", monospace;
+  color: var(--d10-accent);
+  font-weight: 600;
+}
+.lf .cvss {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  font-weight: 600;
+}
+.lf .cvss.crit { color: var(--d10-err); }
+.lf .cvss.hi { color: var(--d10-accent); }
+.lf .cvss.med { color: var(--d10-yellow); }
+.lf .cvss.lo { color: var(--d10-ok); }
+
+/* ============================================================
+   ACTIVITY FEED
+   ============================================================ */
+.lf .feed-item {
+  display: flex;
+  gap: 10px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--d10-border-soft);
+  font-size: 12px;
+}
+.lf .feed-item:last-child {
+  border-bottom: none;
+}
+.lf .feed-item .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 4px;
+  flex-shrink: 0;
+}
+.lf .feed-item .dot.ok { background: var(--d10-ok); }
+.lf .feed-item .dot.info { background: var(--d10-info); }
+.lf .feed-item .dot.warn { background: var(--d10-accent); }
+.lf .feed-item .dot.err { background: var(--d10-err); }
+.lf .feed-item .txt { color: var(--d10-fg); flex: 1; line-height: 1.5; }
+.lf .feed-item .txt code {
+  color: var(--d10-accent);
+  font-size: 11px;
+}
+.lf .feed-item .ts {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  color: var(--d10-fg-faint);
+  flex-shrink: 0;
+}
+
+/* ============================================================
+   CODE BLOCKS
+   ============================================================ */
+.lf pre.code {
+  background: var(--d10-bg);
+  border: 1px solid var(--d10-border);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin: 0;
+  overflow: auto;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--d10-fg);
+}
+.lf pre.code .c { color: var(--d10-fg-faint); font-style: italic; }
+.lf pre.code .k { color: var(--d10-accent); }
+.lf pre.code .s { color: var(--d10-ok); }
+.lf pre.code .n { color: var(--d10-info); }
+
+/* ============================================================
+   VALIDATION ROWS
+   ============================================================ */
+.lf .v-row-r {
+  display: grid;
+  grid-template-columns: 16px 1fr auto;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--d10-border-soft);
+  align-items: flex-start;
+}
+.lf .v-row-r:last-child {
+  border-bottom: 0;
+}
+.lf .v-row-r .icn {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  margin-top: 4px;
+}
+.lf .v-row-r.err .icn { background: var(--d10-err); }
+.lf .v-row-r.warn .icn { background: var(--d10-accent); }
+.lf .v-row-r.ok .icn { background: var(--d10-ok); }
+.lf .v-row-r .ti {
+  color: var(--d10-fg-strong);
+  font-size: 13px;
+  font-weight: 500;
+}
+.lf .v-row-r .ds {
+  color: var(--d10-fg-mute);
+  font-size: 12px;
+  margin-top: 2px;
+}
+.lf .v-row-r .where {
+  font-family: "JetBrains Mono", monospace;
+  color: var(--d10-accent);
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+/* ============================================================
+   MISC
+   ============================================================ */
+.lf .accent { color: var(--d10-accent); }
+.lf .ok { color: var(--d10-ok); }
+.lf .err { color: var(--d10-err); }
+.lf .warn { color: var(--d10-accent); }
+.lf .muted { color: var(--d10-fg-faint); }
+.lf .strong { color: var(--d10-fg-strong); }
+.lf .uplabel {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--d10-fg-faint);
+}
+.lf .frame-pad {
+  padding: 16px;
+}
+.lf .scroll {
+  overflow: auto;
+}
+
+.lf hr {
+  border: 0;
+  border-top: 1px solid var(--d10-border);
+  margin: 14px 0;
+}
+
+/* ============================================================
+   REACT FLOW CONTROLS (zoom / fit / lock) — make them visible
+   inside the dark .lf wrapper. React Flow's default chrome is
+   light-on-light against our elev-2 background, which made the
+   zoom buttons disappear on the /build canvas.
+   ============================================================ */
+.lf .react-flow__controls {
+  background: var(--d10-bg-elev-2);
+  border: 1px solid var(--d10-border);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  /* Anchored bottom-right so it never collides with the Attack Paths
+     overlay (which can grow tall on dense topologies). */
+  top: auto !important;
+  right: 12px !important;
+  bottom: 12px !important;
+  left: auto !important;
+  transform: none;
+}
+.lf .react-flow__controls-button {
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--d10-border);
+  color: var(--d10-fg);
+}
+.lf .react-flow__controls-button:last-child {
+  border-bottom: 0;
+}
+.lf .react-flow__controls-button:hover {
+  background: var(--d10-bg-elev-1);
+}
+.lf .react-flow__controls-button svg {
+  fill: var(--d10-fg);
+}
+
+/* Template card stat row — three pills inside a dark inset background. */
+.lf .tpl-stats {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px;
+  border-radius: 8px;
+  background: var(--d10-bg-elev-2);
+  border: 1px solid var(--d10-border);
+  margin-top: 8px;
+}
+.lf .tpl-stats .ps {
+  font-size: 11px;
+  color: var(--d10-fg-faint);
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--d10-bg-elev-1);
+}
+.lf .tpl-stats .ps.ram strong {
+  color: var(--d10-accent);
+  margin-right: 4px;
+}

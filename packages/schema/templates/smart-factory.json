@@ -1,0 +1,241 @@
+{
+  "id": "smart-factory",
+  "name": "Smart Factory (ICS Monitoring)",
+  "description": "An OT/IT segmented factory ready to `vagrant up` end-to-end. 2 PLCs running OpenPLC over Modbus TCP, an HMI workstation running Rapid SCADA on Linux, 2 IP cameras streaming via MediaMTX (Hikvision + Dahua flavours), a single-node Wazuh manager, an engineering workstation with the OpenPLC editor, an IT/OT firewall, and a Kali red-teamer. All Linux base boxes — first `vagrant up` takes ~10 minutes for box downloads and another 5-8 minutes for provisioning. Total RAM ~12 GB.",
+  "network_cidr": "10.50.0.0/16",
+  "provider": "virtualbox",
+  "version": "1.0",
+  "nodes": [
+    {
+      "id": "internet",
+      "type": "internet",
+      "label": "Internet",
+      "position": { "x": -875, "y": -160 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "203.0.113.1",
+        "hostname": "internet",
+        "cves": [],
+        "roles": ["external"],
+        "memory_mb": 256,
+        "cpus": 1,
+        "credentials": { "username": "external", "password": "n/a" },
+        "vlan": null,
+        "gateway": null
+      }
+    },
+    {
+      "id": "kali01",
+      "type": "attacker",
+      "label": "Red Team Kali",
+      "position": { "x": -875, "y": 240 },
+      "config": {
+        "os": "kali_rolling",
+        "ip": "10.50.0.100",
+        "hostname": "redteam",
+        "cves": [],
+        "roles": ["metasploit", "modbus-tcp", "wireshark", "nmap"],
+        "memory_mb": 2048,
+        "cpus": 2,
+        "credentials": { "username": "vagrant", "password": "kali" },
+        "vlan": null,
+        "gateway": "10.50.0.1"
+      }
+    },
+    {
+      "id": "fw01",
+      "type": "firewall",
+      "label": "IT/OT Firewall",
+      "position": { "x": -525, "y": 40 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "10.50.1.1",
+        "hostname": "fw-itot",
+        "cves": [],
+        "roles": ["pfsense", "suricata", "iptables"],
+        "memory_mb": 512,
+        "cpus": 1,
+        "credentials": { "username": "vagrant", "password": "Factory!Fw2025" },
+        "vlan": null,
+        "gateway": null
+      }
+    },
+    {
+      "id": "wks-eng",
+      "type": "workstation",
+      "label": "Engineering",
+      "position": { "x": -175, "y": -200 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "10.50.10.20",
+        "hostname": "eng-ws01",
+        "cves": [],
+        "roles": ["openplc@v3", "modbus-tcp"],
+        "memory_mb": 2048,
+        "cpus": 2,
+        "credentials": { "username": "vagrant", "password": "Plant!2025" },
+        "vlan": 10,
+        "gateway": "10.50.10.1"
+      }
+    },
+    {
+      "id": "wazuh01",
+      "type": "server",
+      "label": "Wazuh Manager",
+      "position": { "x": -175, "y": 240 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "10.50.10.50",
+        "hostname": "wazuh-mgr",
+        "cves": [],
+        "roles": ["wazuh-manager@4.9.0"],
+        "memory_mb": 3072,
+        "cpus": 2,
+        "credentials": { "username": "vagrant", "password": "Wazuh!Mgr2025" },
+        "vlan": 10,
+        "gateway": "10.50.10.1"
+      }
+    },
+    {
+      "id": "hmi01",
+      "type": "ics_hmi",
+      "label": "HMI Console",
+      "position": { "x": 175, "y": 40 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "10.50.20.30",
+        "hostname": "hmi01",
+        "cves": [],
+        "roles": ["rapidscada@6.1", "modbus-tcp", "wazuh@4.9.0"],
+        "memory_mb": 1536,
+        "cpus": 1,
+        "credentials": { "username": "vagrant", "password": "Hmi!Lab2025" },
+        "vlan": 20,
+        "gateway": "10.50.20.1"
+      }
+    },
+    {
+      "id": "plc01",
+      "type": "ics_plc",
+      "label": "Boiler PLC",
+      "position": { "x": 525, "y": -200 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "10.50.20.40",
+        "hostname": "plc-boiler",
+        "cves": [],
+        "roles": ["openplc@v3", "siemens-simatic@TIA Portal V19", "modbus-tcp"],
+        "memory_mb": 768,
+        "cpus": 1,
+        "credentials": { "username": "vagrant", "password": "Plc!Lab2025" },
+        "vlan": 20,
+        "gateway": "10.50.20.1"
+      }
+    },
+    {
+      "id": "plc02",
+      "type": "ics_plc",
+      "label": "Conveyor PLC",
+      "position": { "x": 525, "y": 240 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "10.50.20.41",
+        "hostname": "plc-conv",
+        "cves": [],
+        "roles": ["openplc@v3", "schneider-modicon@EcoStruxure 15.x", "modbus-tcp"],
+        "memory_mb": 768,
+        "cpus": 1,
+        "credentials": { "username": "vagrant", "password": "Plc!Lab2025" },
+        "vlan": 20,
+        "gateway": "10.50.20.1"
+      }
+    },
+    {
+      "id": "cam01",
+      "type": "camera",
+      "label": "Floor 1 CCTV",
+      "position": { "x": 875, "y": -200 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "10.50.30.10",
+        "hostname": "cam-floor1",
+        "cves": [],
+        "roles": ["mediamtx@1.9.x", "hikvision"],
+        "memory_mb": 512,
+        "cpus": 1,
+        "credentials": { "username": "vagrant", "password": "Cam!Floor2025" },
+        "vlan": 30,
+        "gateway": "10.50.30.1"
+      }
+    },
+    {
+      "id": "cam02",
+      "type": "camera",
+      "label": "Floor 2 CCTV",
+      "position": { "x": 875, "y": 240 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "10.50.30.11",
+        "hostname": "cam-floor2",
+        "cves": [],
+        "roles": ["mediamtx@1.9.x", "dahua"],
+        "memory_mb": 512,
+        "cpus": 1,
+        "credentials": { "username": "vagrant", "password": "Cam!Floor2025" },
+        "vlan": 30,
+        "gateway": "10.50.30.1"
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e1", "source": "internet", "target": "fw01", "protocol": "tcp", "port": null, "label": "WAN" },
+    { "id": "e2", "source": "fw01", "target": "wks-eng", "protocol": "tcp", "port": null, "label": "IT LAN" },
+    { "id": "e3", "source": "fw01", "target": "wazuh01", "protocol": "tcp", "port": null, "label": "IT LAN" },
+    { "id": "e4", "source": "fw01", "target": "hmi01", "protocol": "ssh", "port": 22, "label": "Eng → HMI" },
+    { "id": "e5", "source": "hmi01", "target": "plc01", "protocol": "modbus", "port": 502, "label": "Modbus TCP" },
+    { "id": "e6", "source": "hmi01", "target": "plc02", "protocol": "modbus", "port": 502, "label": "Modbus TCP" },
+    { "id": "e7", "source": "hmi01", "target": "cam01", "protocol": "rtsp", "port": 8554, "label": "RTSP" },
+    { "id": "e8", "source": "hmi01", "target": "cam02", "protocol": "rtsp", "port": 8554, "label": "RTSP" },
+    { "id": "e9", "source": "wazuh01", "target": "hmi01", "protocol": "tcp", "port": 1514, "label": "Wazuh agent" },
+    { "id": "e10", "source": "wazuh01", "target": "wks-eng", "protocol": "tcp", "port": 1514, "label": "Wazuh agent" },
+    { "id": "e11", "source": "kali01", "target": "fw01", "protocol": "tcp", "port": null, "label": "External attacker" }
+  ],
+  "zones": [
+    {
+      "id": "z-ext",
+      "label": "Untrusted",
+      "shape": "triangle",
+      "position": { "x": -1050, "y": -380 },
+      "size": { "width": 350, "height": 840 },
+      "color": "#ef4444",
+      "opacity": 0.10
+    },
+    {
+      "id": "z-it",
+      "label": "IT Network (VLAN 10)",
+      "shape": "rectangle",
+      "position": { "x": -340, "y": -380 },
+      "size": { "width": 330, "height": 840 },
+      "color": "#3b82f6",
+      "opacity": 0.10
+    },
+    {
+      "id": "z-ot",
+      "label": "OT Network (VLAN 20)",
+      "shape": "rectangle",
+      "position": { "x": 10, "y": -380 },
+      "size": { "width": 690, "height": 840 },
+      "color": "#eab308",
+      "opacity": 0.12
+    },
+    {
+      "id": "z-cam",
+      "label": "Camera Net (VLAN 30)",
+      "shape": "ellipse",
+      "position": { "x": 720, "y": -380 },
+      "size": { "width": 330, "height": 840 },
+      "color": "#8b5cf6",
+      "opacity": 0.10
+    }
+  ]
+}

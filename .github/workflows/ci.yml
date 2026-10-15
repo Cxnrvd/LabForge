@@ -1,0 +1,62 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  schema-sync:
+    name: Schema sync (Zod ↔ Pydantic)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: pnpm/action-setup@v4
+      - name: Install Python schema
+        run: pip install -e packages/schema/python
+      - name: Install JS deps
+        run: pnpm -w install --frozen-lockfile
+      - name: Compare schemas
+        run: bash packages/schema/scripts/check-schema-sync.sh
+
+  backend:
+    name: API (ruff + mypy + pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend
+        run: |
+          pip install -e packages/schema/python
+          pip install -e "apps/api[dev,migrate]"
+      - name: Lint
+        run: cd apps/api && ruff check .
+      - name: Typecheck
+        # Already configured in pyproject.toml; gate on it so silent drift
+        # in the generator/templates doesn't reach main.
+        run: cd apps/api && mypy labforge_core
+      - name: Tests
+        run: cd apps/api && pytest -q
+
+  web:
+    name: Web (lint + typecheck + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: pnpm/action-setup@v4
+      - run: pnpm -w install --frozen-lockfile
+      - run: pnpm -F @labforge/schema build
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm build:web

@@ -1,0 +1,1698 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>LabForge — UI/UX Design Proposal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg-0: #07090f;
+    --bg-1: #0b0f1a;
+    --bg-2: #11172a;
+    --bg-3: #161e36;
+    --line: #232c4a;
+    --line-soft: #1c2440;
+    --text: #e6edf6;
+    --muted: #8a95b2;
+    --dim: #5a6585;
+    --cyan: #6ee7ff;
+    --cyan-dim: #22d3ee;
+    --lime: #a7f3d0;
+    --green: #34d399;
+    --amber: #fbbf24;
+    --red: #f87171;
+    --violet: #c4b5fd;
+    --pink: #f0abfc;
+    --glow-cyan: 0 0 24px rgba(110,231,255,.18), 0 0 1px rgba(110,231,255,.4);
+    --glow-green: 0 0 18px rgba(52,211,153,.18);
+    --glow-amber: 0 0 18px rgba(251,191,36,.18);
+    --glow-red: 0 0 18px rgba(248,113,113,.18);
+    --r-sm: 6px;
+    --r: 10px;
+    --r-lg: 14px;
+    --r-xl: 18px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    background: radial-gradient(1200px 800px at 80% -10%, rgba(110,231,255,.06), transparent 60%),
+                radial-gradient(900px 700px at -10% 110%, rgba(196,181,253,.05), transparent 60%),
+                var(--bg-0);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+
+  /* ----- layout ----- */
+  .doc {
+    display: grid;
+    grid-template-columns: 260px 1fr;
+    max-width: 1640px;
+    margin: 0 auto;
+    padding: 32px 24px 80px;
+    gap: 32px;
+  }
+  .stepper {
+    position: sticky;
+    top: 24px;
+    align-self: start;
+    border: 1px solid var(--line);
+    background: linear-gradient(180deg, rgba(22,30,54,.85), rgba(11,15,26,.85));
+    border-radius: var(--r-lg);
+    padding: 18px 14px;
+    backdrop-filter: blur(14px);
+  }
+  .stepper h1 {
+    margin: 0 0 14px;
+    font-size: 13px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .stepper h1 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--cyan); box-shadow: var(--glow-cyan); }
+  .stepper ol { list-style: none; margin: 0; padding: 0; counter-reset: step; }
+  .stepper li { counter-increment: step; margin: 4px 0; }
+  .stepper a {
+    display: grid;
+    grid-template-columns: 28px 1fr;
+    align-items: center;
+    gap: 10px;
+    color: var(--text);
+    text-decoration: none;
+    padding: 10px 8px;
+    border-radius: var(--r-sm);
+    font-size: 13px;
+    border: 1px solid transparent;
+    transition: .15s ease;
+  }
+  .stepper a::before {
+    content: counter(step, decimal-leading-zero);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--cyan);
+    background: rgba(110,231,255,.08);
+    border: 1px solid rgba(110,231,255,.25);
+    border-radius: 5px;
+    padding: 3px 6px;
+    text-align: center;
+  }
+  .stepper a:hover { background: var(--bg-3); border-color: var(--line); }
+
+  .stepper-foot {
+    margin-top: 18px; padding-top: 14px; border-top: 1px dashed var(--line);
+    font-size: 11px; color: var(--dim); line-height: 1.5;
+  }
+
+  /* ----- frame chrome ----- */
+  .screen {
+    margin-bottom: 64px;
+    scroll-margin-top: 20px;
+  }
+  .screen-head {
+    display: flex; align-items: baseline; gap: 14px; margin-bottom: 12px;
+  }
+  .screen-head .num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--cyan);
+    background: rgba(110,231,255,.08);
+    border: 1px solid rgba(110,231,255,.2);
+    padding: 3px 8px;
+    border-radius: 4px;
+    letter-spacing: .08em;
+  }
+  .screen-head h2 {
+    margin: 0;
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -.01em;
+  }
+  .screen-head p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .frame {
+    border-radius: var(--r-xl);
+    overflow: hidden;
+    background: var(--bg-1);
+    border: 1px solid var(--line);
+    box-shadow: 0 30px 80px rgba(0,0,0,.5), 0 1px 0 rgba(255,255,255,.04) inset;
+  }
+  .frame-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px;
+    background: var(--bg-2);
+    border-bottom: 1px solid var(--line);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .frame-bar .dots { display: flex; gap: 6px; margin-right: 8px; }
+  .frame-bar .dots i {
+    width: 10px; height: 10px; border-radius: 50%; background: #2a3252;
+    display: inline-block;
+  }
+  .frame-bar .dots i:nth-child(1) { background: #ef4444; }
+  .frame-bar .dots i:nth-child(2) { background: #f59e0b; }
+  .frame-bar .dots i:nth-child(3) { background: #22c55e; }
+  .frame-bar .url { flex: 1; text-align: center; opacity: .75; }
+  .frame-body { background: var(--bg-1); }
+
+  /* ----- shared UI primitives ----- */
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--bg-3); border: 1px solid var(--line);
+    color: var(--text); padding: 8px 12px; border-radius: var(--r-sm);
+    font-size: 13px; font-weight: 500; cursor: pointer;
+  }
+  .btn:hover { background: #1d2748; }
+  .btn-primary {
+    background: linear-gradient(180deg, rgba(110,231,255,.95), rgba(34,211,238,.95));
+    color: #04141c; border-color: rgba(110,231,255,.6);
+    font-weight: 600;
+    box-shadow: var(--glow-cyan);
+  }
+  .btn-primary:hover { filter: brightness(1.05); }
+  .btn-ghost { background: transparent; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    border-radius: 999px; padding: 3px 10px;
+    font-size: 11px; font-family: 'JetBrains Mono', monospace;
+    background: rgba(255,255,255,.04); border: 1px solid var(--line);
+    color: var(--muted);
+  }
+  .pill .ic { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+  .pill.healthy { color: var(--green); border-color: rgba(52,211,153,.3); background: rgba(52,211,153,.06); }
+  .pill.healthy .ic { background: var(--green); box-shadow: var(--glow-green); }
+  .pill.warn { color: var(--amber); border-color: rgba(251,191,36,.3); background: rgba(251,191,36,.06); }
+  .pill.warn .ic { background: var(--amber); }
+  .pill.danger { color: var(--red); border-color: rgba(248,113,113,.3); background: rgba(248,113,113,.06); }
+  .pill.danger .ic { background: var(--red); }
+  .pill.cyan { color: var(--cyan); border-color: rgba(110,231,255,.3); background: rgba(110,231,255,.06); }
+  .pill.cyan .ic { background: var(--cyan); box-shadow: var(--glow-cyan); }
+  .pill.violet { color: var(--violet); border-color: rgba(196,181,253,.3); background: rgba(196,181,253,.06); }
+  .pill.violet .ic { background: var(--violet); }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--bg-3); border: 1px solid var(--line);
+    border-radius: var(--r-sm); padding: 4px 8px;
+    font-size: 11px; color: var(--muted);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .chip .logo {
+    width: 12px; height: 12px; border-radius: 3px;
+    background: linear-gradient(135deg, var(--cyan), var(--violet));
+    display: inline-block; flex: none;
+  }
+  .kbd {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; padding: 2px 5px; border-radius: 4px;
+    background: var(--bg-3); border: 1px solid var(--line);
+    color: var(--muted);
+  }
+
+  /* ----- app chrome ----- */
+  .app {
+    display: grid;
+    grid-template-columns: 240px 1fr;
+    min-height: 720px;
+  }
+  .side {
+    background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+    border-right: 1px solid var(--line);
+    padding: 18px 14px;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 10px;
+    padding: 6px 6px 18px;
+    border-bottom: 1px dashed var(--line);
+    margin-bottom: 14px;
+  }
+  .brand-mark {
+    width: 30px; height: 30px; border-radius: 8px;
+    background: radial-gradient(circle at 30% 30%, var(--cyan), #155e6d 70%);
+    box-shadow: var(--glow-cyan);
+    display: grid; place-items: center;
+  }
+  .brand-mark svg { width: 18px; height: 18px; }
+  .brand-name { font-weight: 700; letter-spacing: -.01em; }
+  .brand-name .sub { color: var(--muted); font-weight: 400; font-size: 11px; display: block; letter-spacing: .04em; text-transform: uppercase; }
+
+  .nav { display: flex; flex-direction: column; gap: 2px; margin-bottom: 18px; }
+  .nav-section { font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--dim); margin: 12px 8px 6px; }
+  .nav a {
+    display: grid; grid-template-columns: 16px 1fr auto; align-items: center; gap: 10px;
+    text-decoration: none; color: var(--muted); padding: 7px 8px; border-radius: var(--r-sm);
+    font-size: 13px;
+  }
+  .nav a:hover { background: var(--bg-3); color: var(--text); }
+  .nav a.active { background: rgba(110,231,255,.06); color: var(--text); border: 1px solid rgba(110,231,255,.2); }
+  .nav a .ico { width: 16px; height: 16px; opacity: .9; }
+  .nav a .count { font-size: 10px; color: var(--dim); font-family: 'JetBrains Mono', monospace; }
+
+  .top {
+    display: grid;
+    grid-template-columns: 1fr auto auto auto;
+    gap: 14px;
+    align-items: center;
+    padding: 14px 22px;
+    border-bottom: 1px solid var(--line);
+    background: rgba(11,15,26,.7);
+    backdrop-filter: blur(10px);
+  }
+  .search {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    padding: 8px 12px;
+    max-width: 540px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .search input { background: transparent; border: 0; outline: 0; color: var(--text); flex: 1; font-family: inherit; font-size: 13px; }
+  .avatar {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--cyan), var(--violet));
+    display: grid; place-items: center; font-weight: 700; color: #04141c;
+  }
+  .content { padding: 22px 26px; }
+
+  /* ----- dashboard ----- */
+  .stats {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px;
+    margin-bottom: 20px;
+  }
+  .stat {
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    padding: 14px 16px;
+    position: relative; overflow: hidden;
+  }
+  .stat .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .1em; }
+  .stat .value { font-size: 26px; font-weight: 700; margin: 6px 0 4px; letter-spacing: -.02em; }
+  .stat .meta { font-size: 11px; color: var(--dim); font-family: 'JetBrains Mono', monospace; }
+  .stat .glow { position: absolute; inset: 0; pointer-events: none; }
+  .stat.ok .value { color: var(--green); }
+  .stat.warn .value { color: var(--amber); }
+  .stat.cyan .value { color: var(--cyan); }
+
+  .section-head { display: flex; align-items: center; justify-content: space-between; margin: 10px 0 12px; }
+  .section-head h3 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -.005em; }
+  .section-head .actions { display: flex; gap: 8px; }
+
+  .lab-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 24px; }
+  .lab-card {
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    overflow: hidden;
+    transition: .15s ease;
+  }
+  .lab-card:hover { border-color: rgba(110,231,255,.3); transform: translateY(-1px); }
+  .lab-thumb { background: var(--bg-1); height: 130px; position: relative; overflow: hidden; border-bottom: 1px solid var(--line-soft); }
+  .lab-thumb svg { width: 100%; height: 100%; }
+  .lab-meta { padding: 12px 14px; }
+  .lab-name { font-weight: 600; font-size: 14px; }
+  .lab-sub { font-size: 11px; color: var(--muted); margin-top: 2px; font-family: 'JetBrains Mono', monospace; }
+  .lab-foot { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; border-top: 1px dashed var(--line-soft); }
+  .lab-foot .ts { font-size: 11px; color: var(--dim); font-family: 'JetBrains Mono', monospace; }
+
+  .two-col { display: grid; grid-template-columns: 1.6fr 1fr; gap: 18px; }
+  .panel {
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    padding: 14px 16px;
+  }
+  .feed { list-style: none; padding: 0; margin: 0; }
+  .feed li { display: grid; grid-template-columns: 24px 1fr auto; gap: 10px; align-items: start; padding: 10px 0; border-bottom: 1px dashed var(--line-soft); font-size: 13px; }
+  .feed li:last-child { border-bottom: 0; }
+  .feed .dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 7px; background: var(--cyan); }
+  .feed .ts { font-size: 11px; color: var(--dim); font-family: 'JetBrains Mono', monospace; }
+  .feed .target { color: var(--muted); font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+
+  /* ----- template picker ----- */
+  .tpl-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  .tpl {
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    padding: 16px;
+    cursor: pointer;
+    transition: .15s ease;
+    min-height: 180px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .tpl:hover { border-color: rgba(110,231,255,.4); background: var(--bg-3); }
+  .tpl.featured { border-color: rgba(110,231,255,.4); background: linear-gradient(135deg, rgba(110,231,255,.08), rgba(196,181,253,.04)); }
+  .tpl-icon { width: 40px; height: 40px; border-radius: 8px; background: var(--bg-3); display: grid; place-items: center; border: 1px solid var(--line); }
+  .tpl-icon svg { width: 22px; height: 22px; color: var(--cyan); }
+  .tpl h4 { margin: 4px 0 0; font-size: 14px; }
+  .tpl p { margin: 0; font-size: 12px; color: var(--muted); flex: 1; }
+  .tpl .tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; }
+
+  /* ----- canvas screen ----- */
+  .canvas-wrap { display: grid; grid-template-columns: 64px 1fr 320px; min-height: 720px; }
+  .palette { background: var(--bg-2); border-right: 1px solid var(--line); padding: 10px 8px; display: flex; flex-direction: column; gap: 8px; align-items: center; }
+  .palette-item {
+    width: 48px; height: 48px; border-radius: 10px;
+    background: var(--bg-3); border: 1px solid var(--line);
+    display: grid; place-items: center; cursor: grab; position: relative;
+  }
+  .palette-item:hover { border-color: rgba(110,231,255,.4); }
+  .palette-item svg { width: 26px; height: 26px; }
+  .palette-divider { height: 1px; width: 30px; background: var(--line); margin: 4px 0; }
+
+  .canvas-area { position: relative; background: var(--bg-1); overflow: hidden; }
+  .canvas-area::before {
+    content: '';
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(110,231,255,.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(110,231,255,.04) 1px, transparent 1px);
+    background-size: 24px 24px;
+    pointer-events: none;
+  }
+  .canvas-toolbar {
+    position: relative; z-index: 2;
+    display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center;
+    padding: 12px 16px; border-bottom: 1px solid var(--line);
+    background: rgba(11,15,26,.85); backdrop-filter: blur(8px);
+  }
+  .topo-title { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 15px; }
+  .topo-title .savestate { font-size: 11px; color: var(--green); font-family: 'JetBrains Mono', monospace; }
+  .canvas-svg { position: relative; z-index: 1; width: 100%; height: 580px; }
+  .canvas-status {
+    position: relative; z-index: 2;
+    display: flex; align-items: center; gap: 14px;
+    padding: 8px 16px; border-top: 1px solid var(--line);
+    background: rgba(7,9,15,.6);
+    font-size: 12px; color: var(--muted); font-family: 'JetBrains Mono', monospace;
+  }
+  .inspector { background: var(--bg-2); border-left: 1px solid var(--line); padding: 16px; }
+  .inspector h4 { margin: 0 0 4px; font-size: 14px; }
+  .inspector .sub { font-size: 11px; color: var(--muted); font-family: 'JetBrains Mono', monospace; margin-bottom: 14px; }
+  .insp-row { display: grid; grid-template-columns: 100px 1fr; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--line-soft); font-size: 13px; }
+  .insp-row label { color: var(--muted); }
+  .insp-row .val { font-family: 'JetBrains Mono', monospace; color: var(--text); }
+  .minimap {
+    position: absolute; right: 16px; bottom: 50px; z-index: 2;
+    width: 180px; height: 110px; background: rgba(7,9,15,.85);
+    border: 1px solid var(--line); border-radius: 8px; padding: 6px;
+  }
+  .minimap svg { width: 100%; height: 100%; }
+
+  /* ----- node config drawer ----- */
+  .drawer-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--line-soft); }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+  .field input, .field select {
+    background: var(--bg-1); border: 1px solid var(--line); color: var(--text);
+    padding: 8px 10px; border-radius: var(--r-sm); font-family: 'JetBrains Mono', monospace; font-size: 13px;
+  }
+  .field input:focus, .field select:focus { outline: none; border-color: rgba(110,231,255,.5); box-shadow: 0 0 0 3px rgba(110,231,255,.1); }
+  .tabbar { display: flex; gap: 4px; padding: 8px 18px 0; border-bottom: 1px solid var(--line); }
+  .tab { padding: 8px 12px; border-radius: 6px 6px 0 0; font-size: 12px; color: var(--muted); cursor: pointer; }
+  .tab.active { color: var(--text); background: rgba(110,231,255,.06); border-bottom: 2px solid var(--cyan); }
+
+  .role-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; padding: 14px 18px; }
+  .role-card { background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 10px 12px; display: flex; gap: 10px; align-items: center; }
+  .role-card .logo { width: 28px; height: 28px; border-radius: 6px; background: linear-gradient(135deg, var(--cyan), var(--violet)); flex: none; }
+  .role-card.selected { border-color: rgba(110,231,255,.5); background: rgba(110,231,255,.05); }
+  .role-card .name { font-weight: 600; font-size: 13px; }
+  .role-card .ver { font-size: 11px; color: var(--muted); font-family: 'JetBrains Mono', monospace; }
+  .role-card select { margin-left: auto; }
+
+  /* ----- cve picker ----- */
+  .cve-modal { display: grid; grid-template-rows: auto auto 1fr; height: 100%; }
+  .cve-search { padding: 16px 20px; border-bottom: 1px solid var(--line); display: flex; gap: 10px; align-items: center; }
+  .cve-search .input {
+    flex: 1; background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r);
+    padding: 10px 14px; color: var(--text); font-family: 'JetBrains Mono', monospace; font-size: 13px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .cve-filters { padding: 12px 20px; border-bottom: 1px dashed var(--line-soft); display: flex; gap: 8px; flex-wrap: wrap; }
+  .cve-list { overflow-y: auto; padding: 0 20px; }
+  .cve-row {
+    display: grid; grid-template-columns: 130px 90px 1fr auto; gap: 14px; align-items: center;
+    padding: 14px 0; border-bottom: 1px dashed var(--line-soft);
+  }
+  .cve-id { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--cyan); }
+  .cve-score { font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 700; }
+  .cve-desc h5 { margin: 0 0 4px; font-size: 13px; }
+  .cve-desc p { margin: 0; font-size: 12px; color: var(--muted); }
+  .cve-desc .vendors { display: flex; gap: 6px; margin-top: 6px; }
+
+  /* ----- validation review ----- */
+  .vlist { display: flex; flex-direction: column; gap: 8px; }
+  .vrow {
+    display: grid; grid-template-columns: 32px 1fr auto; gap: 12px; align-items: center;
+    background: var(--bg-2); border: 1px solid var(--line);
+    border-radius: var(--r-sm); padding: 12px 14px;
+  }
+  .vrow .badge { width: 24px; height: 24px; border-radius: 6px; display: grid; place-items: center; font-weight: 700; font-size: 12px; }
+  .vrow.err .badge { background: rgba(248,113,113,.12); color: var(--red); border: 1px solid rgba(248,113,113,.3); }
+  .vrow.warn .badge { background: rgba(251,191,36,.12); color: var(--amber); border: 1px solid rgba(251,191,36,.3); }
+  .vrow.info .badge { background: rgba(110,231,255,.12); color: var(--cyan); border: 1px solid rgba(110,231,255,.3); }
+  .vrow .msg { font-size: 13px; }
+  .vrow .where { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  /* ----- generate ----- */
+  .gen-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .provider-list { display: flex; flex-direction: column; gap: 10px; }
+  .provider {
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--r);
+    padding: 14px; display: grid; grid-template-columns: 36px 1fr auto; gap: 14px; align-items: center;
+    cursor: pointer;
+  }
+  .provider.selected { border-color: rgba(110,231,255,.5); background: rgba(110,231,255,.05); }
+  .provider .logo { width: 36px; height: 36px; border-radius: 8px; background: var(--bg-3); display: grid; place-items: center; }
+  .provider .name { font-weight: 600; }
+  .provider .ver { font-size: 11px; color: var(--muted); font-family: 'JetBrains Mono', monospace; }
+  .filetree { font-family: 'JetBrains Mono', monospace; font-size: 13px; background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r); padding: 16px; }
+  .filetree .row { padding: 3px 0; color: var(--muted); }
+  .filetree .row .name { color: var(--text); }
+  .filetree .row.dir .name { color: var(--cyan); }
+
+  /* ----- live run ----- */
+  .progress { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0; padding: 16px 22px; border-bottom: 1px solid var(--line); }
+  .pstep { display: flex; align-items: center; gap: 10px; color: var(--muted); position: relative; }
+  .pstep .num { width: 26px; height: 26px; border-radius: 50%; background: var(--bg-3); display: grid; place-items: center; font-family: 'JetBrains Mono', monospace; font-size: 11px; border: 1px solid var(--line); }
+  .pstep.done .num { background: rgba(52,211,153,.15); color: var(--green); border-color: rgba(52,211,153,.4); }
+  .pstep.active .num { background: rgba(110,231,255,.15); color: var(--cyan); border-color: rgba(110,231,255,.5); box-shadow: var(--glow-cyan); }
+  .pstep.done .label, .pstep.active .label { color: var(--text); }
+  .pstep::after {
+    content: ''; position: absolute; right: -50%; top: 13px; width: 100%; height: 1px;
+    background: var(--line); z-index: -1;
+  }
+  .pstep:last-child::after { display: none; }
+  .pstep.done::after { background: rgba(52,211,153,.4); }
+
+  .run-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 0; min-height: 480px; }
+  .vm-grid { padding: 18px 22px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; align-content: start; }
+  .vm-card {
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--r);
+    padding: 14px; position: relative; overflow: hidden;
+  }
+  .vm-card.healthy { border-color: rgba(52,211,153,.3); box-shadow: var(--glow-green); }
+  .vm-card.provisioning { border-color: rgba(110,231,255,.3); box-shadow: var(--glow-cyan); }
+  .vm-card.booting { border-color: rgba(251,191,36,.3); box-shadow: var(--glow-amber); }
+  .vm-card.failed { border-color: rgba(248,113,113,.3); box-shadow: var(--glow-red); }
+  .vm-card .head { display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px; }
+  .vm-card .name { font-weight: 600; }
+  .vm-card .ip { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .vm-card .roles { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+  .vm-card .bar { height: 4px; background: var(--bg-3); border-radius: 999px; margin-top: 10px; overflow: hidden; }
+  .vm-card .bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--cyan), var(--green)); border-radius: 999px; }
+
+  .terminal {
+    background: var(--bg-0); border-left: 1px solid var(--line);
+    font-family: 'JetBrains Mono', monospace; font-size: 12px;
+    display: grid; grid-template-rows: auto 1fr auto;
+  }
+  .term-tabs { display: flex; gap: 4px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--bg-2); }
+  .term-tab { padding: 5px 10px; border-radius: 5px; font-size: 11px; color: var(--muted); cursor: pointer; }
+  .term-tab.active { background: rgba(110,231,255,.08); color: var(--cyan); }
+  .term-body { padding: 14px 16px; overflow-y: auto; max-height: 420px; }
+  .term-line { padding: 1px 0; color: var(--muted); }
+  .term-line .ts { color: var(--dim); }
+  .term-line .ok { color: var(--green); }
+  .term-line .warn { color: var(--amber); }
+  .term-line .err { color: var(--red); }
+  .term-line .info { color: var(--cyan); }
+  .term-input { padding: 8px 14px; border-top: 1px solid var(--line); color: var(--green); font-size: 12px; }
+  .term-input::before { content: '$ '; color: var(--cyan); }
+
+  /* ----- notes ----- */
+  .note {
+    margin-top: 14px;
+    background: linear-gradient(180deg, rgba(110,231,255,.04), transparent);
+    border: 1px solid rgba(110,231,255,.18);
+    border-left: 3px solid var(--cyan);
+    border-radius: var(--r-sm);
+    padding: 12px 14px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .note b { color: var(--text); font-weight: 600; }
+  .note ul { margin: 6px 0 0; padding-left: 20px; }
+  .note li { margin: 2px 0; }
+
+  /* ----- hero ----- */
+  .hero {
+    margin-bottom: 36px;
+    padding: 36px 32px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-xl);
+    background:
+      radial-gradient(600px 300px at 90% 0%, rgba(110,231,255,.12), transparent 60%),
+      radial-gradient(500px 400px at 0% 100%, rgba(196,181,253,.08), transparent 60%),
+      linear-gradient(180deg, var(--bg-2), var(--bg-1));
+    position: relative; overflow: hidden;
+  }
+  .hero h1 { margin: 0; font-size: 30px; letter-spacing: -.02em; font-weight: 700; }
+  .hero .eyebrow { color: var(--cyan); font-family: 'JetBrains Mono', monospace; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; }
+  .hero p { color: var(--muted); margin: 10px 0 0; max-width: 760px; font-size: 14px; line-height: 1.6; }
+  .hero .meta { margin-top: 18px; display: flex; gap: 8px; flex-wrap: wrap; }
+
+  @media (max-width: 1280px) {
+    .doc { grid-template-columns: 220px 1fr; }
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .lab-grid { grid-template-columns: repeat(2, 1fr); }
+    .tpl-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+
+<div class="doc">
+  <!-- ============== STEPPER ============== -->
+  <aside class="stepper">
+    <h1><span class="dot"></span> LabForge · Walkthrough</h1>
+    <ol>
+      <li><a href="#s1">Dashboard</a></li>
+      <li><a href="#s2">New Lab · Templates</a></li>
+      <li><a href="#s3">Topology Canvas</a></li>
+      <li><a href="#s4">Node Configuration</a></li>
+      <li><a href="#s5">CVE Picker (NVD)</a></li>
+      <li><a href="#s6">Validation Review</a></li>
+      <li><a href="#s7">Generate Bundle</a></li>
+      <li><a href="#s8">Lab Running</a></li>
+    </ol>
+    <div class="stepper-foot">
+      <b style="color: var(--text);">Design language</b><br/>
+      Dark, focus-first. Cyan/violet accents.<br/>
+      Monospace for technical truth.<br/>
+      Inspired by Linear · Splunk · Figma.
+    </div>
+  </aside>
+
+  <main>
+    <!-- ============== HERO ============== -->
+    <section class="hero">
+      <div class="eyebrow">UI/UX Proposal · v0.1</div>
+      <h1>From canvas to <span style="color: var(--cyan);">running lab</span> in under five clicks.</h1>
+      <p>A high-fidelity walkthrough of the LabForge experience — from the dashboard landing, through the topology canvas, into CVE pinning and validation, all the way to a live multi-VM run. The goal: make spinning up a realistic security lab feel less like writing YAML and more like sketching on a napkin.</p>
+      <div class="meta">
+        <span class="pill cyan"><span class="ic"></span> 8 screens</span>
+        <span class="pill"><span class="ic"></span> Dark theme · WCAG AA</span>
+        <span class="pill"><span class="ic"></span> Inter + JetBrains Mono</span>
+        <span class="pill"><span class="ic"></span> Single HTML, no deps</span>
+      </div>
+    </section>
+
+    <!-- ============== SCREEN 1: DASHBOARD ============== -->
+    <section class="screen" id="s1">
+      <div class="screen-head">
+        <span class="num">STEP 01</span>
+        <div>
+          <h2>Dashboard</h2>
+          <p>Landing view — running labs, recent activity, health of the local stack.</p>
+        </div>
+      </div>
+
+      <div class="frame">
+        <div class="frame-bar">
+          <div class="dots"><i></i><i></i><i></i></div>
+          <div class="url">labforge.local · /dashboard</div>
+          <div>⌘K</div>
+        </div>
+        <div class="frame-body">
+          <div class="app">
+            <!-- sidebar -->
+            <aside class="side">
+              <div class="brand">
+                <div class="brand-mark">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="#04141c" stroke-width="2.5"><path d="M12 2l9 5-9 5-9-5 9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 17l9 5 9-5"/></svg>
+                </div>
+                <div class="brand-name">LabForge<span class="sub">v0.1.0 · local</span></div>
+              </div>
+              <nav class="nav">
+                <div class="nav-section">Workspace</div>
+                <a class="active" href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg> Dashboard <span class="count"></span></a>
+                <a href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h18M3 12h18M3 17h18"/></svg> Labs <span class="count">12</span></a>
+                <a href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12c0 5-4 9-9 9s-9-4-9-9 4-9 9-9 9 4 9 9z"/><path d="M12 7v5l3 3"/></svg> Build History <span class="count">48</span></a>
+                <a href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16v13H4z"/><path d="M4 7l8-4 8 4"/></svg> Templates <span class="count">9</span></a>
+                <div class="nav-section">Catalog</div>
+                <a href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 7h7l-5.5 4 2 7L12 16l-6.5 4 2-7L2 9h7z"/></svg> CVE Library <span class="count">217K</span></a>
+                <a href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18"/></svg> Vendor Roles <span class="count">37</span></a>
+                <div class="nav-section">System</div>
+                <a href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 11-14 0 7 7 0 0114 0z"/></svg> Agent</a>
+                <a href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l-9 5v6c0 5 4 9 9 9s9-4 9-9V7l-9-5z"/></svg> Auth & Tokens</a>
+                <a href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg> Settings</a>
+              </nav>
+            </aside>
+
+            <!-- main -->
+            <div>
+              <div class="top">
+                <div class="search">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+                  <input value="Search labs, nodes, CVEs…" />
+                  <span class="kbd">⌘K</span>
+                </div>
+                <span class="pill healthy"><span class="ic"></span> Agent online · 14ms</span>
+                <button class="btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg> Inbox <span class="kbd">3</span></button>
+                <div class="avatar">CW</div>
+              </div>
+
+              <div class="content">
+                <div class="stats">
+                  <div class="stat cyan">
+                    <div class="label">Running labs</div>
+                    <div class="value">3</div>
+                    <div class="meta">↑ 1 in the last hour</div>
+                  </div>
+                  <div class="stat ok">
+                    <div class="label">VMs healthy</div>
+                    <div class="value">12<span style="color: var(--dim); font-size: 14px;">/14</span></div>
+                    <div class="meta">2 provisioning</div>
+                  </div>
+                  <div class="stat">
+                    <div class="label">NVD cache</div>
+                    <div class="value">fresh</div>
+                    <div class="meta">refreshed 4m ago · 217,409 CVEs</div>
+                  </div>
+                  <div class="stat warn">
+                    <div class="label">Build queue</div>
+                    <div class="value">1</div>
+                    <div class="meta">redteam-q2 · ETA 2m</div>
+                  </div>
+                </div>
+
+                <div class="section-head">
+                  <h3>Recent labs</h3>
+                  <div class="actions">
+                    <button class="btn btn-ghost">Filter</button>
+                    <button class="btn btn-primary">+ New Lab</button>
+                  </div>
+                </div>
+
+                <div class="lab-grid">
+                  <!-- Lab card 1: running -->
+                  <div class="lab-card">
+                    <div class="lab-thumb">
+                      <svg viewBox="0 0 300 130" preserveAspectRatio="none">
+                        <defs>
+                          <radialGradient id="zone1" cx="50%" cy="50%"><stop offset="0%" stop-color="#22d3ee" stop-opacity=".15"/><stop offset="100%" stop-color="#22d3ee" stop-opacity="0"/></radialGradient>
+                        </defs>
+                        <rect width="300" height="130" fill="url(#zone1)"/>
+                        <line x1="60" y1="65" x2="120" y2="40" stroke="#22d3ee" stroke-opacity=".5"/>
+                        <line x1="60" y1="65" x2="120" y2="90" stroke="#22d3ee" stroke-opacity=".5"/>
+                        <line x1="120" y1="40" x2="220" y2="40" stroke="#22d3ee" stroke-opacity=".5"/>
+                        <line x1="120" y1="90" x2="220" y2="90" stroke="#22d3ee" stroke-opacity=".5"/>
+                        <circle cx="60" cy="65" r="10" fill="#11172a" stroke="#6ee7ff" stroke-width="2"/>
+                        <circle cx="120" cy="40" r="8" fill="#11172a" stroke="#34d399" stroke-width="2"/>
+                        <circle cx="120" cy="90" r="8" fill="#11172a" stroke="#34d399" stroke-width="2"/>
+                        <circle cx="220" cy="40" r="8" fill="#11172a" stroke="#34d399" stroke-width="2"/>
+                        <circle cx="220" cy="90" r="8" fill="#11172a" stroke="#34d399" stroke-width="2"/>
+                        <circle cx="280" cy="65" r="6" fill="#11172a" stroke="#c4b5fd" stroke-width="2"/>
+                      </svg>
+                    </div>
+                    <div class="lab-meta">
+                      <div class="lab-name">ad-forest-finance</div>
+                      <div class="lab-sub">6 VMs · Win Server 2019 · VirtualBox</div>
+                    </div>
+                    <div class="lab-foot">
+                      <span class="pill healthy"><span class="ic"></span> Running</span>
+                      <span class="ts">3h 42m</span>
+                    </div>
+                  </div>
+
+                  <!-- Lab card 2: stopped -->
+                  <div class="lab-card">
+                    <div class="lab-thumb">
+                      <svg viewBox="0 0 300 130" preserveAspectRatio="none">
+                        <defs>
+                          <radialGradient id="zone2" cx="50%" cy="50%"><stop offset="0%" stop-color="#a7f3d0" stop-opacity=".1"/><stop offset="100%" stop-color="#a7f3d0" stop-opacity="0"/></radialGradient>
+                        </defs>
+                        <rect width="300" height="130" fill="url(#zone2)"/>
+                        <rect x="40" y="20" width="220" height="90" fill="none" stroke="#a7f3d0" stroke-opacity=".25" stroke-dasharray="3,3" rx="8"/>
+                        <line x1="75" y1="65" x2="150" y2="65" stroke="#5a6585"/>
+                        <line x1="150" y1="65" x2="225" y2="40" stroke="#5a6585"/>
+                        <line x1="150" y1="65" x2="225" y2="90" stroke="#5a6585"/>
+                        <circle cx="75" cy="65" r="8" fill="#11172a" stroke="#8a95b2" stroke-width="2"/>
+                        <circle cx="150" cy="65" r="10" fill="#11172a" stroke="#8a95b2" stroke-width="2"/>
+                        <circle cx="225" cy="40" r="7" fill="#11172a" stroke="#8a95b2" stroke-width="2"/>
+                        <circle cx="225" cy="90" r="7" fill="#11172a" stroke="#8a95b2" stroke-width="2"/>
+                      </svg>
+                    </div>
+                    <div class="lab-meta">
+                      <div class="lab-name">soc-splunk-demo</div>
+                      <div class="lab-sub">4 VMs · Ubuntu 22.04 · libvirt</div>
+                    </div>
+                    <div class="lab-foot">
+                      <span class="pill"><span class="ic"></span> Stopped</span>
+                      <span class="ts">2d ago</span>
+                    </div>
+                  </div>
+
+                  <!-- Lab card 3: failed -->
+                  <div class="lab-card">
+                    <div class="lab-thumb">
+                      <svg viewBox="0 0 300 130" preserveAspectRatio="none">
+                        <defs>
+                          <radialGradient id="zone3" cx="50%" cy="50%"><stop offset="0%" stop-color="#f87171" stop-opacity=".12"/><stop offset="100%" stop-color="#f87171" stop-opacity="0"/></radialGradient>
+                        </defs>
+                        <rect width="300" height="130" fill="url(#zone3)"/>
+                        <polygon points="150,15 280,65 220,115 80,115 20,65" fill="none" stroke="#f87171" stroke-opacity=".25"/>
+                        <line x1="60" y1="65" x2="120" y2="50" stroke="#5a6585"/>
+                        <line x1="120" y1="50" x2="180" y2="65" stroke="#5a6585"/>
+                        <line x1="180" y1="65" x2="240" y2="80" stroke="#5a6585"/>
+                        <line x1="120" y1="50" x2="180" y2="100" stroke="#f87171" stroke-dasharray="3,2"/>
+                        <circle cx="60" cy="65" r="8" fill="#11172a" stroke="#fbbf24" stroke-width="2"/>
+                        <circle cx="120" cy="50" r="8" fill="#11172a" stroke="#8a95b2" stroke-width="2"/>
+                        <circle cx="180" cy="65" r="8" fill="#11172a" stroke="#f87171" stroke-width="2"/>
+                        <circle cx="180" cy="100" r="6" fill="#11172a" stroke="#c4b5fd" stroke-width="2"/>
+                        <circle cx="240" cy="80" r="6" fill="#11172a" stroke="#8a95b2" stroke-width="2"/>
+                      </svg>
+                    </div>
+                    <div class="lab-meta">
+                      <div class="lab-name">redteam-q2-engagement</div>
+                      <div class="lab-sub">5 VMs · Kali · VirtualBox</div>
+                    </div>
+                    <div class="lab-foot">
+                      <span class="pill danger"><span class="ic"></span> Failed · provision</span>
+                      <span class="ts">17m ago</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="two-col">
+                  <div class="panel">
+                    <div class="section-head" style="margin: 0 0 10px;"><h3>Activity</h3><span class="pill"><span class="ic"></span> live</span></div>
+                    <ul class="feed">
+                      <li><span class="dot" style="background: var(--green);"></span><div><b>fw-edge</b> reached healthy state <span class="target">ad-forest-finance</span></div><span class="ts">14:32:11</span></li>
+                      <li><span class="dot" style="background: var(--cyan);"></span><div>Vagrantfile generated · 6 VMs · 412 KB</div><span class="ts">14:31:08</span></li>
+                      <li><span class="dot" style="background: var(--amber);"></span><div>NVD rate limit at 78% · backing off 4s</div><span class="ts">14:29:55</span></li>
+                      <li><span class="dot" style="background: var(--violet);"></span><div>Pinned <b>CVE-2024-38063</b> to <span class="target">dc01</span></div><span class="ts">14:24:02</span></li>
+                      <li><span class="dot" style="background: var(--red);"></span><div>Build failed: <span class="target">vagrant up</span> exit 1 — provider 'vmware_desktop' not registered</div><span class="ts">14:18:44</span></li>
+                    </ul>
+                  </div>
+                  <div class="panel">
+                    <div class="section-head" style="margin: 0 0 10px;"><h3>System</h3><span class="pill cyan"><span class="ic"></span> all checks pass</span></div>
+                    <div style="display: flex; flex-direction: column; gap: 8px; font-size: 13px;">
+                      <div style="display:flex;justify-content:space-between;"><span class="target" style="color: var(--muted); font-family: 'JetBrains Mono', monospace; font-size: 12px;">Vagrant</span><span class="mono" style="color: var(--green);">2.4.1 ✓</span></div>
+                      <div style="display:flex;justify-content:space-between;"><span class="target" style="color: var(--muted); font-family: 'JetBrains Mono', monospace; font-size: 12px;">VirtualBox</span><span class="mono" style="color: var(--green);">7.0.20 ✓</span></div>
+                      <div style="display:flex;justify-content:space-between;"><span class="target" style="color: var(--muted); font-family: 'JetBrains Mono', monospace; font-size: 12px;">libvirt</span><span class="mono" style="color: var(--amber);">not detected</span></div>
+                      <div style="display:flex;justify-content:space-between;"><span class="target" style="color: var(--muted); font-family: 'JetBrains Mono', monospace; font-size: 12px;">Disk free</span><span class="mono">214 GB / 512 GB</span></div>
+                      <div style="display:flex;justify-content:space-between;"><span class="target" style="color: var(--muted); font-family: 'JetBrains Mono', monospace; font-size: 12px;">Host RAM</span><span class="mono">22 GB / 64 GB</span></div>
+                      <div style="display:flex;justify-content:space-between;"><span class="target" style="color: var(--muted); font-family: 'JetBrains Mono', monospace; font-size: 12px;">Hyper-V</span><span class="mono" style="color: var(--green);">disabled ✓</span></div>
+                    </div>
+                    <button class="btn" style="width: 100%; justify-content: center; margin-top: 14px;">Run <span class="mono">labforge doctor</span> →</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="note">
+        <b>Why this dashboard.</b> The first job is to answer three questions at a glance: <i>what's running right now</i>, <i>is my host healthy</i>, <i>what changed recently</i>. The system panel doubles as a built-in <span class="mono" style="color: var(--text);">labforge doctor</span> — Vagrant / provider versions, hypervisor conflicts, free disk — so users catch problems before clicking Generate.
+      </div>
+    </section>
+
+    <!-- ============== SCREEN 2: TEMPLATES ============== -->
+    <section class="screen" id="s2">
+      <div class="screen-head">
+        <span class="num">STEP 02</span>
+        <div>
+          <h2>New Lab · Template chooser</h2>
+          <p>Start from blank or from one of 8 vetted preset topologies tuned for common scenarios.</p>
+        </div>
+      </div>
+
+      <div class="frame">
+        <div class="frame-bar">
+          <div class="dots"><i></i><i></i><i></i></div>
+          <div class="url">labforge.local · /labs/new</div>
+        </div>
+        <div class="frame-body" style="padding: 24px 28px;">
+          <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 18px;">
+            <div>
+              <h3 style="margin: 0 0 4px; font-size: 18px;">Pick a starting point</h3>
+              <p style="margin: 0; color: var(--muted); font-size: 13px;">Templates ship as fully-wired topologies. You can edit anything once it's on the canvas.</p>
+            </div>
+            <span class="pill"><span class="ic"></span> Sorted by popularity</span>
+          </div>
+
+          <div class="tpl-grid">
+            <div class="tpl featured">
+              <div class="tpl-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg></div>
+              <h4>Blank canvas</h4>
+              <p>Start from scratch. Drag nodes onto an empty grid.</p>
+              <div class="tags"><span class="chip">0 nodes</span><span class="chip">≈ 0s</span></div>
+            </div>
+            <div class="tpl">
+              <div class="tpl-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="18" r="3"/><path d="M12 9v6M9 18l3-3 3 3"/></svg></div>
+              <h4>Active Directory Forest</h4>
+              <p>2 DCs, 3 workstations, file server, joined domain.</p>
+              <div class="tags"><span class="chip">6 nodes</span><span class="chip">≈ 6m</span><span class="chip">Win Server 2019</span></div>
+            </div>
+            <div class="tpl">
+              <div class="tpl-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12l4-4 4 4-4 4-4-4z"/><path d="M13 8h8M13 12h8M13 16h8"/></svg></div>
+              <h4>Splunk SOC Demo</h4>
+              <p>Splunk + Wazuh manager, 2 endpoints with agents, simulated attacker.</p>
+              <div class="tags"><span class="chip">5 nodes</span><span class="chip">≈ 8m</span><span class="chip">Ubuntu</span></div>
+            </div>
+            <div class="tpl">
+              <div class="tpl-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10v4M10 10v4M14 10v4M18 10v4"/></svg></div>
+              <h4>OT / SCADA Water Utility</h4>
+              <p>Modbus PLCs, HMI workstation, engineering jump box. Realistic ICS perimeter.</p>
+              <div class="tags"><span class="chip">7 nodes</span><span class="chip">≈ 10m</span><span class="chip">Modbus · S7</span></div>
+            </div>
+            <div class="tpl">
+              <div class="tpl-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s-8-4-8-12V5l8-3 8 3v5c0 8-8 12-8 12z"/><path d="M9 12l2 2 4-4"/></svg></div>
+              <h4>DMZ Web App</h4>
+              <p>Firewall · reverse proxy · web tier · DB tier. nginx + Postgres.</p>
+              <div class="tags"><span class="chip">5 nodes</span><span class="chip">≈ 7m</span></div>
+            </div>
+            <div class="tpl">
+              <div class="tpl-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7l9 5 9-5-9-5-9 5z"/><path d="M3 12l9 5 9-5M3 17l9 5 9-5"/></svg></div>
+              <h4>Kubernetes Cluster</h4>
+              <p>1 control plane + 3 workers, MetalLB, Prometheus, Grafana.</p>
+              <div class="tags"><span class="chip">4 nodes</span><span class="chip">≈ 12m</span><span class="chip">k3s</span></div>
+            </div>
+            <div class="tpl">
+              <div class="tpl-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M2 12h20M12 2a14 14 0 010 20M12 2a14 14 0 000 20"/></svg></div>
+              <h4>Red Team Engagement</h4>
+              <p>Kali attacker, vulnerable Windows targets, AD chain, C2 server.</p>
+              <div class="tags"><span class="chip">6 nodes</span><span class="chip">≈ 9m</span><span class="chip">MITRE</span></div>
+            </div>
+            <div class="tpl">
+              <div class="tpl-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7v10l10 5 10-5V7l-10-5z"/><path d="M2 7l10 5 10-5M12 12v10"/></svg></div>
+              <h4>MITRE ATT&CK Sim</h4>
+              <p>Pre-pinned CVEs by tactic. Initial Access → Discovery → Lateral.</p>
+              <div class="tags"><span class="chip">8 nodes</span><span class="chip">≈ 14m</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="note">
+        <b>Why templates.</b> The fastest onboarding path. The "blank canvas" stays featured because power users want it; preset templates exist to teach the metaphor on first launch. Each card surfaces three honest signals: <i>node count</i>, <i>spin-up estimate</i>, and the <i>primary tech</i> involved.
+      </div>
+    </section>
+
+    <!-- ============== SCREEN 3: CANVAS ============== -->
+    <section class="screen" id="s3">
+      <div class="screen-head">
+        <span class="num">STEP 03</span>
+        <div>
+          <h2>Topology canvas</h2>
+          <p>The product's beating heart — pictorial nodes inside zone shapes, connected by typed edges.</p>
+        </div>
+      </div>
+
+      <div class="frame">
+        <div class="frame-bar">
+          <div class="dots"><i></i><i></i><i></i></div>
+          <div class="url">labforge.local · /labs/ad-forest-finance/edit</div>
+        </div>
+        <div class="frame-body">
+          <div class="canvas-wrap">
+            <!-- node palette -->
+            <aside class="palette">
+              <div class="palette-item" title="Workstation"><svg viewBox="0 0 32 32" fill="none"><rect x="6" y="7" width="20" height="13" rx="2" fill="#1c2440" stroke="#6ee7ff" stroke-width="1.5"/><rect x="13" y="22" width="6" height="3" fill="#6ee7ff"/></svg></div>
+              <div class="palette-item" title="Server"><svg viewBox="0 0 32 32" fill="none"><rect x="6" y="6" width="20" height="6" rx="1" fill="#1c2440" stroke="#a7f3d0" stroke-width="1.5"/><rect x="6" y="14" width="20" height="6" rx="1" fill="#1c2440" stroke="#a7f3d0" stroke-width="1.5"/><rect x="6" y="22" width="20" height="5" rx="1" fill="#1c2440" stroke="#a7f3d0" stroke-width="1.5"/><circle cx="10" cy="9" r="1" fill="#34d399"/><circle cx="10" cy="17" r="1" fill="#34d399"/></svg></div>
+              <div class="palette-item" title="Domain Controller"><svg viewBox="0 0 32 32" fill="none"><rect x="6" y="6" width="20" height="20" rx="2" fill="#1c2440" stroke="#c4b5fd" stroke-width="1.5"/><polygon points="16,11 21,16 16,21 11,16" fill="#c4b5fd"/></svg></div>
+              <div class="palette-item" title="Firewall"><svg viewBox="0 0 32 32" fill="none"><rect x="5" y="8" width="22" height="16" fill="#1c2440" stroke="#fbbf24" stroke-width="1.5"/><path d="M5 14h22M5 18h22M10 8v6M16 14v4M22 8v6M13 18v6M19 18v6" stroke="#fbbf24" stroke-width="1.2"/></svg></div>
+              <div class="palette-item" title="Router"><svg viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="9" fill="#1c2440" stroke="#6ee7ff" stroke-width="1.5"/><path d="M16 8v16M8 16h16M10 10l12 12M22 10L10 22" stroke="#6ee7ff" stroke-width="1.2"/></svg></div>
+              <div class="palette-item" title="Switch"><svg viewBox="0 0 32 32" fill="none"><rect x="4" y="12" width="24" height="8" rx="1" fill="#1c2440" stroke="#a7f3d0" stroke-width="1.5"/><circle cx="9" cy="16" r="1" fill="#34d399"/><circle cx="13" cy="16" r="1" fill="#34d399"/><circle cx="17" cy="16" r="1" fill="#34d399"/><circle cx="21" cy="16" r="1" fill="#34d399"/><circle cx="25" cy="16" r="1" fill="#34d399"/></svg></div>
+              <div class="palette-divider"></div>
+              <div class="palette-item" title="PLC"><svg viewBox="0 0 32 32" fill="none"><rect x="6" y="6" width="20" height="20" rx="1" fill="#1c2440" stroke="#f0abfc" stroke-width="1.5"/><rect x="10" y="10" width="3" height="3" fill="#f0abfc"/><rect x="15" y="10" width="3" height="3" fill="#f0abfc"/><rect x="20" y="10" width="3" height="3" fill="#f0abfc"/><rect x="10" y="18" width="13" height="2" fill="#f0abfc"/><rect x="10" y="22" width="13" height="2" fill="#f0abfc" fill-opacity=".5"/></svg></div>
+              <div class="palette-item" title="IP Camera"><svg viewBox="0 0 32 32" fill="none"><rect x="6" y="11" width="18" height="10" rx="1" fill="#1c2440" stroke="#a7f3d0" stroke-width="1.5"/><circle cx="14" cy="16" r="3" fill="#1c2440" stroke="#a7f3d0" stroke-width="1.5"/><rect x="22" y="14" width="4" height="4" fill="#a7f3d0"/></svg></div>
+              <div class="palette-item" title="IoT Device"><svg viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="9" fill="#1c2440" stroke="#a7f3d0" stroke-width="1.5"/><circle cx="16" cy="16" r="2" fill="#a7f3d0"/><path d="M16 8v3M16 21v3M8 16h3M21 16h3" stroke="#a7f3d0" stroke-width="1.5"/></svg></div>
+              <div class="palette-item" title="Attacker"><svg viewBox="0 0 32 32" fill="none"><path d="M16 6c4 0 7 3 7 7v3l2 3v6h-18v-6l2-3v-3c0-4 3-7 7-7z" fill="#1c2440" stroke="#f87171" stroke-width="1.5"/><rect x="10" y="14" width="4" height="2" fill="#f87171"/><rect x="18" y="14" width="4" height="2" fill="#f87171"/></svg></div>
+              <div class="palette-item" title="Cloud"><svg viewBox="0 0 32 32" fill="none"><path d="M9 22h14a5 5 0 000-10 7 7 0 00-13-2 5 5 0 00-1 12z" fill="#1c2440" stroke="#6ee7ff" stroke-width="1.5"/></svg></div>
+            </aside>
+
+            <!-- main canvas -->
+            <div class="canvas-area">
+              <div class="canvas-toolbar">
+                <div class="topo-title">
+                  ad-forest-finance
+                  <span class="savestate">●  saved</span>
+                  <span class="pill"><span class="ic"></span> 6 nodes · 8 edges</span>
+                </div>
+                <div style="display: flex; gap: 6px;">
+                  <button class="btn btn-ghost"><span class="kbd">⌘Z</span> Undo</button>
+                  <button class="btn btn-ghost">Layout</button>
+                  <button class="btn">Validate</button>
+                </div>
+                <button class="btn btn-primary">Generate Lab →</button>
+              </div>
+
+              <svg class="canvas-svg" viewBox="0 0 900 520">
+                <defs>
+                  <linearGradient id="zoneInternal" x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="0%" stop-color="#22d3ee" stop-opacity=".10"/>
+                    <stop offset="100%" stop-color="#22d3ee" stop-opacity=".02"/>
+                  </linearGradient>
+                  <linearGradient id="zoneDMZ" x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="0%" stop-color="#fbbf24" stop-opacity=".10"/>
+                    <stop offset="100%" stop-color="#fbbf24" stop-opacity=".02"/>
+                  </linearGradient>
+                  <linearGradient id="zoneInternet" x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="0%" stop-color="#c4b5fd" stop-opacity=".08"/>
+                    <stop offset="100%" stop-color="#c4b5fd" stop-opacity=".02"/>
+                  </linearGradient>
+                  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#6ee7ff"/>
+                  </marker>
+                </defs>
+
+                <!-- zones -->
+                <rect x="40" y="50" width="180" height="420" rx="12" fill="url(#zoneInternet)" stroke="#c4b5fd" stroke-opacity=".35" stroke-dasharray="4,4"/>
+                <text x="130" y="76" font-family="JetBrains Mono" font-size="11" fill="#c4b5fd" text-anchor="middle">INTERNET</text>
+
+                <rect x="250" y="50" width="200" height="420" rx="12" fill="url(#zoneDMZ)" stroke="#fbbf24" stroke-opacity=".35" stroke-dasharray="4,4"/>
+                <text x="350" y="76" font-family="JetBrains Mono" font-size="11" fill="#fbbf24" text-anchor="middle">DMZ</text>
+
+                <rect x="480" y="50" width="380" height="420" rx="12" fill="url(#zoneInternal)" stroke="#22d3ee" stroke-opacity=".35" stroke-dasharray="4,4"/>
+                <text x="670" y="76" font-family="JetBrains Mono" font-size="11" fill="#22d3ee" text-anchor="middle">INTERNAL · forest.lab</text>
+
+                <!-- edges -->
+                <line x1="155" y1="260" x2="305" y2="260" stroke="#6ee7ff" stroke-opacity=".5" marker-end="url(#arrow)"/>
+                <line x1="395" y1="260" x2="530" y2="180" stroke="#6ee7ff" stroke-opacity=".5" marker-end="url(#arrow)"/>
+                <line x1="395" y1="260" x2="530" y2="340" stroke="#6ee7ff" stroke-opacity=".5" marker-end="url(#arrow)"/>
+                <line x1="600" y1="180" x2="760" y2="180" stroke="#a7f3d0" stroke-opacity=".5" marker-end="url(#arrow)"/>
+                <line x1="600" y1="180" x2="760" y2="340" stroke="#a7f3d0" stroke-opacity=".5"/>
+                <line x1="600" y1="340" x2="760" y2="340" stroke="#a7f3d0" stroke-opacity=".5"/>
+                <line x1="600" y1="340" x2="760" y2="180" stroke="#a7f3d0" stroke-opacity=".5"/>
+
+                <!-- edge labels -->
+                <text x="230" y="252" font-family="JetBrains Mono" font-size="9" fill="#8a95b2">https/443</text>
+                <text x="460" y="212" font-family="JetBrains Mono" font-size="9" fill="#8a95b2">rdp/3389</text>
+                <text x="460" y="312" font-family="JetBrains Mono" font-size="9" fill="#8a95b2">ldap/389</text>
+
+                <!-- attacker -->
+                <g transform="translate(95,220)">
+                  <rect x="0" y="0" width="120" height="80" rx="8" fill="#11172a" stroke="#f87171" stroke-width="1.5"/>
+                  <path d="M60 14 c8 0 14 6 14 14 v6 l4 6 v12 h-36 v-12 l4-6 v-6 c0-8 6-14 14-14z" fill="#1c2440" stroke="#f87171" stroke-width="1.5"/>
+                  <rect x="48" y="32" width="6" height="3" fill="#f87171"/>
+                  <rect x="64" y="32" width="6" height="3" fill="#f87171"/>
+                  <text x="60" y="74" font-family="Inter" font-size="10" fill="#f87171" text-anchor="middle" font-weight="700">attacker-01</text>
+                </g>
+
+                <!-- firewall -->
+                <g transform="translate(290,220)">
+                  <rect x="0" y="0" width="120" height="80" rx="8" fill="#11172a" stroke="#fbbf24" stroke-width="1.5"/>
+                  <rect x="20" y="22" width="80" height="36" fill="#1c2440" stroke="#fbbf24" stroke-width="1.5"/>
+                  <line x1="20" y1="32" x2="100" y2="32" stroke="#fbbf24"/>
+                  <line x1="20" y1="42" x2="100" y2="42" stroke="#fbbf24"/>
+                  <line x1="20" y1="52" x2="100" y2="52" stroke="#fbbf24"/>
+                  <line x1="34" y1="22" x2="34" y2="38" stroke="#fbbf24"/>
+                  <line x1="50" y1="32" x2="50" y2="48" stroke="#fbbf24"/>
+                  <line x1="66" y1="22" x2="66" y2="38" stroke="#fbbf24"/>
+                  <text x="60" y="74" font-family="Inter" font-size="10" fill="#fbbf24" text-anchor="middle" font-weight="700">fw-edge</text>
+                </g>
+
+                <!-- DC -->
+                <g transform="translate(520,140)">
+                  <rect x="0" y="0" width="120" height="80" rx="8" fill="#11172a" stroke="#c4b5fd" stroke-width="1.5"/>
+                  <rect x="20" y="14" width="80" height="14" fill="#1c2440" stroke="#c4b5fd" stroke-width="1"/>
+                  <rect x="20" y="32" width="80" height="14" fill="#1c2440" stroke="#c4b5fd" stroke-width="1"/>
+                  <polygon points="60,36 70,46 60,56 50,46" fill="#c4b5fd"/>
+                  <text x="60" y="74" font-family="Inter" font-size="10" fill="#c4b5fd" text-anchor="middle" font-weight="700">dc01.forest.lab</text>
+                </g>
+
+                <!-- selected node: file server -->
+                <g transform="translate(520,300)">
+                  <rect x="-4" y="-4" width="128" height="88" rx="10" fill="none" stroke="#6ee7ff" stroke-width="2" stroke-dasharray="4,3"/>
+                  <rect x="0" y="0" width="120" height="80" rx="8" fill="#11172a" stroke="#6ee7ff" stroke-width="2"/>
+                  <rect x="20" y="14" width="80" height="10" fill="#1c2440" stroke="#a7f3d0" stroke-width="1"/>
+                  <rect x="20" y="28" width="80" height="10" fill="#1c2440" stroke="#a7f3d0" stroke-width="1"/>
+                  <rect x="20" y="42" width="80" height="10" fill="#1c2440" stroke="#a7f3d0" stroke-width="1"/>
+                  <circle cx="26" cy="19" r="1.5" fill="#34d399"/>
+                  <circle cx="26" cy="33" r="1.5" fill="#34d399"/>
+                  <circle cx="26" cy="47" r="1.5" fill="#34d399"/>
+                  <text x="60" y="74" font-family="Inter" font-size="10" fill="#6ee7ff" text-anchor="middle" font-weight="700">fs01.forest.lab</text>
+                </g>
+
+                <!-- workstations -->
+                <g transform="translate(740,140)">
+                  <rect x="0" y="0" width="120" height="80" rx="8" fill="#11172a" stroke="#6ee7ff" stroke-width="1.5"/>
+                  <rect x="24" y="18" width="72" height="38" rx="2" fill="#1c2440" stroke="#6ee7ff" stroke-width="1"/>
+                  <rect x="52" y="58" width="16" height="6" fill="#6ee7ff"/>
+                  <text x="60" y="74" font-family="Inter" font-size="10" fill="#6ee7ff" text-anchor="middle" font-weight="700">ws-cfo</text>
+                </g>
+                <g transform="translate(740,300)">
+                  <rect x="0" y="0" width="120" height="80" rx="8" fill="#11172a" stroke="#6ee7ff" stroke-width="1.5"/>
+                  <rect x="24" y="18" width="72" height="38" rx="2" fill="#1c2440" stroke="#6ee7ff" stroke-width="1"/>
+                  <rect x="52" y="58" width="16" height="6" fill="#6ee7ff"/>
+                  <text x="60" y="74" font-family="Inter" font-size="10" fill="#6ee7ff" text-anchor="middle" font-weight="700">ws-cpa</text>
+                </g>
+
+                <!-- legend -->
+                <g transform="translate(40,490)">
+                  <rect x="0" y="0" width="220" height="22" rx="4" fill="#11172a" stroke="#232c4a"/>
+                  <text x="10" y="15" font-family="JetBrains Mono" font-size="10" fill="#8a95b2">connection: encrypted · port labeled</text>
+                </g>
+              </svg>
+
+              <!-- minimap -->
+              <div class="minimap">
+                <svg viewBox="0 0 900 520" preserveAspectRatio="xMidYMid meet">
+                  <rect x="40" y="50" width="180" height="420" rx="6" fill="#c4b5fd" fill-opacity=".15"/>
+                  <rect x="250" y="50" width="200" height="420" rx="6" fill="#fbbf24" fill-opacity=".15"/>
+                  <rect x="480" y="50" width="380" height="420" rx="6" fill="#22d3ee" fill-opacity=".15"/>
+                  <circle cx="155" cy="260" r="14" fill="#f87171"/>
+                  <circle cx="350" cy="260" r="14" fill="#fbbf24"/>
+                  <circle cx="580" cy="180" r="14" fill="#c4b5fd"/>
+                  <circle cx="580" cy="340" r="14" fill="#6ee7ff"/>
+                  <circle cx="800" cy="180" r="12" fill="#6ee7ff"/>
+                  <circle cx="800" cy="340" r="12" fill="#6ee7ff"/>
+                  <rect x="120" y="120" width="430" height="280" fill="none" stroke="#6ee7ff" stroke-width="3" stroke-dasharray="6,4"/>
+                </svg>
+              </div>
+
+              <div class="canvas-status">
+                <span class="pill healthy"><span class="ic"></span> 0 errors</span>
+                <span class="pill warn"><span class="ic"></span> 2 warnings</span>
+                <span style="flex: 1;"></span>
+                <span>Zoom 92%</span>
+                <span>·</span>
+                <span>Grid 24px</span>
+                <span>·</span>
+                <span>Last sync 2s ago</span>
+              </div>
+            </div>
+
+            <!-- inspector -->
+            <aside class="inspector">
+              <h4>fs01.forest.lab</h4>
+              <div class="sub">server · ubuntu-22.04 · internal</div>
+
+              <div class="insp-row"><label>Hostname</label><span class="val">fs01.forest.lab</span></div>
+              <div class="insp-row"><label>IP</label><span class="val">10.0.10.20/24</span></div>
+              <div class="insp-row"><label>Gateway</label><span class="val">10.0.10.1</span></div>
+              <div class="insp-row"><label>CPU · RAM</label><span class="val">2 · 4 GB</span></div>
+              <div class="insp-row"><label>Provider</label><span class="val">virtualbox</span></div>
+              <div class="insp-row"><label>Box</label><span class="val">ubuntu/jammy64</span></div>
+
+              <div style="margin-top: 14px; display: flex; flex-direction: column; gap: 6px;">
+                <div style="font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em;">Roles</div>
+                <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                  <span class="chip"><span class="logo"></span> Samba 4.20</span>
+                  <span class="chip"><span class="logo" style="background: #34d399;"></span> Wazuh agent 4.9.0</span>
+                  <span class="chip"><span class="logo" style="background: #fbbf24;"></span> Splunk UF 9.3</span>
+                </div>
+              </div>
+              <div style="margin-top: 14px; display: flex; flex-direction: column; gap: 6px;">
+                <div style="font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em;">CVEs pinned</div>
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                  <span class="chip" style="justify-content: space-between; width: 100%;"><span>CVE-2024-3094</span><span class="pill danger" style="padding: 1px 6px; font-size: 9px;">9.8</span></span>
+                  <span class="chip" style="justify-content: space-between; width: 100%;"><span>CVE-2023-44487</span><span class="pill warn" style="padding: 1px 6px; font-size: 9px;">7.5</span></span>
+                </div>
+              </div>
+              <button class="btn btn-primary" style="width: 100%; justify-content: center; margin-top: 16px;">Edit node · ⏎</button>
+            </aside>
+          </div>
+        </div>
+      </div>
+
+      <div class="note">
+        <b>Why pictorial nodes over rectangular cards.</b> Cybersecurity diagrams have a visual language already — racks, firewalls, PLCs, attackers in hoodies. Honouring that vocabulary reduces cognitive load and helps cross-functional teams (red team / blue team / IT / OT) read the same diagram. Zones use translucent shapes instead of rigid containers so groupings feel like intent, not bureaucracy.
+      </div>
+    </section>
+
+    <!-- ============== SCREEN 4: NODE CONFIG ============== -->
+    <section class="screen" id="s4">
+      <div class="screen-head">
+        <span class="num">STEP 04</span>
+        <div>
+          <h2>Node configuration drawer</h2>
+          <p>Double-click any node to open a tabbed drawer — basic, network, roles, CVEs, advanced.</p>
+        </div>
+      </div>
+
+      <div class="frame">
+        <div class="frame-bar">
+          <div class="dots"><i></i><i></i><i></i></div>
+          <div class="url">labforge.local · /labs/ad-forest-finance/edit?node=fs01</div>
+        </div>
+        <div class="frame-body" style="display: grid; grid-template-columns: 1fr 540px; min-height: 660px; background: var(--bg-1);">
+          <!-- dimmed canvas behind -->
+          <div style="background: var(--bg-1); position: relative; opacity: .35;">
+            <svg viewBox="0 0 600 660" preserveAspectRatio="xMidYMid slice" style="width: 100%; height: 100%;">
+              <rect x="40" y="80" width="160" height="500" rx="12" fill="#c4b5fd" fill-opacity=".05" stroke="#c4b5fd" stroke-opacity=".2" stroke-dasharray="3,3"/>
+              <rect x="220" y="80" width="160" height="500" rx="12" fill="#fbbf24" fill-opacity=".05" stroke="#fbbf24" stroke-opacity=".2" stroke-dasharray="3,3"/>
+              <rect x="400" y="80" width="160" height="500" rx="12" fill="#22d3ee" fill-opacity=".05" stroke="#22d3ee" stroke-opacity=".2" stroke-dasharray="3,3"/>
+              <circle cx="120" cy="330" r="20" fill="#f87171" fill-opacity=".3"/>
+              <circle cx="300" cy="330" r="20" fill="#fbbf24" fill-opacity=".3"/>
+              <circle cx="480" cy="240" r="20" fill="#c4b5fd" fill-opacity=".3"/>
+              <circle cx="480" cy="420" r="20" fill="#6ee7ff" fill-opacity=".4" stroke="#6ee7ff" stroke-width="2"/>
+            </svg>
+          </div>
+
+          <!-- drawer -->
+          <aside style="background: var(--bg-2); border-left: 1px solid var(--line); display: grid; grid-template-rows: auto auto 1fr auto;">
+            <div style="padding: 18px 20px; display: flex; justify-content: space-between; align-items: start; border-bottom: 1px solid var(--line);">
+              <div>
+                <div style="font-size: 11px; color: var(--cyan); font-family: 'JetBrains Mono', monospace;">SERVER · UBUNTU 22.04</div>
+                <h3 style="margin: 4px 0 2px; font-size: 18px;">fs01.forest.lab</h3>
+                <div style="color: var(--muted); font-size: 12px;">Internal zone · file server · Wazuh agent</div>
+              </div>
+              <button class="btn btn-ghost" style="padding: 4px 8px;">✕</button>
+            </div>
+
+            <div class="tabbar">
+              <div class="tab">Basic</div>
+              <div class="tab active">Network</div>
+              <div class="tab">Roles · 3</div>
+              <div class="tab">CVEs · 2</div>
+              <div class="tab">Advanced</div>
+            </div>
+
+            <div style="overflow-y: auto;">
+              <div class="drawer-row">
+                <div class="field"><label>IPv4 address</label><input value="10.0.10.20" /></div>
+                <div class="field"><label>Subnet mask</label><input value="/24" /></div>
+              </div>
+              <div class="drawer-row">
+                <div class="field"><label>Gateway</label><input value="10.0.10.1" /></div>
+                <div class="field"><label>DNS</label><input value="10.0.10.10, 1.1.1.1" /></div>
+              </div>
+              <div class="drawer-row">
+                <div class="field"><label>MAC address</label><input value="auto · 08:00:27:xx:xx:xx" /></div>
+                <div class="field"><label>VLAN</label><input value="10 — internal" /></div>
+              </div>
+              <div class="drawer-row" style="grid-template-columns: 1fr;">
+                <div class="field">
+                  <label>Open ports</label>
+                  <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                    <span class="chip">22/tcp · ssh</span>
+                    <span class="chip">139/tcp · smb</span>
+                    <span class="chip">445/tcp · smb</span>
+                    <span class="chip">514/udp · syslog</span>
+                    <span class="chip" style="border-style: dashed; color: var(--cyan);">+ Add port</span>
+                  </div>
+                </div>
+              </div>
+
+              <div style="padding: 14px 18px; background: var(--bg-1); border-top: 1px dashed var(--line);">
+                <div style="font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 8px;">Roles & versions</div>
+              </div>
+              <div class="role-grid">
+                <div class="role-card selected">
+                  <div class="logo" style="background: linear-gradient(135deg,#a7f3d0,#34d399);"></div>
+                  <div><div class="name">Wazuh agent</div><div class="ver">4.9.0 → manager 10.0.1.50</div></div>
+                </div>
+                <div class="role-card">
+                  <div class="logo" style="background: linear-gradient(135deg,#fbbf24,#f87171);"></div>
+                  <div><div class="name">Splunk UF</div><div class="ver">9.3.1 → hf 10.0.1.51</div></div>
+                </div>
+                <div class="role-card">
+                  <div class="logo" style="background: linear-gradient(135deg,#6ee7ff,#22d3ee);"></div>
+                  <div><div class="name">Samba</div><div class="ver">4.20.4</div></div>
+                </div>
+                <div class="role-card" style="border-style: dashed; color: var(--cyan); justify-content: center;">+ Add role</div>
+              </div>
+            </div>
+
+            <div style="display: flex; gap: 8px; padding: 14px 20px; border-top: 1px solid var(--line); background: var(--bg-2);">
+              <button class="btn btn-ghost" style="margin-right: auto;">Delete node</button>
+              <button class="btn">Cancel</button>
+              <button class="btn btn-primary">Save · ⏎</button>
+            </div>
+          </aside>
+        </div>
+      </div>
+
+      <div class="note">
+        <b>Why a slide-out drawer not a separate page.</b> Editing without losing context. Spatial position of the node stays visible (left side) so you can see how a change reshapes the topology in real time. Tabs split a long form into <i>cheap interactions</i> (basic, network) vs <i>expensive ones</i> (roles & CVEs that may hit the API).
+      </div>
+    </section>
+
+    <!-- ============== SCREEN 5: CVE PICKER ============== -->
+    <section class="screen" id="s5">
+      <div class="screen-head">
+        <span class="num">STEP 05</span>
+        <div>
+          <h2>CVE picker · powered by NVD</h2>
+          <p>Search the cached NVD index, filter by severity / vendor / year, pin to selected node.</p>
+        </div>
+      </div>
+
+      <div class="frame">
+        <div class="frame-bar">
+          <div class="dots"><i></i><i></i><i></i></div>
+          <div class="url">labforge.local · /labs/.../cves</div>
+        </div>
+        <div class="frame-body" style="min-height: 640px; background: var(--bg-1);">
+          <div class="cve-modal">
+            <div class="cve-search">
+              <div class="input">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8a95b2" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+                <span style="color: var(--text);">samba remote code execution</span>
+                <span style="color: var(--dim); margin-left: auto;">219 results · 47ms · from cache</span>
+              </div>
+              <button class="btn"><span class="kbd">/</span> Filters</button>
+              <button class="btn btn-primary">Pin selected (3)</button>
+            </div>
+            <div class="cve-filters">
+              <span class="pill cyan"><span class="ic"></span> CVSS ≥ 7.0</span>
+              <span class="pill"><span class="ic"></span> Year: 2022–2025</span>
+              <span class="pill"><span class="ic"></span> Vendor: samba</span>
+              <span class="pill"><span class="ic"></span> Has public exploit</span>
+              <span class="pill" style="border-style: dashed; color: var(--cyan);">+ Add filter</span>
+            </div>
+            <div class="cve-list">
+              <div class="cve-row" style="background: rgba(110,231,255,.04); border-radius: 6px; padding: 14px 12px;">
+                <div class="cve-id">CVE-2024-3094</div>
+                <div class="cve-score"><span class="pill danger" style="font-size: 11px;"><span class="ic"></span> 9.8 · Critical</span></div>
+                <div class="cve-desc">
+                  <h5>xz / liblzma backdoor in upstream tarballs (Samba dependency chain)</h5>
+                  <p>Malicious code in liblzma 5.6.0–5.6.1 allows authenticated SSH RCE under specific build conditions.</p>
+                  <div class="vendors"><span class="chip">samba · &lt;4.20.4</span><span class="chip">debian</span><span class="chip">redhat</span></div>
+                </div>
+                <button class="btn btn-primary" style="padding: 6px 10px;">Pinned ✓</button>
+              </div>
+              <div class="cve-row">
+                <div class="cve-id">CVE-2023-44487</div>
+                <div class="cve-score"><span class="pill warn" style="font-size: 11px;"><span class="ic"></span> 7.5 · High</span></div>
+                <div class="cve-desc">
+                  <h5>HTTP/2 Rapid Reset — DoS via stream cancellation</h5>
+                  <p>An attacker can cause significant resource consumption by rapidly canceling many HTTP/2 streams.</p>
+                  <div class="vendors"><span class="chip">nginx</span><span class="chip">apache</span><span class="chip">samba · cli</span></div>
+                </div>
+                <button class="btn">Pin</button>
+              </div>
+              <div class="cve-row">
+                <div class="cve-id">CVE-2022-32742</div>
+                <div class="cve-score"><span class="pill warn" style="font-size: 11px;"><span class="ic"></span> 7.1 · High</span></div>
+                <div class="cve-desc">
+                  <h5>Samba: SMB1 server memory leak — info disclosure</h5>
+                  <p>Heap memory disclosure via crafted SMB1 requests against vulnerable Samba file servers.</p>
+                  <div class="vendors"><span class="chip">samba · &lt;4.16.4</span></div>
+                </div>
+                <button class="btn">Pin</button>
+              </div>
+              <div class="cve-row">
+                <div class="cve-id">CVE-2022-32744</div>
+                <div class="cve-score"><span class="pill warn" style="font-size: 11px;"><span class="ic"></span> 8.8 · High</span></div>
+                <div class="cve-desc">
+                  <h5>Samba AD DC: kpasswd accepts forged tickets</h5>
+                  <p>kpasswd service accepts tickets from any user, allowing password change for arbitrary accounts.</p>
+                  <div class="vendors"><span class="chip">samba · ad-dc</span></div>
+                </div>
+                <button class="btn">Pin</button>
+              </div>
+              <div class="cve-row">
+                <div class="cve-id">CVE-2021-44142</div>
+                <div class="cve-score"><span class="pill danger" style="font-size: 11px;"><span class="ic"></span> 9.9 · Critical</span></div>
+                <div class="cve-desc">
+                  <h5>Samba vfs_fruit out-of-bounds heap read/write</h5>
+                  <p>Out-of-bounds heap access via EA metadata parsing — pre-auth RCE in default configuration.</p>
+                  <div class="vendors"><span class="chip">samba · vfs_fruit</span></div>
+                </div>
+                <button class="btn">Pin</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="note">
+        <b>Why search-first.</b> Most users come in with a vendor or CVE-ID in mind, not a tree to browse. Filters are <i>pills, not a sidebar</i> — they fold compactly when not in use and don't steal real estate from the results. The "from cache · 47ms" line is intentional: it's a transparency signal that LabForge isn't hammering NVD on every keystroke.
+      </div>
+    </section>
+
+    <!-- ============== SCREEN 6: VALIDATION ============== -->
+    <section class="screen" id="s6">
+      <div class="screen-head">
+        <span class="num">STEP 06</span>
+        <div>
+          <h2>Validation review</h2>
+          <p>Pre-flight sheet — every error, warning and info notice from the validator, with one-click fixes.</p>
+        </div>
+      </div>
+
+      <div class="frame">
+        <div class="frame-bar">
+          <div class="dots"><i></i><i></i><i></i></div>
+          <div class="url">labforge.local · /labs/.../validate</div>
+        </div>
+        <div class="frame-body" style="padding: 28px 32px; min-height: 580px;">
+          <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 22px;">
+            <div>
+              <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--muted);">PRE-FLIGHT · ad-forest-finance</div>
+              <h3 style="margin: 4px 0 6px; font-size: 22px;">Almost ready — fix 1 blocker first</h3>
+              <p style="margin: 0; color: var(--muted); font-size: 13px; max-width: 640px;">We ran 27 cross-field rules over your topology (uniqueness, perimeter, IP collisions, role/OS compatibility, zone geometry, ICS protocol targeting). Here's everything we found.</p>
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <span class="pill danger"><span class="ic"></span> 1 error</span>
+              <span class="pill warn"><span class="ic"></span> 2 warnings</span>
+              <span class="pill cyan"><span class="ic"></span> 3 info</span>
+            </div>
+          </div>
+
+          <div class="vlist">
+            <div class="vrow err">
+              <div class="badge">!</div>
+              <div>
+                <div class="msg">Domain controller <span class="mono" style="color: var(--text);">dc01</span> is set to Ubuntu 22.04 — must be a Windows OS.</div>
+                <div class="where">node id · n_dc01_2a — packages/schema rule: <span style="color: var(--cyan);">dc_must_be_windows</span></div>
+              </div>
+              <button class="btn btn-primary">Fix: switch to Win2019</button>
+            </div>
+            <div class="vrow warn">
+              <div class="badge">⚠</div>
+              <div>
+                <div class="msg">Internal subnet <span class="mono" style="color: var(--text);">10.0.10.0/28</span> has only 14 usable hosts — you currently have 6 nodes here.</div>
+                <div class="where">zone · internal — rule: <span style="color: var(--cyan);">subnet_capacity</span></div>
+              </div>
+              <button class="btn">Resize to /24</button>
+            </div>
+            <div class="vrow warn">
+              <div class="badge">⚠</div>
+              <div>
+                <div class="msg">Attacker node <span class="mono" style="color: var(--text);">attacker-01</span> has no edges — it will spin up but cannot reach anything.</div>
+                <div class="where">node id · n_attacker_3f — rule: <span style="color: var(--cyan);">attacker_must_have_path</span></div>
+              </div>
+              <button class="btn">Add edge to fw-edge</button>
+            </div>
+            <div class="vrow info">
+              <div class="badge">i</div>
+              <div>
+                <div class="msg">Wazuh manager IP set to <span class="mono" style="color: var(--text);">10.0.1.50</span>. 3 agents will auto-register on first boot.</div>
+                <div class="where">role · wazuh-agent on fs01, ws-cfo, ws-cpa</div>
+              </div>
+            </div>
+            <div class="vrow info">
+              <div class="badge">i</div>
+              <div>
+                <div class="msg">Bundle will include <span class="mono" style="color: var(--text);">5 provisioner scripts</span>, <span class="mono" style="color: var(--text);">1 hosts file</span>, <span class="mono" style="color: var(--text);">README.md</span> with a Mermaid diagram of the topology.</div>
+                <div class="where">generator preview</div>
+              </div>
+            </div>
+            <div class="vrow info">
+              <div class="badge">i</div>
+              <div>
+                <div class="msg">Estimated boot time: <b style="color: var(--text);">6m 30s</b> on your hardware (based on last 5 builds).</div>
+                <div class="where">heuristic · build history</div>
+              </div>
+            </div>
+          </div>
+
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 26px; padding-top: 18px; border-top: 1px dashed var(--line);">
+            <label style="display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px;">
+              <input type="checkbox" style="accent-color: var(--cyan);"/>
+              I understand the warnings — generate anyway
+            </label>
+            <div style="display: flex; gap: 8px;">
+              <button class="btn">Back to canvas</button>
+              <button class="btn btn-primary">Continue to Generate →</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="note">
+        <b>Why a sheet, not toasts.</b> Validation results are a deliverable, not a notification. Listing them densely with their <i>rule name</i> and <i>fix CTA</i> turns review into a checklist. Info-level rows reassure users that the system understood their intent (e.g. "3 agents will auto-register"). The "generate anyway" checkbox prevents click-fatigue on yellow warnings while keeping red errors hard blockers.
+      </div>
+    </section>
+
+    <!-- ============== SCREEN 7: GENERATE ============== -->
+    <section class="screen" id="s7">
+      <div class="screen-head">
+        <span class="num">STEP 07</span>
+        <div>
+          <h2>Generate bundle</h2>
+          <p>Pick a provider, preview the zip contents, choose download or run-via-agent.</p>
+        </div>
+      </div>
+
+      <div class="frame">
+        <div class="frame-bar">
+          <div class="dots"><i></i><i></i><i></i></div>
+          <div class="url">labforge.local · /labs/.../generate</div>
+        </div>
+        <div class="frame-body" style="padding: 28px 32px; min-height: 580px;">
+          <div class="gen-grid">
+            <div>
+              <h3 style="margin: 0 0 4px; font-size: 16px;">Provider</h3>
+              <p style="margin: 0 0 14px; color: var(--muted); font-size: 13px;">Detected on your host — LabForge will set <span class="mono" style="color: var(--text);">VAGRANT_DEFAULT_PROVIDER</span> accordingly.</p>
+
+              <div class="provider-list">
+                <div class="provider selected">
+                  <div class="logo"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#6ee7ff" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6v6H9z"/></svg></div>
+                  <div>
+                    <div class="name">VirtualBox</div>
+                    <div class="ver">v7.0.20 · detected · 14 boxes cached</div>
+                  </div>
+                  <span class="pill cyan"><span class="ic"></span> recommended</span>
+                </div>
+                <div class="provider">
+                  <div class="logo"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#a7f3d0" stroke-width="2"><polygon points="12,3 21,12 12,21 3,12"/></svg></div>
+                  <div>
+                    <div class="name">VMware Desktop</div>
+                    <div class="ver">v17.5 · plugin <span style="color: var(--green);">installed</span></div>
+                  </div>
+                </div>
+                <div class="provider" style="opacity: .55;">
+                  <div class="logo"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#c4b5fd" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg></div>
+                  <div>
+                    <div class="name">libvirt</div>
+                    <div class="ver">not detected · <a href="#" style="color: var(--cyan);">install guide</a></div>
+                  </div>
+                </div>
+              </div>
+
+              <h3 style="margin: 22px 0 4px; font-size: 16px;">Action</h3>
+              <p style="margin: 0 0 14px; color: var(--muted); font-size: 13px;">Either save the zip locally, or hand the bundle to the local agent and watch it run.</p>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                <div class="provider" style="grid-template-columns: 1fr; gap: 6px; padding: 16px;">
+                  <div style="display: flex; gap: 10px; align-items: center;">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#8a95b2" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M7 10l5 5 5-5M12 15V3"/></svg>
+                    <div class="name">Download .zip</div>
+                  </div>
+                  <div class="ver">412 KB · I'll run vagrant manually</div>
+                </div>
+                <div class="provider selected" style="grid-template-columns: 1fr; gap: 6px; padding: 16px;">
+                  <div style="display: flex; gap: 10px; align-items: center;">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#6ee7ff" stroke-width="2"><polygon points="6,3 21,12 6,21"/></svg>
+                    <div class="name">Run via agent</div>
+                  </div>
+                  <div class="ver">extract + vagrant up · stream logs</div>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <h3 style="margin: 0 0 4px; font-size: 16px;">Bundle preview</h3>
+              <p style="margin: 0 0 14px; color: var(--muted); font-size: 13px;">SHA-256 <span class="mono" style="color: var(--text);">8c2a…f04b</span> · deterministic build</p>
+              <div class="filetree">
+                <div class="row dir">▾ <span class="name">ad-forest-finance/</span></div>
+                <div class="row" style="padding-left: 18px;">📄 <span class="name">Vagrantfile</span> <span style="color: var(--dim);">· 4.2 KB</span></div>
+                <div class="row" style="padding-left: 18px;">📄 <span class="name">topology.json</span> <span style="color: var(--dim);">· 6.1 KB</span></div>
+                <div class="row" style="padding-left: 18px;">📄 <span class="name">manifest.json</span> <span style="color: var(--dim);">· 1.4 KB</span></div>
+                <div class="row" style="padding-left: 18px;">📄 <span class="name">README.md</span> <span style="color: var(--dim);">· 8.7 KB</span></div>
+                <div class="row" style="padding-left: 18px;">📄 <span class="name">hosts</span> <span style="color: var(--dim);">· 312 B</span></div>
+                <div class="row dir" style="padding-left: 18px;">▾ <span class="name">provision/</span></div>
+                <div class="row" style="padding-left: 36px;">📄 <span class="name">fw-edge.sh</span></div>
+                <div class="row" style="padding-left: 36px;">📄 <span class="name">dc01.ps1</span></div>
+                <div class="row" style="padding-left: 36px;">📄 <span class="name">fs01.sh</span></div>
+                <div class="row" style="padding-left: 36px;">📄 <span class="name">ws-cfo.ps1</span></div>
+                <div class="row" style="padding-left: 36px;">📄 <span class="name">ws-cpa.ps1</span></div>
+                <div class="row" style="padding-left: 36px;">📄 <span class="name">attacker-01.sh</span></div>
+              </div>
+              <div style="display: flex; justify-content: space-between; padding: 12px 4px; color: var(--muted); font-size: 12px; font-family: 'JetBrains Mono', monospace;">
+                <span>13 files · 412 KB</span>
+                <span>reproducible · pinned base boxes</span>
+              </div>
+
+              <button class="btn btn-primary" style="width: 100%; justify-content: center; padding: 12px; font-size: 14px;">Generate & Run · <span class="kbd" style="background: rgba(4,20,28,.2); color: #04141c; border-color: rgba(4,20,28,.3);">⌘⏎</span></button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="note">
+        <b>Why surface the SHA + file tree.</b> Trust. Users about to <span class="mono" style="color: var(--text);">vagrant up</span> on their own machine deserve to see what's in the box. Showing the deterministic hash makes "did anything change from yesterday's build?" answerable at a glance — and gives auditors something to point at.
+      </div>
+    </section>
+
+    <!-- ============== SCREEN 8: RUNNING ============== -->
+    <section class="screen" id="s8">
+      <div class="screen-head">
+        <span class="num">STEP 08</span>
+        <div>
+          <h2>Lab running — live dashboard</h2>
+          <p>The payoff. Watch every VM boot, provision and turn green; tail logs; SSH straight into any node.</p>
+        </div>
+      </div>
+
+      <div class="frame">
+        <div class="frame-bar">
+          <div class="dots"><i></i><i></i><i></i></div>
+          <div class="url">labforge.local · /labs/ad-forest-finance/run</div>
+          <span style="color: var(--green); font-family: 'JetBrains Mono', monospace;">● live</span>
+        </div>
+        <div class="frame-body">
+          <!-- header strip -->
+          <div style="display: grid; grid-template-columns: 1fr auto auto; gap: 14px; align-items: center; padding: 16px 22px; border-bottom: 1px solid var(--line); background: var(--bg-2);">
+            <div>
+              <div style="font-size: 11px; color: var(--cyan); font-family: 'JetBrains Mono', monospace;">RUNNING · build #42</div>
+              <h3 style="margin: 4px 0 2px; font-size: 18px;">ad-forest-finance</h3>
+              <div style="color: var(--muted); font-size: 12px; font-family: 'JetBrains Mono', monospace;">started 14:31:08 · uptime 3m 12s · 5 / 6 healthy</div>
+            </div>
+            <div style="display: flex; gap: 6px;">
+              <button class="btn">⌃ Halt</button>
+              <button class="btn">↻ Reload</button>
+              <button class="btn" style="color: var(--red); border-color: rgba(248,113,113,.3);">⊗ Destroy</button>
+            </div>
+            <span class="pill healthy"><span class="ic"></span> Healthy</span>
+          </div>
+
+          <!-- progress strip -->
+          <div class="progress">
+            <div class="pstep done"><span class="num">✓</span><span class="label">Validate</span></div>
+            <div class="pstep done"><span class="num">✓</span><span class="label">Generate</span></div>
+            <div class="pstep done"><span class="num">✓</span><span class="label">Vagrant up</span></div>
+            <div class="pstep active"><span class="num">●</span><span class="label">Provisioning · 5/6</span></div>
+            <div class="pstep"><span class="num">5</span><span class="label">All healthy</span></div>
+          </div>
+
+          <!-- grid + terminal -->
+          <div class="run-grid">
+            <div class="vm-grid">
+              <div class="vm-card healthy">
+                <div class="head">
+                  <div><div class="name">fw-edge</div><div class="ip">10.0.0.1 · firewall</div></div>
+                  <span class="pill healthy"><span class="ic"></span> Healthy</span>
+                </div>
+                <div class="roles"><span class="chip">pfsense</span><span class="chip">syslog</span></div>
+                <div class="bar"><i style="width: 100%;"></i></div>
+              </div>
+              <div class="vm-card healthy">
+                <div class="head">
+                  <div><div class="name">dc01.forest.lab</div><div class="ip">10.0.10.10 · domain controller</div></div>
+                  <span class="pill healthy"><span class="ic"></span> Healthy</span>
+                </div>
+                <div class="roles"><span class="chip">AD DS</span><span class="chip">DNS</span><span class="chip">Wazuh agent</span></div>
+                <div class="bar"><i style="width: 100%;"></i></div>
+              </div>
+              <div class="vm-card healthy">
+                <div class="head">
+                  <div><div class="name">fs01.forest.lab</div><div class="ip">10.0.10.20 · file server</div></div>
+                  <span class="pill healthy"><span class="ic"></span> Healthy</span>
+                </div>
+                <div class="roles"><span class="chip">Samba 4.20</span><span class="chip">Wazuh</span><span class="chip">Splunk UF</span></div>
+                <div class="bar"><i style="width: 100%;"></i></div>
+              </div>
+              <div class="vm-card provisioning">
+                <div class="head">
+                  <div><div class="name">ws-cfo</div><div class="ip">10.0.10.30 · workstation</div></div>
+                  <span class="pill cyan"><span class="ic"></span> Provisioning · 72%</span>
+                </div>
+                <div class="roles"><span class="chip">Win10</span><span class="chip">MS Office</span><span class="chip">Wazuh</span></div>
+                <div class="bar"><i style="width: 72%;"></i></div>
+              </div>
+              <div class="vm-card healthy">
+                <div class="head">
+                  <div><div class="name">ws-cpa</div><div class="ip">10.0.10.31 · workstation</div></div>
+                  <span class="pill healthy"><span class="ic"></span> Healthy</span>
+                </div>
+                <div class="roles"><span class="chip">Win10</span><span class="chip">Wazuh</span></div>
+                <div class="bar"><i style="width: 100%;"></i></div>
+              </div>
+              <div class="vm-card booting">
+                <div class="head">
+                  <div><div class="name">attacker-01</div><div class="ip">203.0.113.7 · attacker</div></div>
+                  <span class="pill warn"><span class="ic"></span> Booting · 28%</span>
+                </div>
+                <div class="roles"><span class="chip">Kali 2024.4</span><span class="chip">Metasploit</span></div>
+                <div class="bar"><i style="width: 28%;"></i></div>
+              </div>
+            </div>
+
+            <div class="terminal">
+              <div class="term-tabs">
+                <div class="term-tab active">ws-cfo · provisioner</div>
+                <div class="term-tab">attacker-01 · boot</div>
+                <div class="term-tab">all</div>
+              </div>
+              <div class="term-body">
+                <div class="term-line"><span class="ts">14:34:07</span> <span class="info">[ws-cfo]</span> Running provisioner: shell...</div>
+                <div class="term-line"><span class="ts">14:34:07</span> <span class="info">[ws-cfo]</span> ws-cfo: Running: <span style="color: var(--text);">C:\Windows\Temp\vagrant-shell-2025-05-21.ps1</span></div>
+                <div class="term-line"><span class="ts">14:34:09</span> <span class="info">[ws-cfo]</span> ws-cfo: <span class="ok">==&gt; install Microsoft Office (silent)</span></div>
+                <div class="term-line"><span class="ts">14:34:21</span> <span class="info">[ws-cfo]</span> ws-cfo: extracting setup files… <span class="ok">OK</span></div>
+                <div class="term-line"><span class="ts">14:34:48</span> <span class="info">[ws-cfo]</span> ws-cfo: setup.exe /configure office-config.xml</div>
+                <div class="term-line"><span class="ts">14:35:11</span> <span class="info">[ws-cfo]</span> ws-cfo: <span class="ok">==&gt; install Wazuh agent 4.9.0</span></div>
+                <div class="term-line"><span class="ts">14:35:14</span> <span class="info">[ws-cfo]</span> ws-cfo: msiexec /i wazuh-agent-4.9.0-1.msi WAZUH_MANAGER='10.0.1.50' /quiet</div>
+                <div class="term-line"><span class="ts">14:35:32</span> <span class="info">[ws-cfo]</span> ws-cfo: <span class="ok">agent registered</span> (id: 002)</div>
+                <div class="term-line"><span class="ts">14:35:34</span> <span class="info">[ws-cfo]</span> ws-cfo: <span class="warn">WARNING: domain join pending — waiting for dc01</span></div>
+                <div class="term-line"><span class="ts">14:35:41</span> <span class="info">[ws-cfo]</span> ws-cfo: Add-Computer -DomainName forest.lab -Credential …</div>
+                <div class="term-line"><span class="ts">14:35:58</span> <span class="info">[ws-cfo]</span> ws-cfo: <span class="ok">joined domain forest.lab</span></div>
+                <div class="term-line"><span class="ts">14:36:00</span> <span class="info">[ws-cfo]</span> ws-cfo: Reboot scheduled in 5s…</div>
+                <div class="term-line" style="color: var(--cyan);">▎</div>
+              </div>
+              <div class="term-input">labforge ssh ws-cfo</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="note">
+        <b>Why the live panel matters most.</b> Most labs feel "done" the moment <span class="mono" style="color: var(--text);">vagrant up</span> starts — but provisioning is where things actually break. Showing per-VM progress with role chips and a tailing log turns a 6-minute wait into something diagnosable. The destroy button is intentionally red and one click away — labs should be cheap to throw away and rebuild.
+      </div>
+    </section>
+
+    <!-- ============== FOOTER ============== -->
+    <section style="margin-top: 60px; padding: 28px 32px; border: 1px solid var(--line); border-radius: var(--r-xl); background: linear-gradient(135deg, rgba(110,231,255,.05), rgba(196,181,253,.03));">
+      <div style="display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 24px;">
+        <div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--cyan); letter-spacing: .1em;">DESIGN NOTES</div>
+          <h3 style="margin: 6px 0 8px;">What this proposal is — and isn't.</h3>
+          <p style="margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6;">These are static HTML mocks, not React components. They exist to align on layout, density, color and the journey shape before any production UI work begins. Every screen here maps cleanly onto your existing schema + API surface.</p>
+        </div>
+        <div>
+          <div style="font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .1em;">Type</div>
+          <div style="margin-top: 8px; font-size: 13px; line-height: 1.7;">Inter — UI<br/>JetBrains Mono — data</div>
+        </div>
+        <div>
+          <div style="font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .1em;">Palette</div>
+          <div style="margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap;">
+            <span style="width: 22px; height: 22px; border-radius: 4px; background: var(--cyan);"></span>
+            <span style="width: 22px; height: 22px; border-radius: 4px; background: var(--green);"></span>
+            <span style="width: 22px; height: 22px; border-radius: 4px; background: var(--violet);"></span>
+            <span style="width: 22px; height: 22px; border-radius: 4px; background: var(--amber);"></span>
+            <span style="width: 22px; height: 22px; border-radius: 4px; background: var(--red);"></span>
+            <span style="width: 22px; height: 22px; border-radius: 4px; background: var(--bg-2); border: 1px solid var(--line);"></span>
+          </div>
+        </div>
+        <div>
+          <div style="font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .1em;">Next</div>
+          <div style="margin-top: 8px; font-size: 13px; line-height: 1.7;">Wire to React Flow<br/>Tokens → Tailwind<br/>Storybook stub</div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+  // simple anchor smooth scroll
+  document.querySelectorAll('.stepper a[href^="#"]').forEach(a => {
+    a.addEventListener('click', e => {
+      e.preventDefault();
+      const t = document.querySelector(a.getAttribute('href'));
+      if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
+</script>
+</body>
+</html>

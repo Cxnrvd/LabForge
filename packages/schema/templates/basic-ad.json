@@ -1,0 +1,87 @@
+{
+  "id": "basic-ad",
+  "name": "Basic Active Directory",
+  "description": "A small Active Directory environment: one domain controller, two domain-joined Windows 10 workstations, and a Kali attacker. Ideal for practicing common AD attack paths such as Kerberoasting, AS-REP roasting, and credential reuse.",
+  "network_cidr": "192.168.56.0/24",
+  "provider": "virtualbox",
+  "version": "1.0",
+  "nodes": [
+    {
+      "id": "kali01",
+      "type": "attacker",
+      "label": "Kali",
+      "position": { "x": -500, "y": 0 },
+      "config": {
+        "os": "kali_rolling",
+        "ip": "192.168.56.100",
+        "hostname": "kali",
+        "cves": [],
+        "roles": ["impacket", "bloodhound", "crackmapexec"],
+        "memory_mb": 2048,
+        "cpus": 2,
+        "credentials": { "username": "vagrant", "password": "kali" },
+        "vlan": null,
+        "gateway": "192.168.56.1"
+      }
+    },
+    {
+      "id": "dc01",
+      "type": "domain_controller",
+      "label": "DC01",
+      "position": { "x": 0, "y": 0 },
+      "config": {
+        "os": "windows_server_2019",
+        "ip": "192.168.56.10",
+        "hostname": "DC01",
+        "cves": [],
+        "roles": ["AD-Domain-Services", "DNS"],
+        "memory_mb": 4096,
+        "cpus": 2,
+        "credentials": { "username": "Administrator", "password": "Passw0rd!Lab" },
+        "vlan": null,
+        "gateway": "192.168.56.1"
+      }
+    },
+    {
+      "id": "wks01",
+      "type": "workstation",
+      "label": "WKS01",
+      "position": { "x": 500, "y": -200 },
+      "config": {
+        "os": "windows_10",
+        "ip": "192.168.56.20",
+        "hostname": "WKS01",
+        "cves": [],
+        "roles": ["domain-joined"],
+        "memory_mb": 2048,
+        "cpus": 2,
+        "credentials": { "username": "alice", "password": "Summer2025!" },
+        "vlan": null,
+        "gateway": "192.168.56.1"
+      }
+    },
+    {
+      "id": "wks02",
+      "type": "workstation",
+      "label": "WKS02",
+      "position": { "x": 500, "y": 200 },
+      "config": {
+        "os": "windows_10",
+        "ip": "192.168.56.21",
+        "hostname": "WKS02",
+        "cves": [],
+        "roles": ["domain-joined"],
+        "memory_mb": 2048,
+        "cpus": 2,
+        "credentials": { "username": "bob", "password": "Hockey99" },
+        "vlan": null,
+        "gateway": "192.168.56.1"
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e1", "source": "wks01", "target": "dc01", "protocol": "kerberos", "port": 88, "label": "Kerberos" },
+    { "id": "e2", "source": "wks02", "target": "dc01", "protocol": "kerberos", "port": 88, "label": "Kerberos" },
+    { "id": "e3", "source": "kali01", "target": "dc01", "protocol": "ldap", "port": 389, "label": "LDAP recon" }
+  ]
+}

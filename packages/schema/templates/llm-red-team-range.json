@@ -1,0 +1,193 @@
+{
+  "id": "llm-red-team-range",
+  "name": "LLM Red Team Range",
+  "description": "Self-contained range for prompt-injection, jailbreak, and exfiltration practice. Boots end-to-end with `vagrant up`: an Ollama host running Llama 3.2-3B (small enough to fit on a laptop — swap to llama3.1:70b later if you have the RAM), a LangChain RAG agent, a customer chatbot API fronting OpenAI + Anthropic, a vector DB, a single-node Wazuh manager watching the bastion, and a Kali attacker with garak. Total RAM ~13 GB.",
+  "network_cidr": "172.30.0.0/16",
+  "provider": "virtualbox",
+  "version": "1.0",
+  "nodes": [
+    {
+      "id": "internet",
+      "type": "internet",
+      "label": "Internet",
+      "position": { "x": -760, "y": -160 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "203.0.113.2",
+        "hostname": "internet",
+        "cves": [],
+        "roles": ["external"],
+        "memory_mb": 256,
+        "cpus": 1,
+        "credentials": { "username": "external", "password": "n/a" },
+        "vlan": null,
+        "gateway": null
+      }
+    },
+    {
+      "id": "kali01",
+      "type": "attacker",
+      "label": "LLM Red Team",
+      "position": { "x": -760, "y": 240 },
+      "config": {
+        "os": "kali_rolling",
+        "ip": "172.30.0.100",
+        "hostname": "llm-redteam",
+        "cves": [],
+        "roles": ["ai-jailbreak-detector", "huggingface", "nmap"],
+        "memory_mb": 2048,
+        "cpus": 2,
+        "credentials": { "username": "vagrant", "password": "kali" },
+        "vlan": null,
+        "gateway": "172.30.0.1"
+      }
+    },
+    {
+      "id": "fw01",
+      "type": "firewall",
+      "label": "Edge Firewall",
+      "position": { "x": -410, "y": 40 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "172.30.1.1",
+        "hostname": "fw-edge",
+        "cves": [],
+        "roles": ["opnsense", "suricata", "iptables"],
+        "memory_mb": 512,
+        "cpus": 1,
+        "credentials": { "username": "vagrant", "password": "Llm!Fw2025" },
+        "vlan": null,
+        "gateway": null
+      }
+    },
+    {
+      "id": "chatbot-api",
+      "type": "target",
+      "label": "Customer Chatbot API",
+      "position": { "x": -60, "y": -200 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "172.30.10.10",
+        "hostname": "chatbot-api",
+        "cves": [],
+        "roles": ["langchain@0.3.x", "openai@gpt-4o", "anthropic@claude-3-5-sonnet", "apache"],
+        "memory_mb": 1536,
+        "cpus": 2,
+        "credentials": { "username": "vagrant", "password": "Chat!Api2025" },
+        "vlan": 10,
+        "gateway": "172.30.10.1"
+      }
+    },
+    {
+      "id": "wazuh01",
+      "type": "server",
+      "label": "Wazuh Manager",
+      "position": { "x": -60, "y": 240 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "172.30.10.50",
+        "hostname": "wazuh-mgr",
+        "cves": [],
+        "roles": ["wazuh-manager@4.9.0"],
+        "memory_mb": 3072,
+        "cpus": 2,
+        "credentials": { "username": "vagrant", "password": "Wazuh!Llm2025" },
+        "vlan": 10,
+        "gateway": "172.30.10.1"
+      }
+    },
+    {
+      "id": "agent01",
+      "type": "server",
+      "label": "LangChain RAG Agent",
+      "position": { "x": 290, "y": 40 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "172.30.10.20",
+        "hostname": "rag-agent",
+        "cves": [],
+        "roles": ["langchain@0.3.x", "huggingface", "pytorch@2.5"],
+        "memory_mb": 2048,
+        "cpus": 2,
+        "credentials": { "username": "vagrant", "password": "Rag!Agent2025" },
+        "vlan": 10,
+        "gateway": "172.30.10.1"
+      }
+    },
+    {
+      "id": "ollama01",
+      "type": "server",
+      "label": "Ollama Host",
+      "position": { "x": 640, "y": -200 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "172.30.20.30",
+        "hostname": "ollama-host",
+        "cves": [],
+        "roles": ["ollama@0.4.0"],
+        "memory_mb": 4096,
+        "cpus": 4,
+        "credentials": { "username": "vagrant", "password": "Ollama!Host2025" },
+        "vlan": 20,
+        "gateway": "172.30.20.1"
+      }
+    },
+    {
+      "id": "vectordb01",
+      "type": "database",
+      "label": "Vector DB",
+      "position": { "x": 640, "y": 240 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "172.30.20.40",
+        "hostname": "vector-db",
+        "cves": [],
+        "roles": ["mongodb", "redis"],
+        "memory_mb": 1536,
+        "cpus": 1,
+        "credentials": { "username": "vagrant", "password": "Vec!Db2025" },
+        "vlan": 20,
+        "gateway": "172.30.20.1"
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e1", "source": "internet", "target": "fw01", "protocol": "tcp", "port": null, "label": "WAN" },
+    { "id": "e2", "source": "fw01", "target": "chatbot-api", "protocol": "https", "port": 443, "label": "Public chat" },
+    { "id": "e3", "source": "chatbot-api", "target": "agent01", "protocol": "http", "port": 8000, "label": "Agent backend" },
+    { "id": "e4", "source": "agent01", "target": "ollama01", "protocol": "http", "port": 11434, "label": "Ollama API" },
+    { "id": "e5", "source": "agent01", "target": "vectordb01", "protocol": "tcp", "port": 27017, "label": "Mongo / vectors" },
+    { "id": "e6", "source": "wazuh01", "target": "chatbot-api", "protocol": "tcp", "port": 1514, "label": "Wazuh agent" },
+    { "id": "e7", "source": "wazuh01", "target": "agent01", "protocol": "tcp", "port": 1514, "label": "Wazuh agent" },
+    { "id": "e8", "source": "kali01", "target": "fw01", "protocol": "tcp", "port": null, "label": "External attacker" }
+  ],
+  "zones": [
+    {
+      "id": "z-ext",
+      "label": "Untrusted",
+      "shape": "triangle",
+      "position": { "x": -930, "y": -380 },
+      "size": { "width": 350, "height": 840 },
+      "color": "#ef4444",
+      "opacity": 0.10
+    },
+    {
+      "id": "z-public",
+      "label": "Public Tier (VLAN 10)",
+      "shape": "rectangle",
+      "position": { "x": -240, "y": -380 },
+      "size": { "width": 700, "height": 840 },
+      "color": "#3b82f6",
+      "opacity": 0.10
+    },
+    {
+      "id": "z-private",
+      "label": "Inference Tier (VLAN 20)",
+      "shape": "rectangle",
+      "position": { "x": 480, "y": -380 },
+      "size": { "width": 330, "height": 840 },
+      "color": "#a855f7",
+      "opacity": 0.12
+    }
+  ]
+}

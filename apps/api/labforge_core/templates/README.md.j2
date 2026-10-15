@@ -1,0 +1,109 @@
+# {{ topology.name }}
+
+{{ topology.description }}
+
+**Network:** `{{ topology.network_cidr }}`
+**Provider:** `{{ topology.provider.value }}`
+**Provisioned VMs:** {{ vagrant_nodes | length }}{% if external_nodes %} (+ {{ external_nodes | length }} external endpoint{{ 's' if external_nodes | length > 1 else '' }}){% endif %}
+
+## Quickstart
+
+```bash
+# 1) Bring everything up. First run downloads base boxes (~5-8 GB).
+vagrant up
+
+# 2) Watch status:
+vagrant status
+
+# 3) SSH into any Linux node:
+vagrant ssh <hostname>
+
+# 4) Tear down when you're done:
+vagrant destroy -f
+```
+
+> First `vagrant up` takes ~10 minutes for box downloads (cached after that)
+> plus ~5–10 minutes for provisioning to converge. Subsequent `vagrant up`
+> reuses cached boxes and is much faster.
+
+## Nodes
+
+| Hostname | Role | OS | Box | IP | RAM | CPUs | User | Password |
+|---|---|---|---|---|---|---|---|---|
+{% for n in topology.nodes %}
+{% if n.type.value != "internet" %}
+| `{{ n.config.hostname }}` | {{ n.type.value }} | {{ n.config.os.value }} | `{{ box_map.get(n.config.os, "ubuntu/jammy64") }}` | `{{ n.config.ip }}` | {{ n.config.memory_mb }} MB | {{ n.config.cpus }} | `{{ n.config.credentials.username }}` | `{{ n.config.credentials.password }}` |
+{% endif %}
+{% endfor %}
+
+{% if external_nodes %}
+## External endpoints (no VM created)
+
+These are abstract — they represent real-world systems (the public internet,
+SaaS APIs, vendor cloud services). No Vagrant VM is created for them; route
+to them via your firewall node.
+
+| Label | Type | IP |
+|---|---|---|
+{% for n in external_nodes %}
+| {{ n.label }} | {{ n.type.value }} | `{{ n.config.ip }}` |
+{% endfor %}
+{% endif %}
+
+{% set ns = namespace(has_emulated=False) %}
+{% for n in vagrant_nodes %}{% if n.is_emulated %}{% set ns.has_emulated = True %}{% endif %}{% endfor %}
+{% if ns.has_emulated %}
+## Emulated OSes
+
+The following nodes don't have a real Vagrant box for their declared OS,
+so they boot Ubuntu 22.04 and the provisioner installs an open-source
+emulator (OpenPLC for PLCs, MediaMTX for cameras, dnsmasq + nftables for
+router/firewall appliances, etc.):
+
+| Hostname | Declared OS | Emulator role(s) |
+|---|---|---|
+{% for n in vagrant_nodes %}
+{% if n.is_emulated %}
+| `{{ n.hostname }}` | `{{ n.os_label }}` | see `provision/{{ n.hostname }}.*` |
+{% endif %}
+{% endfor %}
+{% endif %}
+
+## CVEs preinstalled
+
+{% set cve_ns = namespace(any=False) %}
+{% for n in topology.nodes %}{% if n.config.cves %}{% set cve_ns.any = True %}{% endif %}{% endfor %}
+{% if cve_ns.any %}
+{% for n in topology.nodes %}
+{% if n.config.cves %}
+- **{{ n.config.hostname }}**: {{ n.config.cves | join(', ') }}
+{% endif %}
+{% endfor %}
+{% else %}
+_None — this is a clean topology._
+{% endif %}
+
+## Connections
+
+{% if topology.edges %}
+| Source | Target | Protocol | Port | Note |
+|---|---|---|---|---|
+{% for e in topology.edges %}
+| `{{ e.source }}` | `{{ e.target }}` | {{ e.protocol.value }} | {{ e.port if e.port is not none else '-' }} | {{ e.label or '' }} |
+{% endfor %}
+{% else %}
+_No edges defined._
+{% endif %}
+
+## Troubleshooting
+
+* **`vagrant up` hangs on "default: Waiting for machine to boot..."** — usually
+  WinRM / SSH timeout; try `vagrant reload <hostname>`.
+* **Provisioner errors** — each Linux node logs to
+  `/var/log/labforge-provision.log` inside the VM. Windows nodes log to
+  `C:\Labforge\provision.log`. SSH/WinRM in and tail the log.
+* **Out of RAM** — reduce the `v.memory` line in the `Vagrantfile` for
+  whichever node is hogging. The provisioners are idempotent, so
+  `vagrant reload --provision <hostname>` is safe.
+* **Box download fails** — most boxes live on
+  https://app.vagrantup.com/ — confirm you can reach it from the host.
