@@ -1046,7 +1046,7 @@ def _release_usb_radios(workspace: Path) -> None:
 
     Suspending drops the passed-through dongle mid-session, and these chips'
     firmware hangs when the host side vanishes under a loaded driver (seen
-    repeatedly, see docs/labs/altobeam). Stop the AP and unload the module
+    repeatedly, see docs/labs/wifi/altobeam). Stop the AP and unload the module
     first so the device is idle when VMware detaches it. Best effort: a
     failure here must not block the pause.
     """

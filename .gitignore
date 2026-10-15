@@ -55,7 +55,7 @@ design.md
 designs/
 dashboard-proposals.html
 labforge-designs.html
-docs/ui-proposal.html
+docs/design/
 
 # Claude Code session data (per-machine).
 .claude/
@@ -86,17 +86,9 @@ docs/CLAUDE-QA-PROMPT.md
 # material for whoever is presenting, not something to ship in a repo
 # students/attendees (or the public) can browse — keeping them out of the
 # commit is the whole point, not an oversight. Stays on disk locally; just
-# never tracked.
-docs/labs/wifi-lab-walkthroughs/
-docs/labs/wifi-lab-presenter-guide.md
-docs/labs/wifi-lab-session-walkthrough.md
-docs/labs/wifi-pentest-slide-content.md
-docs/labs/wifi-pentest-slide-deck.md
-docs/labs/wifi-pentest-slide-titles.md
-docs/labs/wifi-pentest-study-content.md
-docs/labs/assets/
-docs/labs/altobeam/
-docs/labs/wifi-pentest-webinar.md
-docs/labs/wifi-adapter-compatibility.md
+# never tracked. Grouped under docs/labs/wifi/ (walkthroughs, presenter
+# guide, slide content/deck/titles, study content, hardware notes, assets)
+# so this is one pattern instead of a dozen.
+docs/labs/wifi/
 docs/labs/ransomware-intrusion.md
 docs/labs/malware-triage.md

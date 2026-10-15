@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils/cn";
 
 /**
  * The WiFi Lab run-sheet: one card per segment, built from
- * docs/labs/wifi-pentest-webinar.md's segment table. Status is a judgement
+ * docs/labs/wifi/wifi-pentest-webinar.md's segment table. Status is a judgement
  * call fixed by the lab setup (real hostapd AP, no injection-capable
  * tooling bundled), not something the API reports — so it's data here, not
  * derived.

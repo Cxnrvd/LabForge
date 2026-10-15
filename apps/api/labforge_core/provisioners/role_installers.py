@@ -775,7 +775,7 @@ apt-get update -y && apt-get install -y vault
     # Driver for the AltoBeam ATBM6012B-X USB dongle (007a:888b) so the hostapd
     # role below has a real nl80211 radio. Only works when the hypervisor can
     # hand the dongle to the guest (VMware yes, VirtualBox no — see
-    # docs/labs/altobeam). The Vagrantfile upgrades the kernel and reboots
+    # docs/labs/wifi/altobeam). The Vagrantfile upgrades the kernel and reboots
     # before this runs (headers for the box's stale kernel are gone from the
     # archive), so `uname -r` here already has matching headers. Key build
     # facts: CONFIG_ATBM_BLE + CONFIG_ATBM_BLE_WIFI_PLATFORM select the

@@ -19,7 +19,7 @@ Not covered here: anything needing real wireless hardware (hostapd's actual
 AP-mode behavior), anything Windows (needs a Windows container, out of
 scope for this harness), and the DKMS wrong-kernel class of bug (needs a
 kernel upgrade mid-script to reproduce — containers share the host kernel,
-so this can't trigger here; see docs/labs/wifi-adapter-compatibility.md for
+so this can't trigger here; see docs/labs/wifi/wifi-adapter-compatibility.md for
 the real-hardware verification that class of bug needs).
 """
 

@@ -1,7 +1,7 @@
 {
   "id": "wifi-lab",
   "name": "WiFi Lab",
-  "description": "HTB Academy-style WiFi Pentester range on VMware Workstation: a real hostapd access point on a passed-through AltoBeam ATBM6012B-X USB dongle (007a:888b; open/WEP/WPA2/WPA3/WPS/hidden-SSID/MAC-filter/enterprise scenarios, switchable live), a Kali GUI attacker with a passed-through USB WiFi adapter (MediaTek 0e8d:7610), FreeRADIUS for 802.1x/Enterprise scenarios, and a Wazuh SIEM that ingests the AP's hostapd journal so attacks show on a dashboard with MITRE ATT&CK tags. Needs two USB WiFi adapters plugged into the host. VirtualBox cannot pass the AltoBeam through (see docs/labs/altobeam), so this template uses VMware.",
+  "description": "HTB Academy-style WiFi Pentester range on VMware Workstation: a real hostapd access point on a passed-through AltoBeam ATBM6012B-X USB dongle (007a:888b; open/WEP/WPA2/WPA3/WPS/hidden-SSID/MAC-filter/enterprise scenarios, switchable live), a Kali GUI attacker with a passed-through USB WiFi adapter (MediaTek 0e8d:7610), FreeRADIUS for 802.1x/Enterprise scenarios, and a Wazuh SIEM that ingests the AP's hostapd journal so attacks show on a dashboard with MITRE ATT&CK tags. Needs two USB WiFi adapters plugged into the host. VirtualBox cannot pass the AltoBeam through (see docs/labs/wifi/altobeam), so this template uses VMware.",
   "network_cidr": "10.71.0.0/24",
   "provider": "vmware",
   "version": "1.0",
