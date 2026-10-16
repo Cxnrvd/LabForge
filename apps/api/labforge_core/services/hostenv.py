@@ -40,6 +40,10 @@ _VMRUN_WINDOWS = (
     Path(r"C:\Program Files\VMware\VMware Workstation\vmrun.exe"),
 )
 
+# macOS tooling that is not on PATH after a default .app install.
+_VBOX_MACOS = Path("/Applications/VirtualBox.app/Contents/MacOS/VBoxManage")
+_VMRUN_MACOS = Path("/Applications/VMware Fusion.app/Contents/Library/vmrun")
+
 # Vagrant and VirtualBox both choke on very long Windows paths.
 MAX_SAFE_WORKSPACE_PATH = 120
 
@@ -56,6 +60,10 @@ def is_windows() -> bool:
 
 def is_macos() -> bool:
     return sys.platform == "darwin"
+
+
+def is_linux() -> bool:
+    return sys.platform.startswith("linux")
 
 
 # --------------------------------------------------------------- line endings
@@ -201,6 +209,8 @@ def vboxmanage_command() -> list[str]:
         return [found]
     if is_windows() and _VBOX_WINDOWS.exists():
         return [str(_VBOX_WINDOWS)]
+    if is_macos() and _VBOX_MACOS.exists():
+        return [str(_VBOX_MACOS)]
     return ["VBoxManage"]
 
 
@@ -212,6 +222,8 @@ def vmrun_path() -> str | None:
         for candidate in _VMRUN_WINDOWS:
             if candidate.exists():
                 return str(candidate)
+    if is_macos() and _VMRUN_MACOS.exists():
+        return str(_VMRUN_MACOS)
     return None
 
 

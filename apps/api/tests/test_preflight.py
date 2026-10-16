@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from labforge_core.api.routers import host as host_router
-from labforge_core.services import compose_generator, docker_runtime, preflight
+from labforge_core.services import compose_generator, docker_runtime, hostenv, preflight
 from labforge_core.services.template_loader import get_template
 
 GB = 1024**3
@@ -38,6 +38,12 @@ def healthy(monkeypatch):
 
 def _by_id(report):
     return {c["id"]: c for c in report["checks"]}
+
+
+def _force_os(monkeypatch, *, windows: bool = False, macos: bool = False) -> None:
+    """CI runs on Linux; these tests check one specific OS's wording."""
+    monkeypatch.setattr(hostenv, "is_windows", lambda: windows)
+    monkeypatch.setattr(hostenv, "is_macos", lambda: macos)
 
 
 def test_busy_port_is_skipped():
@@ -81,6 +87,7 @@ def test_docker_not_running_says_how_to_start_it(healthy, monkeypatch):
 
 
 def test_docker_missing(healthy, monkeypatch):
+    _force_os(monkeypatch, windows=True)
     monkeypatch.setattr(
         docker_runtime,
         "runtime_status",
@@ -90,11 +97,31 @@ def test_docker_missing(healthy, monkeypatch):
     assert check["status"] == "fail" and "Install Docker Desktop" in check["fix"]
 
 
+def test_docker_missing_on_macos_suggests_brew(healthy, monkeypatch):
+    _force_os(monkeypatch, macos=True)
+    monkeypatch.setattr(
+        docker_runtime,
+        "runtime_status",
+        lambda: {"docker_available": False, "docker_daemon": False, "detail": None, "compose_supported": False},
+    )
+    check = _by_id(preflight.run(ports=[]))["docker"]
+    assert check["status"] == "fail" and "brew install --cask docker" in check["fix"]
+
+
 def test_low_docker_memory_gives_the_wslconfig_fix(healthy, monkeypatch):
+    _force_os(monkeypatch, windows=True)
     monkeypatch.setattr(preflight, "docker_memory_mb", lambda: 2048)
     check = _by_id(preflight.run(memory_needed_mb=3000, ports=[]))["docker_memory"]
     assert check["status"] == "fail"
     assert ".wslconfig" in check["fix"] and "wsl --shutdown" in check["fix"]
+
+
+def test_low_docker_memory_on_macos_points_at_settings(healthy, monkeypatch):
+    _force_os(monkeypatch, macos=True)
+    monkeypatch.setattr(preflight, "docker_memory_mb", lambda: 2048)
+    check = _by_id(preflight.run(memory_needed_mb=3000, ports=[]))["docker_memory"]
+    assert check["status"] == "fail"
+    assert "Settings -> Resources -> Memory" in check["fix"]
 
 
 def test_tight_docker_memory_is_only_a_warning(healthy, monkeypatch):
@@ -129,6 +156,7 @@ def test_ports_published_by_our_own_labs_are_not_conflicts(healthy, monkeypatch)
 
 
 def test_blocking_problem_names_the_check(healthy, monkeypatch):
+    _force_os(monkeypatch, windows=True)
     monkeypatch.setattr(preflight, "docker_memory_mb", lambda: 2048)
     code, message = preflight.blocking_problem(get_template("ransomware-intrusion-linux-lab"))
     assert code == "preflight_docker_memory"

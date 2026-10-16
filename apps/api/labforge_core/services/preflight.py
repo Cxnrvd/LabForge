@@ -18,6 +18,15 @@ import psutil
 from labforge_core.services import docker_runtime, hostenv, workspace
 from labforge_core.services.compose_generator import host_port_free
 
+
+def _os_pick(windows: str, macos: str, linux: str) -> str:
+    """Pick the fix text for whatever host this actually is."""
+    if hostenv.is_windows():
+        return windows
+    if hostenv.is_macos():
+        return macos
+    return linux
+
 GB = 1024**3
 # Windows guests: the installer ISO plus a sparse system disk that grows as the guest is used.
 WINDOWS_DISK_GB = 40
@@ -162,7 +171,11 @@ def run(*, windows_guests: int = 0, memory_needed_mb: int | None = None, ports: 
                 "fail",
                 "Docker is not installed",
                 "The docker command was not found.",
-                "Install Docker Desktop (winget install Docker.DockerDesktop), start it, then press Re-check.",
+                _os_pick(
+                    "Install Docker Desktop (winget install Docker.DockerDesktop), start it, then press Re-check.",
+                    "Install Docker Desktop (brew install --cask docker), start it, then press Re-check.",
+                    "Install Docker Engine for your distro (docs.docker.com/engine/install), start it, then press Re-check.",
+                ),
             )
         )
     elif not status["docker_daemon"]:
@@ -198,9 +211,13 @@ def run(*, windows_guests: int = 0, memory_needed_mb: int | None = None, ports: 
             wanted_gb = -(-(need + 2048) // 1024) if need else 8
             cap_gb = max(4, int((host_mb or 16384) * 0.75) // 1024)
             suggest = max(8, min(wanted_gb, cap_gb))
-            fix = (
+            fix = _os_pick(
                 f"Docker Desktop is limited to {dmem // 1024} GB. Create %UserProfile%\\.wslconfig containing "
-                f"[wsl2] and memory={suggest}GB, run 'wsl --shutdown', then start Docker Desktop again."
+                f"[wsl2] and memory={suggest}GB, run 'wsl --shutdown', then start Docker Desktop again.",
+                f"Docker Desktop is limited to {dmem // 1024} GB. Open Docker Desktop -> Settings -> Resources "
+                f"-> Memory, raise it to {suggest} GB, then restart Docker Desktop.",
+                f"Docker is limited to {dmem // 1024} GB. Raise the memory limit in Docker Desktop for Linux's "
+                f"Resources settings, or your daemon's cgroup/service limits, to about {suggest} GB.",
             )
             if dmem < MIN_DOCKER_MB or (need and need > dmem * 0.9):
                 checks.append(
@@ -234,9 +251,17 @@ def run(*, windows_guests: int = 0, memory_needed_mb: int | None = None, ports: 
                         "fail",
                         "Windows guests cannot start: no /dev/kvm in Docker",
                         "A container could not open /dev/kvm, so Windows would run without hardware acceleration or not at all.",
-                        "Turn on virtualization in the BIOS/UEFI, enable the Virtual Machine Platform Windows feature, "
-                        "use Docker Desktop with the WSL2 backend, run 'wsl --shutdown' and restart Docker Desktop. "
-                        "Labs with Linux machines only (like the ransomware hunt) do not need this.",
+                        _os_pick(
+                            "Turn on virtualization in the BIOS/UEFI, enable the Virtual Machine Platform Windows "
+                            "feature, use Docker Desktop with the WSL2 backend, run 'wsl --shutdown' and restart "
+                            "Docker Desktop. Labs with Linux machines only (like the ransomware hunt) do not need this.",
+                            "Windows guest containers aren't supported on macOS yet — Docker Desktop's Linux VM "
+                            "doesn't expose /dev/kvm. Labs with Linux machines only (like the ransomware hunt) "
+                            "do not need this.",
+                            "Turn on virtualization in the BIOS/UEFI and make sure your user is in the 'kvm' group "
+                            "(sudo usermod -aG kvm $USER, then log out and back in). Labs with Linux machines only "
+                            "(like the ransomware hunt) do not need this.",
+                        ),
                     )
                 )
             elif kvm is None:

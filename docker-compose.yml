@@ -33,7 +33,10 @@ services:
       LABFORGE_ALLOWED_HOSTS: '["api","localhost","127.0.0.1","::1"]'
       LABFORGE_API_PORT: "8000"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      # Override DOCKER_SOCK_PATH if your Docker socket isn't the default
+      # (Colima, OrbStack, a custom context) — `docker context inspect
+      # --format '{{.Endpoints.docker.Host}}'` shows the real path.
+      - ${DOCKER_SOCK_PATH:-/var/run/docker.sock}:/var/run/docker.sock
       - labforge-data:/data
     ports:
       - "127.0.0.1:${LABFORGE_API_PORT:-8000}:8000"

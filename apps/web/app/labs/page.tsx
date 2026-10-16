@@ -19,6 +19,7 @@ import Link from "next/link";
 import { useQueries, useQuery } from "@tanstack/react-query";
 
 import { PageToolbars, type TabSpec } from "@/components/dashboard/AppShell";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils/cn";
 
@@ -92,13 +93,6 @@ function bucketFor(status: string): StatusBucket {
   // TODO: needs backend support — no explicit "halted" state in the API yet;
   // everything that isn't running/failed/provisioning is treated as halted.
   return "halted";
-}
-
-function statusDotClass(b: StatusBucket): "run" | "prov" | "stop" | "err" {
-  if (b === "running") return "run";
-  if (b === "provisioning") return "prov";
-  if (b === "failed") return "err";
-  return "stop";
 }
 
 function uptimeFrom(iso: string): string {
@@ -702,13 +696,15 @@ export default function LabsIndex(): React.ReactElement {
                       </span>
                     </td>
                     <td>
-                      <span className={cn("pill", templatePillTone(lab.topology_slug))}>
+                      <span
+                        className={cn("pill", templatePillTone(lab.topology_slug))}
+                        title={lab.topology_slug}
+                      >
                         {lab.topology_slug}
                       </span>
                     </td>
                     <td>
-                      <span className={cn("sd", statusDotClass(bucket))} />
-                      {lab.status}
+                      <StatusBadge state={lab.status} size="sm" />
                     </td>
                     <td>{nodeCount ?? "—"}</td>
                     <td className="mono">{lab.provider}</td>

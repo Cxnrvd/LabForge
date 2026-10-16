@@ -17,6 +17,7 @@ import { api } from "@/lib/api/client";
 import type { HostMetrics, LabEndpoint, PreflightReport, TemplateSummary } from "@/lib/api/client";
 import { formatSize, resolveRequirements, useImages, useRequiredImages } from "@/lib/api/images";
 import { useWorkspace } from "@/components/settings/WorkspaceLocation";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { useLaunchStore } from "@/lib/store/launch-store";
 import { useTopologyStore } from "@/lib/store/topology-store";
 import { OS_LABELS } from "@labforge/schema";
@@ -91,19 +92,19 @@ function PreflightCard({
     (c) => c.status !== "ok" && (c.id === "kvm" || (c.id === "disk" && !problems.some((p) => p.id === "disk"))),
   );
   const chip = offline
-    ? { cls: "err", text: "API offline" }
+    ? { state: "alert" as const, text: "API offline" }
     : loading || !linux
-    ? { cls: "", text: "Checking" }
+    ? { state: "pending" as const, text: "Checking" }
     : linux.status === "fail"
-      ? { cls: "err", text: "Blocked" }
+      ? { state: "alert" as const, text: "Blocked" }
       : linux.status === "warn"
-        ? { cls: "info", text: "Heads up" }
-        : { cls: "ok", text: "Ready" };
+        ? { state: "warn" as const, text: "Heads up" }
+        : { state: "ok" as const, text: "Ready" };
   return (
     <div className="scard">
       <div style={{ display: "flex", alignItems: "center" }}>
         <div className="eyebrow" style={{ flex: 1 }}>Preflight</div>
-        <span className={`chip ${chip.cls}`}>{chip.text}</span>
+        <StatusBadge state={chip.state} label={chip.text} />
       </div>
       {offline && (
         <div className="home-sub" style={{ marginTop: 8 }}>
@@ -125,7 +126,7 @@ function PreflightCard({
       <div className="rows" style={{ marginTop: 10 }}>
         <div className="r"><span className="k">Windows guests</span>
           <span className="v">
-            {offline ? "unknown" : !windows ? "checking" : winOnly.length === 0 ? <span className="chip ok">Ready</span> : <span className="chip err">Not ready</span>}
+            {offline ? "unknown" : !windows ? "checking" : winOnly.length === 0 ? <StatusBadge state="ok" label="Ready" size="sm" /> : <StatusBadge state="alert" label="Not ready" size="sm" />}
           </span></div>
       </div>
       {winOnly.map((c) => (
@@ -296,6 +297,11 @@ export default function Home(): React.ReactElement {
   const eng = m?.engine;
 
   const steps = [
+    {
+      done: workspaceQ.data?.source === "settings",
+      label: "Choose where labs are stored",
+      href: "/settings#general",
+    },
     { done: !!eng?.docker_daemon, label: "Docker is running" },
     { done: !imgUnavailable && imgMissing === 0 && imgReady > 0, label: "Images are downloaded" },
     { done: labs.length > 0, label: "Build your first lab" },
@@ -382,7 +388,17 @@ export default function Home(): React.ReactElement {
               <div className="r"><span className="k">{dockerDisk != null ? "Disk free (Docker)" : "Disk free"}</span>
                 <span className="v">{dockerDisk != null ? `${dockerDisk.toFixed(0)} GB` : m?.disk.free_gb != null ? `${m.disk.free_gb.toFixed(0)} GB` : "n/a"}</span></div>
               <div className="r"><span className="k">Labs are stored in</span>
-                <span className="v mono" title={m?.disk.workspace_path ?? undefined}>{m?.disk.workspace_path ?? workspaceQ.data?.path ?? "n/a"}</span></div>
+                <span className="v">
+                  <span className="mono" title={m?.disk.workspace_path ?? undefined}>{m?.disk.workspace_path ?? workspaceQ.data?.path ?? "n/a"}</span>
+                  {workspaceQ.data && workspaceQ.data.source !== "settings" && (
+                    <>
+                      {" "}
+                      <Link href="/settings#general" style={{ color: "var(--d10-accent)" }}>
+                        ({workspaceQ.data.source === "environment" ? "set by env var" : "default"} — change)
+                      </Link>
+                    </>
+                  )}
+                </span></div>
               <div className="r"><span className="k">Used by labs</span>
                 <span className="v">{labMb > 0 ? `${gb(labMb)} GB` : "none"}</span></div>
               <div className="r"><span className="k">Room for Windows guests</span>
@@ -406,9 +422,12 @@ export default function Home(): React.ReactElement {
             <div className="rows" style={{ marginTop: 6 }}>
               <div className="r"><span className="k">Docker</span>
                 <span className="v">
-                  <span className={`chip ${eng?.docker_daemon ? "ok" : "err"}`}>
-                    {eng ? (eng.docker_daemon ? eng.docker_version ?? "running" : "not running") : metricsQ.isError ? "API offline" : "checking"}
-                  </span></span></div>
+                  <StatusBadge
+                    state={!eng ? (metricsQ.isError ? "alert" : "pending") : eng.docker_daemon ? "ok" : "alert"}
+                    label={eng ? (eng.docker_daemon ? eng.docker_version ?? "running" : "not running") : metricsQ.isError ? "API offline" : "checking"}
+                    size="sm"
+                  />
+                </span></div>
               <div className="r"><span className="k">Compose</span><span className="v">{eng?.compose_version ?? "n/a"}</span></div>
               <div className="r"><span className="k">Docker memory</span>
                 <span className="v">{eng?.docker_memory_mb != null ? `${(eng.docker_memory_mb / 1024).toFixed(0)} GB` : "n/a"}</span></div>
@@ -572,7 +591,13 @@ export default function Home(): React.ReactElement {
             <div className="rows" style={{ marginTop: 6 }}>
               {steps.map((st, i) => (
                 <div key={i} className="r">
-                  <span className="k" style={{ color: st.done ? "var(--d10-fg-strong)" : undefined }}>{st.label}</span>
+                  {!st.done && st.href ? (
+                    <Link href={st.href} className="k" style={{ color: "var(--d10-accent)" }}>
+                      {st.label}
+                    </Link>
+                  ) : (
+                    <span className="k" style={{ color: st.done ? "var(--d10-fg-strong)" : undefined }}>{st.label}</span>
+                  )}
                   <span className={`chip ${st.done ? "ok" : ""}`}>{st.done ? "Done" : "To do"}</span>
                 </div>
               ))}
