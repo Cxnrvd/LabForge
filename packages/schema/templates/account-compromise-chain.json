@@ -1,0 +1,129 @@
+{
+  "id": "account-compromise-chain",
+  "name": "Account Compromise Chain (Docker, Wazuh SIEM)",
+  "description": "CSC3117 Week 9/10 Kill Chain / ATT&CK and incident-response triage lab. A Kali attacker brute-forces SSH into 'victim' (jdoe / password123), logs in, then creates a backdoor account or edits sudoers. victim ships logs to a Wazuh manager + indexer + dashboard so the whole chain (repeated auth failures, the success, the privilege-escalation step) shows up as SIEM alerts for the class to map to the Kill Chain and MITRE ATT&CK. See docs/labs/account-compromise-chain.md for the attack command, the dashboard walkthrough and the reset-for-a-re-run steps. All three Wazuh roles disable inter-node TLS for lab simplicity (isolated Docker network only) and, like several other bundled Docker roles, are not integration-tested against a live engine.",
+  "network_cidr": "10.70.20.0/24",
+  "provider": "docker",
+  "version": "1.0",
+  "nodes": [
+    {
+      "id": "wazuh-indexer",
+      "type": "server",
+      "label": "Wazuh indexer",
+      "position": { "x": -300, "y": -120 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "10.70.20.10",
+        "hostname": "wazuh-indexer",
+        "cves": [],
+        "roles": ["wazuh-indexer"],
+        "memory_mb": 2048,
+        "cpus": 2,
+        "credentials": { "username": "admin", "password": "LabForge!2026" },
+        "vlan": null,
+        "gateway": "10.70.20.1"
+      }
+    },
+    {
+      "id": "wazuh-manager",
+      "type": "server",
+      "label": "Wazuh manager",
+      "position": { "x": 0, "y": -120 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "10.70.20.11",
+        "hostname": "wazuh-manager",
+        "cves": [],
+        "roles": ["wazuh-manager"],
+        "memory_mb": 1536,
+        "cpus": 2,
+        "credentials": { "username": "admin", "password": "LabForge!2026" },
+        "vlan": null,
+        "gateway": "10.70.20.1"
+      }
+    },
+    {
+      "id": "wazuh-dashboard",
+      "type": "server",
+      "label": "Wazuh dashboard",
+      "position": { "x": 300, "y": -120 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "10.70.20.12",
+        "hostname": "wazuh-dashboard",
+        "cves": [],
+        "roles": ["wazuh-dashboard"],
+        "memory_mb": 1024,
+        "cpus": 1,
+        "credentials": { "username": "admin", "password": "LabForge!2026" },
+        "vlan": null,
+        "gateway": "10.70.20.1"
+      }
+    },
+    {
+      "id": "victim",
+      "type": "target",
+      "label": "victim (SSH)",
+      "position": { "x": 0, "y": 150 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "10.70.20.20",
+        "hostname": "victim",
+        "cves": [],
+        "roles": ["ssh-victim"],
+        "memory_mb": 512,
+        "cpus": 1,
+        "credentials": { "username": "jdoe", "password": "password123" },
+        "vlan": null,
+        "gateway": "10.70.20.1"
+      },
+      "attack_tags": [
+        {
+          "tactic": "persistence",
+          "technique": "T1136.001",
+          "note": "Backdoor local account or passwordless sudoers entry added after the SSH login"
+        }
+      ]
+    },
+    {
+      "id": "kali",
+      "type": "attacker",
+      "label": "Kali attacker",
+      "position": { "x": -300, "y": 150 },
+      "config": {
+        "os": "kali_rolling",
+        "ip": "10.70.20.30",
+        "hostname": "kali",
+        "cves": [],
+        "roles": [],
+        "memory_mb": 1024,
+        "cpus": 1,
+        "credentials": { "username": "kali", "password": "LabForge!2026" },
+        "vlan": null,
+        "gateway": "10.70.20.1"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "source": "kali",
+      "target": "victim",
+      "protocol": "ssh",
+      "port": 22,
+      "label": "hydra brute force -> login",
+      "attack_tags": [
+        { "tactic": "credential_access", "technique": "T1110", "note": "Hydra password-list brute force" },
+        { "tactic": "initial_access", "technique": "T1078", "note": "Successful login with a valid (guessed) account" }
+      ]
+    },
+    {
+      "id": "e2",
+      "source": "victim",
+      "target": "wazuh-manager",
+      "protocol": "custom",
+      "port": 1514,
+      "label": "wazuh agent -> manager"
+    }
+  ]
+}

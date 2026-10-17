@@ -25,7 +25,10 @@ TEMPLATE_IDS = [t.id for t in TEMPLATES]
 # by design. Anything else with no curated installer is a bug, not a deliberate gap — see the
 # splunk-enterprise / pfsense-emulator fixes, both of which were role-name typos relative to an
 # installer that already existed under a slightly different name.
-DOCKER_ONLY_ROLES = {"log-replay", "analyst-workstation", "malware-analysis", "fakenet", "log4shell-target"}
+DOCKER_ONLY_ROLES = {
+    "log-replay", "analyst-workstation", "malware-analysis", "fakenet", "log4shell-target",
+    "ssh-victim", "wazuh-indexer", "wazuh-manager", "wazuh-dashboard",
+}
 
 
 @pytest.mark.parametrize("topology", TEMPLATES, ids=TEMPLATE_IDS)

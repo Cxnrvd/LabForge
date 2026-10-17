@@ -164,8 +164,52 @@ _ROLES: tuple[DockerRole, ...] = (
                note="Image tag is not pinned upstream."),
     DockerRole("suricata", image="jasonish/suricata:7.0.7",
                note="Needs host networking or an interface mirror to see lab traffic."),
-    DockerRole("wazuh-manager", image="wazuh/wazuh-manager:4.9.0",
-               note="Needs a Wazuh indexer and dashboard to be useful; not wired up."),
+    DockerRole(
+        "wazuh-indexer",
+        image="wazuh/wazuh-indexer:4.9.0",
+        ports=(9200,),
+        environment={
+            # Single-node teaching lab on an isolated Docker network: the official image's
+            # inter-node TLS cert generation is overkill here, so the OpenSearch security plugin
+            # (the thing that otherwise refuses to start without certs) is disabled instead.
+            "DISABLE_SECURITY_PLUGIN": "true",
+            "DISABLE_INSTALL_DEMO_CONFIG": "true",
+            "OPENSEARCH_JAVA_OPTS": "-Xms512m -Xmx512m",
+        },
+        healthcheck=_hc("curl -fs http://localhost:9200 >/dev/null", interval=5, retries=60, start=20),
+        volumes=("wazuh-indexer-data:/var/lib/wazuh-indexer",),
+        note="Security plugin disabled for lab simplicity (no inter-node TLS). Not integration-tested.",
+    ),
+    DockerRole(
+        "wazuh-manager",
+        image="wazuh/wazuh-manager:4.9.0",
+        ports=(1514, 1515),
+        environment={
+            "INDEXER_URL": "http://{peer:wazuh-indexer}:9200",
+            "FILEBEAT_SSL_VERIFICATION_MODE": "none",
+        },
+        healthcheck=_hc(
+            "/var/ossec/bin/wazuh-control status | grep -q 'wazuh-authd is running'",
+            interval=5, retries=40, start=15,
+        ),
+        depends_on=("wazuh-indexer",),
+        note="Needs a Wazuh indexer and dashboard to be useful; wired to both for the "
+             "account-compromise-chain lab. Not integration-tested against a live Docker engine.",
+    ),
+    DockerRole(
+        "wazuh-dashboard",
+        image="wazuh/wazuh-dashboard:4.9.0",
+        ports=(5601,),
+        environment={
+            "INDEXER_URL": "http://{peer:wazuh-indexer}:9200",
+            "WAZUH_API_URL": "https://{peer:wazuh-manager}",
+            "DASHBOARD_USERNAME": "{username}",
+            "DASHBOARD_PASSWORD": "{password}",
+        },
+        healthcheck=_hc("curl -fsk https://localhost:5601 >/dev/null", interval=10, retries=60, start=30),
+        depends_on=("wazuh-indexer", "wazuh-manager"),
+        note="Not integration-tested against a live Docker engine.",
+    ),
     DockerRole("bloodhound", image="specterops/bloodhound:latest", ports=(8080,),
                note="Needs Postgres and Neo4j; not wired up."),
     DockerRole("metasploit", image="metasploitframework/metasploit-framework:latest", tty=True),
@@ -287,6 +331,16 @@ _ROLES: tuple[DockerRole, ...] = (
             "Builds a real CVE-2021-44228 target (Log4j 2.14.1 on a pre-8u191 JDK so remote JNDI "
             "class loading still works). First build compiles from source and takes a minute."
         ),
+    ),
+    DockerRole(
+        "ssh-victim",
+        build_dir="ssh-victim",
+        environment={"WAZUH_MANAGER_IP": "{peer_ip:wazuh-manager}"},
+        depends_on=("wazuh-manager",),
+        verified=False,
+        note="SSH brute-force target for the account-compromise-chain lab. No volume is attached "
+             "on purpose: 'resetting' this lab for a re-run is `docker compose up -d "
+             "--force-recreate ssh-victim`, which starts from this same image, not a saved disk.",
     ),
     DockerRole(
         "fakenet",
