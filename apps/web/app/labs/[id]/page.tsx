@@ -23,6 +23,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 
 import { PageToolbars, type TabSpec } from "@/components/dashboard/AppShell";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { api } from "@/lib/api/client";
 import { ILLUSTRATIONS } from "@/components/canvas/illustrations";
 import { VendorIconInner } from "@/components/icons/VendorIcon";
@@ -78,13 +79,6 @@ function statusDotClass(b: StatusBucket): "run" | "prov" | "stop" | "err" {
   if (b === "provisioning") return "prov";
   if (b === "failed") return "err";
   return "stop";
-}
-
-function statusPillTone(b: StatusBucket): "act" | "warn" | "danger" | "mute" {
-  if (b === "running") return "act";
-  if (b === "provisioning") return "warn";
-  if (b === "failed") return "danger";
-  return "mute";
 }
 
 function osLabel(os: string): string {
@@ -234,10 +228,7 @@ function LabDetailPageInner(): React.ReactElement {
 
   const actions = (
     <>
-      <span className={cn("pill", statusPillTone(bucket))}>
-        <span className={cn("sd", statusDotClass(bucket))} style={{ marginRight: 6 }} />
-        {lab?.status ?? "—"}
-      </span>
+      <StatusBadge state={lab?.status ?? "unknown"} />
       <button
         type="button"
         className="btn"

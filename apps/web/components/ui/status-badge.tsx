@@ -9,6 +9,7 @@ import {
   Hammer,
   Loader2,
   Pause,
+  PauseCircle,
   XCircle,
 } from "lucide-react";
 
@@ -30,6 +31,7 @@ export type Status =
   | "failed"
   | "partial"
   | "stopped"
+  | "paused"
   | "pending"
   | "unknown"
   // Event severity
@@ -81,6 +83,12 @@ const META: Record<Status, StatusMeta> = {
     label: "Stopped",
     classes: "border-border bg-muted text-muted-foreground",
     Icon: Pause,
+  },
+  paused: {
+    label: "Paused",
+    classes:
+      "border-indigo-500/40 bg-indigo-500/10 text-indigo-700 dark:text-indigo-300",
+    Icon: PauseCircle,
   },
   pending: {
     label: "Pending",
