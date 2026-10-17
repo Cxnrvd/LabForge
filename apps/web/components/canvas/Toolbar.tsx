@@ -23,6 +23,7 @@ import {
   Monitor,
   MonitorSpeaker,
   Network,
+  FilePlus2,
   Play,
   Plus,
   Redo2,
@@ -106,6 +107,8 @@ export function Toolbar() {
   const toTopology = useTopologyStore((s) => s.toTopology);
   const meta = useTopologyStore((s) => s.meta);
   const setMeta = useTopologyStore((s) => s.setMeta);
+  const resetTopology = useTopologyStore((s) => s.reset);
+  const nodeCount = useTopologyStore((s) => s.nodes.length);
 
   const validate = useValidateTopology();
   const generate = useGenerateZip();
@@ -222,6 +225,14 @@ export function Toolbar() {
           : e.detail ?? "Check API logs.";
       toast.error("Save failed", { description });
     }
+  };
+
+  const handleNewTopology = (): void => {
+    if (nodeCount > 0 && !window.confirm("Clear the canvas and start a new topology? This can't be undone.")) {
+      return;
+    }
+    resetTopology();
+    toast.success("Canvas cleared", { description: "Starting a new topology." });
   };
 
   const showLaunch = useLaunchStore((st) => st.show);
@@ -374,6 +385,10 @@ export function Toolbar() {
           <DropdownMenuContent align="end" className="w-56">
             <DropdownMenuLabel>Topology</DropdownMenuLabel>
             <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={handleNewTopology}>
+              <FilePlus2 className="h-4 w-4" />
+              New topology
+            </DropdownMenuItem>
             <DropdownMenuItem onSelect={handleSave} disabled={save.isPending}>
               {save.isPending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
