@@ -1,7 +1,7 @@
 {
   "id": "wifi-lab",
   "name": "WiFi Lab",
-  "description": "HTB Academy-style WiFi Pentester range on VMware Workstation: a real hostapd access point on a passed-through AltoBeam ATBM6012B-X USB dongle (007a:888b; open/WEP/WPA2/WPA3/WPS/hidden-SSID/MAC-filter/enterprise scenarios, switchable live), a Kali GUI attacker with a passed-through USB WiFi adapter (MediaTek 0e8d:7610), FreeRADIUS for 802.1x/Enterprise scenarios, and a Wazuh SIEM that ingests the AP's hostapd journal so attacks show on a dashboard with MITRE ATT&CK tags. Needs two USB WiFi adapters plugged into the host. VirtualBox cannot pass the AltoBeam through (see docs/labs/wifi/altobeam), so this template uses VMware.",
+  "description": "HTB Academy-style WiFi Pentester range on VMware Workstation: a real hostapd access point on a passed-through Realtek RTL8188FU USB dongle (0bda:f179; open/WEP/WPA2/WPA3/WPS/hidden-SSID/MAC-filter/enterprise scenarios, switchable live), a second independent hostapd AP on a passed-through AltoBeam ATBM6012B-X USB dongle (007a:888b) for two-BSSID scenarios (evil-twin, real OWE-transition) the primary AP's single AP-mode radio can't do alone, a Kali GUI attacker with a passed-through USB WiFi adapter (MediaTek 0e8d:7610), FreeRADIUS for 802.1x/Enterprise scenarios, and a Wazuh SIEM that ingests the AP's hostapd journal so attacks show on a dashboard with MITRE ATT&CK tags. Needs three USB WiFi adapters plugged into the host. VirtualBox cannot pass the AltoBeam through (see docs/labs/wifi/altobeam), so this template uses VMware.",
   "network_cidr": "10.71.0.0/24",
   "provider": "vmware",
   "version": "1.0",
@@ -51,10 +51,40 @@
         "hostname": "ap-target",
         "cves": [],
         "roles": [
-          "atbm-wifi-driver",
+          "rtl8188fu-wifi-driver",
           "hostapd",
           "captive-portal",
           "wazuh"
+        ],
+        "memory_mb": 2048,
+        "cpus": 2,
+        "credentials": {
+          "username": "vagrant",
+          "password": "vagrant"
+        },
+        "vlan": null,
+        "gateway": "10.71.0.1",
+        "usb_vendor_id": "0bda",
+        "usb_product_id": "f179",
+        "gui": false
+      }
+    },
+    {
+      "id": "ap-second",
+      "type": "target",
+      "label": "ap-second",
+      "position": {
+        "x": 0,
+        "y": 220
+      },
+      "config": {
+        "os": "debian_12",
+        "ip": "10.71.0.21",
+        "hostname": "ap-second",
+        "cves": [],
+        "roles": [
+          "atbm-wifi-driver",
+          "hostapd-second"
         ],
         "memory_mb": 2048,
         "cpus": 2,
@@ -148,6 +178,14 @@
       "protocol": "tcp",
       "port": 1514,
       "label": "Wazuh agent -> manager (hostapd journal)"
+    },
+    {
+      "id": "e4",
+      "source": "kali-wifi",
+      "target": "ap-second",
+      "protocol": "udp",
+      "port": null,
+      "label": "802.11 (over-the-air, second AP)"
     }
   ]
 }

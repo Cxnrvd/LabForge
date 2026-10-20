@@ -27,7 +27,7 @@ TEMPLATE_IDS = [t.id for t in TEMPLATES]
 # installer that already existed under a slightly different name.
 DOCKER_ONLY_ROLES = {
     "log-replay", "analyst-workstation", "malware-analysis", "fakenet", "log4shell-target",
-    "ssh-victim", "wazuh-indexer", "wazuh-manager", "wazuh-dashboard",
+    "ssh-victim", "wazuh-indexer", "wazuh-manager", "wazuh-dashboard", "wazuh-certgen", "wazuh-secadmin",
 }
 
 

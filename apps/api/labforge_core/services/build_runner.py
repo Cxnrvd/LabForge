@@ -85,6 +85,62 @@ def _lab_lock(lab_id: int) -> threading.Lock:
         return _LAB_LOCKS.setdefault(lab_id, threading.Lock())
 
 
+# One lock per (workspace, hostname) so concurrent calls against the SAME VM
+# (the webinar dashboard's 20s node-log polling, a scenario-switch click, a
+# wazuh-password fetch, all landing around the same time) queue instead of
+# running in parallel — different VMs are unaffected. Found necessary against
+# a live lab: with no serialization here, overlapping `vagrant ssh` calls plus
+# the Windows process-tree leak below piled up a couple dozen orphaned
+# vagrant.exe/ruby.exe processes within a couple of minutes, which then
+# garbled/slowed every subsequent call (a scenario switch that actually
+# succeeded on the VM was reported as a false-negative "unknown error").
+_GUEST_LOCKS: dict[tuple[str, str], threading.Lock] = {}
+_GUEST_LOCKS_GUARD = threading.Lock()
+
+
+def _guest_lock(workspace: Path, hostname: str) -> threading.Lock:
+    key = (str(workspace), hostname)
+    with _GUEST_LOCKS_GUARD:
+        return _GUEST_LOCKS.setdefault(key, threading.Lock())
+
+
+def _run_killtree(
+    argv: list[str], *, cwd: str | None = None, timeout: float,
+) -> subprocess.CompletedProcess:
+    """Like ``subprocess.run(argv, timeout=timeout)``, but a timeout actually
+    kills the whole process tree instead of leaking it.
+
+    Plain ``subprocess.run(..., timeout=N)`` calls ``Popen.kill()`` on
+    ``TimeoutExpired``, which on Windows is ``TerminateProcess()`` on the
+    immediate child only — for every call here that child is ``vagrant.exe``,
+    which has already spawned a ``ruby.exe`` (and, underneath that, an
+    ssh/plink client) by the time it's killed. Those survive as orphans.
+    `stop_build` already solved this the right way for the build shim
+    (`taskkill /T` on Windows, `killpg` on POSIX) — this reuses the same
+    pattern for every other place that shells out to `vagrant`/`vagrant ssh`.
+    """
+    proc = subprocess.Popen(
+        argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, errors="replace",
+        start_new_session=not hostenv.is_windows(),
+    )
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        if hostenv.is_windows():
+            subprocess.call(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        else:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(proc.pid, signal.SIGKILL)
+        with contextlib.suppress(Exception):
+            proc.communicate(timeout=5)
+        raise
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
+
+
 class BuildPrereqError(RuntimeError):
     """Vagrant/Docker isn't installed, not running, wrong version, etc."""
 
@@ -496,14 +552,7 @@ def _vagrant_teardown(workspace: Path) -> str | None:
     if not vagrant_available():
         return "vagrant is not on PATH, so the VMs cannot be destroyed"
     try:
-        proc = subprocess.run(
-            ["vagrant", "destroy", "-f"],
-            cwd=str(workspace),
-            capture_output=True,
-            text=True, errors="replace",
-            timeout=600,
-            check=False,
-        )
+        proc = _run_killtree(["vagrant", "destroy", "-f"], cwd=str(workspace), timeout=600)
     except subprocess.TimeoutExpired:
         return "vagrant destroy timed out after 10 minutes"
     except OSError as exc:
@@ -547,10 +596,7 @@ def _ssh_info(workspace: Path, hostname: str, *, refresh: bool = False) -> dict 
     if not vagrant_available():
         return None
     try:
-        proc = subprocess.run(
-            ["vagrant", "ssh-config", hostname], cwd=str(workspace), capture_output=True,
-            text=True, errors="replace", timeout=90, check=False,
-        )
+        proc = _run_killtree(["vagrant", "ssh-config", hostname], cwd=str(workspace), timeout=90)
     except (OSError, subprocess.SubprocessError):
         return None
     if proc.returncode != 0:
@@ -569,38 +615,72 @@ def _ssh_info(workspace: Path, hostname: str, *, refresh: bool = False) -> dict 
     return info
 
 
+_GIT_SSH_CANDIDATES = (
+    Path(r"C:\Program Files\Git\usr\bin\ssh.exe"),
+    Path(r"C:\Program Files (x86)\Git\usr\bin\ssh.exe"),
+)
+
+
+def _ssh_binary() -> str | None:
+    """The ssh client for the direct-ssh fast path.
+
+    Windows' built-in OpenSSH refuses Vagrant's private key ("UNPROTECTED PRIVATE KEY FILE":
+    the key's ACL is too open), exits 255, and so sends every call down the ~35 s `vagrant ssh`
+    fallback — a scenario switch took 36-78 s through the API but 1 s from a shell that had
+    Git's ssh first on PATH. Git for Windows' ssh does not enforce Windows ACLs, so prefer it.
+    """
+    if hostenv.is_windows():
+        for candidate in _GIT_SSH_CANDIDATES:
+            if candidate.is_file():
+                return str(candidate)
+    return shutil.which("ssh")
+
+
 def guest_exec(workspace: Path, hostname: str, script: str, timeout: int = 60) -> subprocess.CompletedProcess:
-    """Run a bash script in a guest. Fast direct ssh first, `vagrant ssh` as the fallback."""
-    ssh = shutil.which("ssh")
-    if ssh:
-        for attempt in (0, 1):
-            info = _ssh_info(workspace, hostname, refresh=bool(attempt))
-            if not info:
-                break
-            argv = [
-                ssh, "-i", info["IdentityFile"], "-p", info["Port"],
-                "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=NUL",
-                "-o", "BatchMode=yes", "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=5",
-                f"{info['User']}@{info['HostName']}",
-                # Script travels as one base64 argument, not on stdin: commands
-                # inside it (sudo tee ...) would otherwise swallow the rest of it.
-                f"bash -c \"$(echo {base64.b64encode(script.encode()).decode()} | base64 -d)\"",
-            ]
-            try:
-                proc = subprocess.run(
-                    argv, capture_output=True, text=True,
-                    errors="replace", timeout=timeout, check=False,
-                )
-            except subprocess.TimeoutExpired:
-                raise
-            except OSError:
-                break
-            if proc.returncode != 255:  # 255 = ssh itself could not connect
-                return proc
-    return subprocess.run(
-        ["vagrant", "ssh", hostname, "-c", script], cwd=str(workspace), capture_output=True,
-        text=True, errors="replace", timeout=max(timeout, 90), check=False,
-    )
+    """Run a bash script in a guest. Fast direct ssh first, `vagrant ssh` as the fallback.
+
+    Serialized per (workspace, hostname): see `_guest_lock`'s comment — the
+    webinar dashboard's own log polling plus a scenario-switch click can
+    otherwise overlap calls against the same VM.
+    """
+    with _guest_lock(workspace, hostname):
+        ssh = _ssh_binary()
+        if ssh:
+            for attempt in (0, 1):
+                info = _ssh_info(workspace, hostname, refresh=bool(attempt))
+                if not info:
+                    break
+                argv = [
+                    ssh, "-i", info["IdentityFile"], "-p", info["Port"],
+                    "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=NUL",
+                    "-o", "BatchMode=yes", "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=5",
+                    f"{info['User']}@{info['HostName']}",
+                    # Script travels as one base64 argument, not on stdin: commands
+                    # inside it (sudo tee ...) would otherwise swallow the rest of it.
+                    f"bash -c \"$(echo {base64.b64encode(script.encode()).decode()} | base64 -d)\"",
+                ]
+                try:
+                    # Despite having no Ruby child underneath it, plain
+                    # Popen.kill() (TerminateProcess on Windows) was observed
+                    # NOT reliably killing this Git-for-Windows (MSYS2) ssh.exe
+                    # on timeout — it sat alive and unresponsive for 180s+ past
+                    # a 60s timeout in a live repro on this host, hanging the
+                    # caller indefinitely since subprocess.run still blocks on
+                    # communicate() after the failed kill. taskkill /F /T is
+                    # more forceful and was already proven reliable for the
+                    # vagrant/ruby case below — reuse it here too.
+                    proc = _run_killtree(argv, timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    raise
+                except OSError:
+                    break
+                if proc.returncode != 255:  # 255 = ssh itself could not connect
+                    return proc
+                if "UNPROTECTED PRIVATE KEY" in (proc.stderr or ""):
+                    break  # a key-permission problem, not a stale port: re-resolving won't help
+        return _run_killtree(
+            ["vagrant", "ssh", hostname, "-c", script], cwd=str(workspace), timeout=max(timeout, 90),
+        )
 
 
 def node_log(
@@ -859,6 +939,8 @@ def apply_wifi_scenario(
     remote = (
         "IFACE=$(sudo grep -oP '^interface=\\K.*' /etc/hostapd/hostapd.conf 2>/dev/null || true)\n"
         "if [ -z \"$IFACE\" ]; then echo __NO_IFACE__; exit 0; fi\n"
+        # Read before the config is overwritten below; see the reload step after the tee.
+        "OLD_HIDDEN=$(sudo grep -c '^ignore_broadcast_ssid=1' /etc/hostapd/hostapd.conf 2>/dev/null || true)\n"
         + (
             # Only computed for the OWE-transition scenario — every other
             # scenario's config text has no $SECOND_IFACE/$IFACE_MAC/
@@ -880,26 +962,67 @@ def apply_wifi_scenario(
             if scenario == "mac-filter"
             else ""
         )
+        # The AltoBeam driver reads the hidden-SSID flag only while the VIF is not
+        # yet in AP join status (ap.c: `if (priv->join_status != ...JOIN_STATUS_AP)`),
+        # i.e. once per driver load. Verified on the live lab with raw beacons: a
+        # plain hostapd restart into hidden-ssid kept broadcasting the name, and
+        # after hidden-ssid a plain restart into wpa2 stayed hidden. So whenever the
+        # hidden state changes, do the same clean stop/unload/reload the lab already
+        # does before a pause, then let hostapd start on a fresh driver.
+        + f"NEW_HIDDEN={1 if 'ignore_broadcast_ssid=1' in conf_body else 0}\n"
+        "if [ \"${OLD_HIDDEN:-0}\" != \"$NEW_HIDDEN\" ] && lsmod | grep -q '^atbm6012bx'; then\n"
+        "  sudo systemctl stop hostapd; sleep 1\n"
+        "  sudo rmmod atbm6012bx && sudo modprobe atbm6012bx\n"
+        "  for i in $(seq 1 40); do [ -e \"/sys/class/net/$IFACE\" ] && break; sleep 1; done\n"
+        # The sysfs node appears before nl80211 can actually bring the interface
+        # up — verified on the live lab: hostapd failed 7 times in a row right
+        # after a reload with "Could not set interface wlan0 flags (UP):
+        # Operation not supported" until it happened to land on a later systemd
+        # restart-backoff slot ~40s later. Probe real readiness instead of
+        # trusting the backoff's timing, so hostapd's first start attempt lands
+        # on a working interface.
+        "  for i in $(seq 1 60); do\n"
+        "    sudo ip link set \"$IFACE\" up 2>/dev/null && { sudo ip link set \"$IFACE\" down 2>/dev/null; break; }\n"
+        "    sleep 1\n"
+        "  done\n"
+        "fi\n"
         # No `set -e`: a failed restart must still reach the status/journal
         # checks below rather than aborting the script right there, which is
         # all the caller would otherwise see (systemd's generic "Job failed"
         # text) instead of hostapd's actual reason (e.g. the driver not
         # supporting 802.11w for a WPA3 request).
-        + "T=$(date '+%Y-%m-%d %H:%M:%S')\n"
-        "sudo systemctl restart hostapd\n"
-        # Poll instead of a fixed sleep: done as soon as hostapd logs AP-ENABLED
-        # for this restart, or as soon as systemd reports it failed.
-        "for i in $(seq 1 40); do\n"
-        "  st=$(systemctl is-active hostapd)\n"
-        "  if [ \"$st\" = active ] && sudo journalctl -u hostapd --since \"$T\" --no-pager | grep -q AP-ENABLED; then break; fi\n"
-        "  [ \"$st\" = failed ] && break\n"
-        "  sleep 0.25\n"
+        #
+        # The up/down probe above narrows but does not close the race: on the
+        # live lab, hostapd restarts right after a reload sometimes still hit
+        # "Could not set interface wlan0 flags (UP): Operation not supported"
+        # for 40-90s, AND that instability outlasts the call that caused it —
+        # a later restart that triggered no reload at all hit the exact same
+        # error, for over a minute, before the chip settled. So retry the
+        # whole stop/start/check cycle here rather than trusting one
+        # restart (or systemd's own backoff timing) to land on a working
+        # moment. Rapid repeated hidden-ssid toggling (a stress test, not
+        # realistic presenter use — one toggle per segment, not six in five
+        # minutes) pushed the settle time past 100s more than once, so this
+        # is bounded generously (~200s) rather than tightly; still fails
+        # loudly if the chip genuinely never recovers.
+        "ATTEMPT=0\n"
+        "while [ $ATTEMPT -lt 14 ]; do\n"
+        "  ATTEMPT=$((ATTEMPT + 1))\n"
+        "  sudo systemctl stop hostapd 2>/dev/null\n"
+        "  T=$(date '+%Y-%m-%d %H:%M:%S')\n"
+        "  sudo systemctl start hostapd\n"
+        "  for i in $(seq 1 40); do\n"
+        "    st=$(systemctl is-active hostapd)\n"
+        "    if [ \"$st\" = active ] && sudo journalctl -u hostapd --since \"$T\" --no-pager | grep -q AP-ENABLED; then break 2; fi\n"
+        "    sleep 0.25\n"
+        "  done\n"
+        "  sleep 2\n"
         "done\n"
         "echo \"$st\"\n"
         "sudo journalctl -u hostapd --no-pager -n 20\n"
     )
     try:
-        proc = guest_exec(workspace, hostname, remote, timeout=60)
+        proc = guest_exec(workspace, hostname, remote, timeout=220)
     except subprocess.TimeoutExpired:
         return False, "timed out reaching the guest"
     except OSError as exc:
@@ -917,6 +1040,11 @@ def apply_wifi_scenario(
             "mode) — this adapter/driver only brought up one AP VIF, see the hostapd "
             "role's provision log for what it tried"
         )
+    if proc.returncode != 0 and not out:
+        # The script never ran (VM suspended/off, ssh refused, vagrant error), so there is no
+        # hostapd status to interpret — say what the transport reported, not "unknown error".
+        err = ((proc.stderr or "").strip().splitlines() or ["no output"])[-1]
+        return False, f"could not reach {hostname} (exit {proc.returncode}): {err} - is the VM running?"
     out_lines = out.splitlines()
     status_line = out_lines[0] if out_lines else ""
     if status_line == "active":
@@ -958,10 +1086,14 @@ def fetch_node_file(
             return None, "vagrant is not on PATH"
         argv = ["vagrant", "ssh", hostname, "-c", f"sudo base64 '{remote_path}' 2>&1"]
     try:
-        proc = subprocess.run(
-            argv, cwd=str(workspace), capture_output=True, text=True,
-            errors="replace", timeout=90, check=False,
-        )
+        if use_docker:
+            proc = subprocess.run(
+                argv, cwd=str(workspace), capture_output=True, text=True,
+                errors="replace", timeout=90, check=False,
+            )
+        else:
+            with _guest_lock(workspace, hostname):
+                proc = _run_killtree(argv, cwd=str(workspace), timeout=90)
     except subprocess.TimeoutExpired:
         return None, "timed out reaching the guest"
     except OSError as exc:
@@ -1017,10 +1149,7 @@ def _run_vagrant_lifecycle(workspace: Path, verb: str, timeout: int = 180) -> No
     if not vagrant_available():
         raise HaltFailed("vagrant is not on PATH")
     try:
-        proc = subprocess.run(
-            ["vagrant", verb], cwd=str(workspace), capture_output=True, text=True,
-            errors="replace", timeout=timeout, check=False,
-        )
+        proc = _run_killtree(["vagrant", verb], cwd=str(workspace), timeout=timeout)
     except subprocess.TimeoutExpired:
         raise HaltFailed(f"vagrant {verb} timed out after {timeout}s") from None
     if proc.returncode != 0:
@@ -1058,11 +1187,10 @@ def _release_usb_radios(workspace: Path) -> None:
         cfg = node.get("config", {})
         if any(str(r).split("@")[0] == "atbm-wifi-driver" for r in cfg.get("roles", [])):
             with contextlib.suppress(OSError, subprocess.TimeoutExpired):
-                subprocess.run(
+                _run_killtree(
                     ["vagrant", "ssh", cfg.get("hostname", ""), "-c",
                      "sudo systemctl stop hostapd dnsmasq; sudo rmmod atbm6012bx; sync"],
-                    cwd=str(workspace), capture_output=True, text=True, errors="replace",
-                    timeout=90, check=False,
+                    cwd=str(workspace), timeout=90,
                 )
 
 
@@ -1163,6 +1291,8 @@ def resume_lab(lab: Lab, session: Session) -> int:
                 lab.updated_at = _utcnow()
                 session.add(lab)
                 session.commit()
+                # Pause leaves this marker behind; without clearing it the new daemon exits at once.
+                (workspace / ".labforge-daemon-stop").unlink(missing_ok=True)
                 _spawn_daemon(lab, workspace)
                 return 0
             problem = docker_runtime.prereq_problem()

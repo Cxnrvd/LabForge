@@ -16,9 +16,10 @@ fi
 echo "${SSH_USER}:${SSH_PASSWORD}" | chpasswd
 
 # rsyslog is what turns sshd/PAM's syslog(3) calls into a real /var/log/auth.log; a bare
-# container has no systemd/journald, so without this step journalctl -u ssh shows nothing and
-# the raw-log half of the lesson (comparing auth.log to what Wazuh parsed) has nothing to show.
-service rsyslog start
+# container has no systemd/journald (so no `service` command either, hence calling the daemon
+# directly), and without this step journalctl -u ssh shows nothing and the raw-log half of the
+# lesson (comparing auth.log to what Wazuh parsed) has nothing to show.
+/usr/sbin/rsyslogd
 
 if [ -n "$WAZUH_MANAGER_IP" ]; then
     sed -i "s/<address>.*<\/address>/<address>${WAZUH_MANAGER_IP}<\/address>/" /var/ossec/etc/ossec.conf

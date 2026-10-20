@@ -20,19 +20,116 @@ from typing import Iterable
 import httpx
 
 
+def _run_killtree(argv: list[str], *, cwd: str | None, timeout: float) -> subprocess.CompletedProcess:
+    """``subprocess.run`` whose timeout kills the whole process tree.
+
+    ``vagrant.exe`` spawns ``ruby.exe`` underneath it; plain ``run(timeout=...)`` kills only the
+    top process on Windows, so every timed-out call leaked a ruby.exe (one per heartbeat cycle).
+    """
+    proc = subprocess.Popen(
+        argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace",
+        start_new_session=not sys.platform.startswith("win"),
+    )
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        if sys.platform.startswith("win"):
+            subprocess.call(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        else:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        try:
+            proc.communicate(timeout=5)
+        except Exception:
+            pass
+        raise
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
+
+
+def _summarise(vms: list[dict]) -> tuple[str, list[dict]]:
+    if not vms:
+        return "unknown", []
+    running = sum(1 for v in vms if v["state"] == "running")
+    if running == len(vms):
+        return "running", vms
+    return ("stopped" if running == 0 else "partial"), vms
+
+
+_VMRUN_WINDOWS = (
+    Path(r"C:\Program Files (x86)\VMware\VMware Workstation\vmrun.exe"),
+    Path(r"C:\Program Files\VMware\VMware Workstation\vmrun.exe"),
+)
+
+
+def _find_vmrun() -> str | None:
+    found = shutil.which("vmrun")
+    if found:
+        return found
+    return next((str(p) for p in _VMRUN_WINDOWS if p.exists()), None)
+
+
+def _vmx_key(path: str) -> str:
+    return os.path.normcase(os.path.realpath(path.strip()))
+
+
+def _vmware_status(workspace: Path) -> tuple[str, list[dict]] | None:
+    """Fast path for vmware_desktop labs: ``vmrun list`` against the .vmx paths Vagrant recorded.
+
+    ``vagrant status`` costs 20-30 s of Ruby start-up per call on this plugin and holds the
+    machine lock the whole time. ``vmrun list`` answers in well under a second. Returns None
+    when this isn't a VMware workspace (or vmrun is missing) so the caller falls back.
+    """
+    machines = workspace / ".vagrant" / "machines"
+    if not machines.is_dir():
+        return None
+    recorded: dict[str, str] = {}
+    for mdir in sorted(machines.iterdir()):
+        id_file = mdir / "vmware_desktop" / "id"
+        if id_file.is_file():
+            recorded[mdir.name] = id_file.read_text(encoding="utf-8", errors="replace").strip()
+    vmrun = _find_vmrun()
+    if not recorded or not vmrun:
+        return None
+    try:
+        proc = _run_killtree([vmrun, "list"], cwd=None, timeout=15)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    running = {_vmx_key(ln) for ln in proc.stdout.splitlines()[1:] if ln.strip()}
+
+    def state_of(vmx: str) -> str:
+        if _vmx_key(vmx) in running:
+            return "running"
+        # vmrun cannot tell suspended from powered off; VMware leaves a .vmss next to the .vmx.
+        return "suspended" if any(Path(vmx).parent.glob("*.vmss")) else "poweroff"
+
+    return _summarise(
+        [{"hostname": n, "state": state_of(v), "provider": "vmware_desktop"} for n, v in recorded.items()]
+    )
+
+
 def _vagrant_status(workspace: Path) -> tuple[str, list[dict]]:
-    """Run ``vagrant status --machine-readable`` and parse out per-VM state.
+    """Per-VM state of a Vagrant lab: ``vmrun list`` for VMware, else ``vagrant status``.
 
     Returns (lab_status, vms[]).
     """
+    fast = _vmware_status(workspace)
+    if fast is not None:
+        return fast
     try:
-        proc = subprocess.run(
+        proc = _run_killtree(
             ["vagrant", "status", "--machine-readable"],
             cwd=str(workspace),
-            check=False,
-            capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
-            timeout=15,
+            # Slow providers can take 20-30 s; at 15 s a VMware lab read "unknown" forever,
+            # which hides the Pause/Resume buttons.
+            timeout=60,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return "unknown", []
@@ -51,17 +148,7 @@ def _vagrant_status(workspace: Path) -> tuple[str, list[dict]]:
         elif key == "provider-name" and rest:
             vm["provider"] = rest[0]
 
-    vms = list(states.values())
-    if not vms:
-        return "unknown", []
-    running = sum(1 for v in vms if v["state"] == "running")
-    if running == len(vms):
-        lab_status = "running"
-    elif running == 0:
-        lab_status = "stopped"
-    else:
-        lab_status = "partial"
-    return lab_status, vms
+    return _summarise(list(states.values()))
 
 
 def _is_docker_workspace(workspace: Path) -> bool:

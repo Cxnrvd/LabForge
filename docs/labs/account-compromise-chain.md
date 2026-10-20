@@ -1,13 +1,13 @@
 # Lab: Account Compromise Chain (Docker, Wazuh SIEM)
 
-CSC3117 — Information & Cybersecurity (BSIT), Week 9/10: Kill Chain / ATT&CK mapping and
-incident-response triage & containment. ~2 hours (10-15 min live attack, remainder analysis).
+Kill Chain / ATT&CK mapping and incident-response triage & containment. ~2 hours (10-15 min
+live attack, remainder analysis).
 
-Three containers on an isolated LabForge Docker network: `wazuh-indexer` + `wazuh-manager` +
+Six containers on an isolated LabForge Docker network: `wazuh-indexer` + `wazuh-manager` +
 `wazuh-dashboard` (split into three nodes because one container = one role, the same pattern as
-the `elastic`/`kibana` split in the ransomware-intrusion lab), `victim` (sshd target running a
-Wazuh agent), and `kali` (a bare attacker container on the same network — see **Deviation from
-the request** below).
+the `elastic`/`kibana` split in the ransomware-intrusion lab), two one-shot helpers
+(`wazuh-certgen`, `wazuh-secadmin`), and `victim` (sshd target running a Wazuh agent). The
+attacker is the instructor's own Kali, outside the lab — see **Attacker** below.
 
 ## Workspace location
 
@@ -35,22 +35,15 @@ you build next will land there until you change it back.
 
 ## Running the attack (live, in front of class)
 
-```
-docker compose -p <project> exec kali bash
-apt-get update && apt-get install -y hydra   # kali-rolling base image ships without it preinstalled
-```
-
-Create `wordlist.txt` inside the `kali` container beforehand with 15-20 candidate passwords, the
-real password (`password123`) placed somewhere in the middle, not first or last:
+From your own Kali, create `wordlist.txt` beforehand with 15-20 candidate passwords, the real
+password (`password123`) placed somewhere in the middle, not first or last. `victim`'s SSH is
+published on `127.0.0.1` (the host port is in the monitor/README, usually 22):
 
 ```
-hydra -l jdoe -P wordlist.txt ssh://victim
+hydra -l jdoe -P wordlist.txt -s <ssh-host-port> ssh://127.0.0.1
 ```
 
-(`victim` resolves by Docker's internal DNS — no IP needed, since `kali` and `victim` are on the
-same lab network.)
-
-Once Hydra reports the hit, SSH in manually as `jdoe` (`ssh jdoe@victim`, password `password123`)
+Once Hydra reports the hit, SSH in manually as `jdoe` (`ssh -p <ssh-host-port> jdoe@127.0.0.1`, password `password123`)
 and perform a quick privilege-escalation step:
 
 ```
@@ -109,18 +102,13 @@ in the dashboard as history, useful for comparing two sections' runs side by sid
 | New user or sudoers edit (Wazuh: FIM alert on `/etc/passwd` or `/etc/sudoers`) | Installation / Persistence, Privilege Escalation | |
 | (student identifies what a C2/Actions-on-Objectives step would look like here) | Actions on Objectives | |
 
-## Deviation from the request
+## Attacker
 
-The source scenario file asked for `attacker`/Kali to be set up manually by the instructor,
-external to LabForge's provisioning, reachable only on the same host-only network. LabForge's
-existing Docker templates instead model the attacker as a plain, role-less container on the same
-lab network (see `ransomware-intrusion-lab.json`'s `kali` node) — a bare `kalilinux/kali-rolling`
-container with `sleep infinity`, exec'd into with `docker compose exec kali bash`. This build
-follows that existing convention rather than leaving Kali external, since it's the established
-LabForge pattern and removes a manual "connect Kali to this network" step for every class section.
-If you genuinely want a separate, instructor-managed Kali VM/machine instead, remove the `kali`
-node from the template and expose `victim`'s SSH port to the host (set `compose_image`'s sibling
-field — the role's `ports`) so an external machine can reach it.
+As the source scenario file asked, `attacker`/Kali is set up by the instructor and is not part
+of this lab (an earlier build bundled a bare `kali-rolling` container; it had no desktop, so it
+was removed). `victim`'s SSH port is published on `127.0.0.1` only (the `ssh-victim` role's
+`ports`), so the attacking tool must run on the same machine as Docker, or reach it through a
+port forward. A Kali VM on a separate virtual network cannot see a loopback-only port.
 
 ## Known gaps (not integration-tested against a live Docker engine)
 
