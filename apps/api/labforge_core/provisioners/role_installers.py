@@ -1015,8 +1015,18 @@ apt-get update -y && apt-get install -y vault
             # this script's `set -e -o pipefail`, an unguarded failure here
             # would abort the whole role before ever reaching the graceful
             # "no interface" message below — `|| true` is what makes that
-            # message actually reachable instead of a silent abort.\n"
-            "IFACE=$(iw dev 2>/dev/null | awk '$1==\"Interface\"{print $2; exit}') || true\n"
+            # message actually reachable instead of a silent abort.
+            # The `$2 !~ /^mon\./` exclusion matters on a re-provision where
+            # hostapd is already running: hostapd itself creates a
+            # `mon.<iface>` companion monitor interface for TX-status
+            # handling on nl80211 drivers, and that interface can sort
+            # before the real one in `iw dev`'s output. Without the filter,
+            # this picks `mon.wlan0` instead of `wlan0`, writes
+            # `interface=mon.wlan0` into hostapd.conf, and hostapd fails to
+            # start with "Driver does not support authentication/association
+            # or connect commands" — reproduced live on ap-second's second
+            # provisioning pass.\n"
+            "IFACE=$(iw dev 2>/dev/null | awk '$1==\"Interface\" && $2 !~ /^mon\\./{print $2; exit}') || true\n"
             "if [ -z \"$IFACE\" ]; then\n"
             "  echo 'No wireless interface found yet — pass the USB adapter through "
             "(see README) then re-run: systemctl restart hostapd dnsmasq' \n"
@@ -1108,7 +1118,7 @@ apt-get update -y && apt-get install -y vault
             "rfkill unblock all || true\n"
             "systemctl unmask hostapd || true\n"
             "systemctl stop dnsmasq || true\n"
-            "IFACE=$(iw dev 2>/dev/null | awk '$1==\"Interface\"{print $2; exit}') || true\n"
+            "IFACE=$(iw dev 2>/dev/null | awk '$1==\"Interface\" && $2 !~ /^mon\\./{print $2; exit}') || true\n"
             "if [ -z \"$IFACE\" ]; then\n"
             "  echo 'No wireless interface found yet — pass the USB adapter through "
             "(see README) then re-run: systemctl restart hostapd dnsmasq' \n"
@@ -1173,7 +1183,7 @@ apt-get update -y && apt-get install -y vault
             # outright (nl80211 unavailable), and without `|| true` that
             # would abort this role under `set -e -o pipefail` before the
             # graceful message below ever runs.\n"
-            "IFACE=$(iw dev 2>/dev/null | awk '$1==\"Interface\"{print $2; exit}') || true\n"
+            "IFACE=$(iw dev 2>/dev/null | awk '$1==\"Interface\" && $2 !~ /^mon\\./{print $2; exit}') || true\n"
             "if [ -z \"$IFACE\" ]; then\n"
             "  echo 'No wireless interface found yet — pass a second USB adapter "
             "through to this node (see README) then re-run: "
@@ -1540,7 +1550,7 @@ apt-get update -y && apt-get install -y vault
             # rather than just succeed empty. Either way, `|| true` is what
             # keeps that reachable as a graceful skip instead of aborting
             # the role under `set -e -o pipefail`.\n"
-            "IFACE=$(iw dev 2>/dev/null | awk '$1==\"Interface\"{print $2; exit}') || true\n"
+            "IFACE=$(iw dev 2>/dev/null | awk '$1==\"Interface\" && $2 !~ /^mon\\./{print $2; exit}') || true\n"
             "if [ -n \"$IFACE\" ]; then\n"
             "  iptables -t nat -C PREROUTING -i \"$IFACE\" -p tcp --dport 80 -j REDIRECT "
             "--to-port 80 2>/dev/null || iptables -t nat -A PREROUTING -i \"$IFACE\" "

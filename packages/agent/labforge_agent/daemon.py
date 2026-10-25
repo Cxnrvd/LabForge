@@ -53,11 +53,23 @@ def _run_killtree(argv: list[str], *, cwd: str | None, timeout: float) -> subpro
 
 
 def _summarise(vms: list[dict]) -> tuple[str, list[dict]]:
+    """Roll per-VM states into one lab-level status.
+
+    ``state_of()`` (below) already distinguishes a suspended VM from a
+    powered-off one; this used to throw that away — an all-suspended lab
+    came out identical to a fully torn-down one (both "stopped"), which the
+    API's heartbeat handler then wrote straight over an explicit
+    ``lab.status = "paused"`` that `pause_lab` had just set. Reporting
+    "paused" here when every VM is genuinely suspended keeps that from
+    silently clobbering a real pause.
+    """
     if not vms:
         return "unknown", []
     running = sum(1 for v in vms if v["state"] == "running")
     if running == len(vms):
         return "running", vms
+    if running == 0 and all(v["state"] == "suspended" for v in vms):
+        return "paused", vms
     return ("stopped" if running == 0 else "partial"), vms
 
 
@@ -433,6 +445,87 @@ def _is_ip(s: str) -> bool:
         return False
 
 
+def _ensure_guest_private_network(workspace: Path, ip_map: dict[str, str]) -> list[str]:
+    """Self-heal a guest whose own private-network interface never came up.
+
+    Distinct from (and runs alongside) `_ensure_vmware_private_network`,
+    which fixes the *host's* vmnet adapter — this fixes the *guest's* side
+    of the same link. Reproduced live: `siem`'s second NIC existed (`ip
+    link show` listed it) but was `state DOWN` with no address at all, so
+    nothing on the lab network — not even another guest — could reach it,
+    even though `vmrun`/`vagrant status` both reported the VM itself
+    "running" and every service on it was healthy. Vagrant only configures
+    this interface once in the guest's own init system during the *first*
+    boot; a VMware-on-Windows VM that comes back up after a crash/suspend
+    cycle doesn't always re-run that step, leaving the NIC present but
+    unconfigured. Runs once per lab, same cadence as the host-adapter fix.
+
+    Vagrant + a `vagrant` CLI on PATH only; no-op everywhere else (Docker
+    labs have no guest NICs to fix this way). Returns log lines meant to be
+    appended to build.log, same contract as `_ensure_vmware_private_network`.
+    """
+    import ipaddress
+    import json
+
+    if not shutil.which("vagrant"):
+        return []
+    topo_path = workspace / "topology.json"
+    if not topo_path.exists():
+        return []
+    try:
+        topo = json.loads(topo_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    cidr = topo.get("network_cidr")
+    if not cidr:
+        return []
+    try:
+        prefixlen = ipaddress.ip_network(cidr, strict=False).prefixlen
+    except ValueError:
+        return []
+
+    script = (
+        "if ip -4 addr show 2>/dev/null | grep -q \"{ip}/\"; then echo ALREADY_OK; exit 0; fi; "
+        "IFACE=''; "
+        "for i in $(ls /sys/class/net 2>/dev/null); do "
+        "  [ \"$i\" = lo ] && continue; "
+        "  ip -4 addr show \"$i\" 2>/dev/null | grep -q 'inet ' && continue; "
+        "  IFACE=\"$i\"; break; "
+        "done; "
+        "if [ -z \"$IFACE\" ]; then echo NO_BARE_IFACE; exit 1; fi; "
+        "sudo ip link set \"$IFACE\" up && sudo ip addr add \"{ip}/{prefixlen}\" dev \"$IFACE\" "
+        "&& echo \"FIXED:$IFACE\" || echo FIX_FAILED"
+    )
+
+    lines: list[str] = []
+    for hostname, ip in ip_map.items():
+        if not ip:
+            continue
+        try:
+            proc = _run_killtree(
+                ["vagrant", "ssh", hostname, "-c", script.format(ip=ip, prefixlen=prefixlen)],
+                cwd=str(workspace), timeout=30,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            lines.append(f"[labforge] network: could not check {hostname}'s private-network interface: {exc}")
+            continue
+        out = (proc.stdout or "").strip()
+        if out == "ALREADY_OK" or not out:
+            continue
+        if out.startswith("FIXED:"):
+            lines.append(
+                f"[labforge] network: {hostname}'s private-network interface ({out.split(':', 1)[1]}) "
+                f"was down with no address — brought it up as {ip}/{prefixlen} so other nodes (and the "
+                "dashboard, for siem) can reach it."
+            )
+        else:
+            lines.append(
+                f"[labforge] network: {hostname} has no spare interface to assign {ip}/{prefixlen} to "
+                f"({out}) — it may not be reachable on the lab network until this is fixed manually."
+            )
+    return lines
+
+
 _ANSI = re.compile(chr(27) + r"\[[0-9;?]*[A-Za-z]")
 
 
@@ -648,6 +741,7 @@ def run(
                     if not network_checked and not docker_mode and lab_status in ("running", "partial"):
                         network_checked = True
                         net_lines = _ensure_vmware_private_network(workspace)
+                        net_lines += _ensure_guest_private_network(workspace, ip_map)
                         if net_lines:
                             with (workspace / "build.log").open("a", encoding="utf-8") as fh:
                                 fh.write("\n".join(net_lines) + "\n")

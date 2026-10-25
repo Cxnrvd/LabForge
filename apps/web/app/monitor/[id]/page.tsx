@@ -1090,7 +1090,33 @@ function VmCard({
   onSsh: (hostname: string) => void;
 }) {
   const up = vm.state === "running";
+  const suspended = vm.state === "suspended";
   const [logsOpen, setLogsOpen] = React.useState(false);
+  const qc = useQueryClient();
+
+  const nodeMut = useMutation<unknown, ApiError, "start" | "stop" | "pause" | "resume">({
+    mutationFn: (action) => {
+      if (action === "start") return api.startNode(labId, vm.hostname);
+      if (action === "stop") return api.stopNode(labId, vm.hostname);
+      if (action === "pause") return api.pauseNode(labId, vm.hostname);
+      return api.resumeNode(labId, vm.hostname);
+    },
+    onSuccess: (_data, action) => {
+      qc.invalidateQueries({ queryKey: ["lab", labId] });
+      const verb = action === "stop" ? "stopped" : action === "pause" ? "paused" : action === "resume" ? "resumed" : "started";
+      toast.success(`${vm.hostname} ${verb}`);
+    },
+    onError: (err, action) => {
+      toast.error(`Could not ${action} ${vm.hostname}`, { description: err.detail });
+    },
+  });
+
+  const confirmAndRun = (action: "stop" | "pause", message: string): void => {
+    if (nodeMut.isPending) return;
+    if (!window.confirm(message)) return;
+    nodeMut.mutate(action);
+  };
+
   return (
     <div style={{ background: "var(--bg)", padding: 16 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
@@ -1165,6 +1191,52 @@ function VmCard({
         >
           Logs
         </button>
+      </div>
+      <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
+        {up && (
+          <>
+            <button
+              className="btn sm"
+              type="button"
+              disabled={nodeMut.isPending}
+              style={{ flex: 1, justifyContent: "center" }}
+              onClick={() =>
+                confirmAndRun("pause", `Pause ${vm.hostname}?\n\nSuspends just this VM (vagrant suspend), keeping the rest of the lab running.`)
+              }
+              title="Suspend just this VM (vagrant suspend), leaving the rest of the lab running"
+            >
+              Pause
+            </button>
+            <button
+              className="btn sm"
+              type="button"
+              disabled={nodeMut.isPending}
+              style={{ flex: 1, justifyContent: "center" }}
+              onClick={() =>
+                confirmAndRun("stop", `Stop ${vm.hostname}?\n\nPowers off just this VM (vagrant halt), leaving the rest of the lab running.`)
+              }
+              title="Power off just this VM (vagrant halt), leaving the rest of the lab running"
+            >
+              Stop
+            </button>
+          </>
+        )}
+        {!up && (
+          <button
+            className="btn sm"
+            type="button"
+            disabled={nodeMut.isPending}
+            style={{ flex: 1, justifyContent: "center" }}
+            onClick={() => nodeMut.mutate(suspended ? "resume" : "start")}
+            title={
+              suspended
+                ? "Resume just this VM (vagrant up — restores its saved state), leaving the rest of the lab alone"
+                : "Start just this VM (vagrant up), leaving the rest of the lab alone"
+            }
+          >
+            {nodeMut.isPending ? "Working…" : suspended ? "Resume" : "Start"}
+          </button>
+        )}
       </div>
       {logsOpen && (
         <NodeLogModal

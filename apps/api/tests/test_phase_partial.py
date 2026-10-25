@@ -89,3 +89,32 @@ def test_no_machines_dir_returns_minus_one(workspace: Path) -> None:
     # Real call (no monkeypatch) — workspace has no .vagrant dir, so
     # the probe should return -1 without raising.
     assert build_runner._provider_vms_running(workspace) == -1
+
+
+def test_succeeded_when_every_expected_vm_is_alive(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression for a real repro: `siem` hit a transient boot-SSH flake,
+    # `vagrant up` exited 1, yet `vmrun list` showed every VM this workspace
+    # defines (including siem) genuinely running moments later. Reporting
+    # "partial" in that case just leaves a stale retry prompt for a lab
+    # that's actually fully up — it should read as succeeded.
+    (workspace / "topology.json").write_text(
+        '{"nodes": [{}, {}, {}, {}, {}]}', encoding="utf-8"
+    )
+    monkeypatch.setattr(build_runner, "_provider_vms_running", lambda _: 5)
+    _write_exit(workspace, code=1)
+    snap = build_runner.read_build_status(workspace)
+    assert snap["phase"] == "succeeded"
+
+
+def test_partial_when_some_but_not_all_expected_vms_are_alive(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (workspace / "topology.json").write_text(
+        '{"nodes": [{}, {}, {}, {}, {}]}', encoding="utf-8"
+    )
+    monkeypatch.setattr(build_runner, "_provider_vms_running", lambda _: 3)
+    _write_exit(workspace, code=1)
+    snap = build_runner.read_build_status(workspace)
+    assert snap["phase"] == "partial"

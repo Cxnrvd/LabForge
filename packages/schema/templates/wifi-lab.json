@@ -84,7 +84,8 @@
         "cves": [],
         "roles": [
           "atbm-wifi-driver",
-          "hostapd-second"
+          "hostapd-second",
+          "wazuh"
         ],
         "memory_mb": 2048,
         "cpus": 2,

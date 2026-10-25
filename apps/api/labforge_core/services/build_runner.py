@@ -498,7 +498,13 @@ def start_build_detailed(
                     f"{topology.network_cidr}. Pick a different network CIDR if VMs are unreachable."
                 )
             warnings.extend(_write_artifacts(topology, workspace, resolved.overrides))
-            argv = ["vagrant", "up", "--provider", provider]
+            # `_vagrant_up_argv` absorbs the known vagrant-vmware-desktop
+            # boot-SSH flake (see its docstring) instead of letting one VM's
+            # transient hiccup report the whole build as failed. No
+            # `recover_hosts` here — a first `vagrant up` already runs every
+            # `run: "always"` provisioner itself, so chaining USB recovery
+            # again would just duplicate it.
+            argv = _vagrant_up_argv(["vagrant", "up", "--provider", provider])
             banner = f"--- runtime=vagrant provider={provider} ---"
             env_extra = {"VAGRANT_DEFAULT_PROVIDER": provider}
         for warning in warnings:
@@ -1157,8 +1163,25 @@ def _run_vagrant_lifecycle(workspace: Path, verb: str, timeout: int = 180) -> No
         raise HaltFailed(f"vagrant {verb} exited {proc.returncode}: {' | '.join(tail)}")
 
 
+# Every passed-through USB wifi driver role that's known to hang if the host
+# side disappears mid-suspend (see docs/labs/wifi/altobeam), mapped to the
+# kernel module `_release_usb_radios` must unload before VMware detaches the
+# device. This list drifted once already: `ap-target` moved from
+# `atbm-wifi-driver` to `rtl8188fu-wifi-driver` (see wifi-lab.json) when the
+# chipset swap happened, and `_usb_radio_hosts`/`_release_usb_radios` were
+# left hardcoded to only the old role — a suspend of the Realtek-based
+# `ap-target` silently skipped this cleanup entirely, leaving hostapd and the
+# dongle live right up to the suspend and producing a VM that could not be
+# cleanly resumed. Add any future USB wifi driver role here, not as a new
+# hardcoded string elsewhere.
+_USB_RADIO_DRIVER_ROLES = {
+    "atbm-wifi-driver": "atbm6012bx",
+    "rtl8188fu-wifi-driver": "rtl8xxxu",
+}
+
+
 def _usb_radio_hosts(workspace: Path) -> list[str]:
-    """Hostnames of nodes running the AltoBeam driver role."""
+    """Hostnames of nodes running a USB wifi driver role that hangs on an abrupt suspend."""
     try:
         topo = json.loads((workspace / "topology.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -1166,18 +1189,22 @@ def _usb_radio_hosts(workspace: Path) -> list[str]:
     return [
         n["config"]["hostname"]
         for n in topo.get("nodes", [])
-        if any(str(r).split("@")[0] == "atbm-wifi-driver" for r in n.get("config", {}).get("roles", []))
+        if any(
+            str(r).split("@")[0] in _USB_RADIO_DRIVER_ROLES
+            for r in n.get("config", {}).get("roles", [])
+        )
     ]
 
 
-def _release_usb_radios(workspace: Path) -> None:
-    """Cleanly unload the AltoBeam driver before a suspend.
+def _release_usb_radios(workspace: Path, only_host: str | None = None) -> None:
+    """Cleanly unload the passed-through USB wifi driver before a suspend.
 
     Suspending drops the passed-through dongle mid-session, and these chips'
     firmware hangs when the host side vanishes under a loaded driver (seen
     repeatedly, see docs/labs/wifi/altobeam). Stop the AP and unload the module
     first so the device is idle when VMware detaches it. Best effort: a
-    failure here must not block the pause.
+    failure here must not block the pause. Pass ``only_host`` to scope this
+    to a single per-VM pause rather than every USB-radio host in the lab.
     """
     try:
         topo = json.loads((workspace / "topology.json").read_text(encoding="utf-8"))
@@ -1185,13 +1212,85 @@ def _release_usb_radios(workspace: Path) -> None:
         return
     for node in topo.get("nodes", []):
         cfg = node.get("config", {})
-        if any(str(r).split("@")[0] == "atbm-wifi-driver" for r in cfg.get("roles", [])):
+        if only_host is not None and cfg.get("hostname") != only_host:
+            continue
+        roles = [str(r).split("@")[0] for r in cfg.get("roles", [])]
+        module = next((_USB_RADIO_DRIVER_ROLES[r] for r in roles if r in _USB_RADIO_DRIVER_ROLES), None)
+        if module:
             with contextlib.suppress(OSError, subprocess.TimeoutExpired):
                 _run_killtree(
                     ["vagrant", "ssh", cfg.get("hostname", ""), "-c",
-                     "sudo systemctl stop hostapd dnsmasq; sudo rmmod atbm6012bx; sync"],
+                     f"sudo systemctl stop hostapd dnsmasq; sudo rmmod {module}; sync"],
                     cwd=str(workspace), timeout=90,
                 )
+
+
+# vagrant-vmware-desktop has a known flake: right after a guest's
+# hostname/interface rename, the brief network bounce can drop the SSH
+# session the "Configuring network adapters within the VM" step is using,
+# and vagrant aborts *that one machine's* `up` with this message — exiting
+# the whole multi-machine `vagrant up` non-zero even though the VM itself
+# finishes booting fine a few seconds later. Reproduced live: `siem` hit
+# this during a resume, `vagrant up` exited 1, and `vmrun list` moments
+# later showed `siem` (and every other VM) genuinely running. Retrying
+# `vagrant up <that-one-host>` alone resolves it without touching the other
+# machines or reporting a false failure to the user.
+_VAGRANT_UP_FLAKE_SIGNATURE = "SSH connection was unexpectedly closed"
+
+
+def _vagrant_up_argv(base_argv: list[str] | None = None, recover_hosts: list[str] | None = None) -> list[str]:
+    """Build the argv for a resilient ``vagrant up``.
+
+    Runs ``base_argv`` (default ``["vagrant", "up"]`` — pass e.g.
+    ``["vagrant", "up", "--provider", provider]`` for a first-time build),
+    watches its output for ``_VAGRANT_UP_FLAKE_SIGNATURE``, and if seen,
+    retries ``vagrant up <host>`` for the specific machine that flaked
+    (identified from the last ``==> <host>:`` line before the error) up to
+    twice before giving up on it. Afterward chains the USB radio-recovery
+    provisioner for any host in ``recover_hosts``, since ``vagrant up`` does
+    not re-run ``run: "always"`` provisioners for a machine that was already
+    running going in.
+    """
+    base_argv = base_argv or ["vagrant", "up"]
+    script = f'''
+import re, subprocess, sys
+
+FLAKE = {_VAGRANT_UP_FLAKE_SIGNATURE!r}
+base_argv = {base_argv!r}
+recover = {(recover_hosts or [])!r}
+HOST_RE = re.compile(r"==>\\s+([A-Za-z0-9][A-Za-z0-9._-]*):")
+
+def run(argv):
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             text=True, bufsize=1)
+    last_host = None
+    flaked = []
+    for line in proc.stdout:
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        m = HOST_RE.match(line)
+        if m:
+            last_host = m.group(1)
+        if FLAKE in line and last_host:
+            flaked.append(last_host)
+    return proc.wait(), flaked
+
+rc, flaked = run(base_argv)
+for host in dict.fromkeys(flaked):
+    for attempt in range(2):
+        print(f"[labforge] {{host}} hit a known boot-SSH flake, "
+              f"retrying vagrant up for just this host (attempt {{attempt + 1}})")
+        rc2, _ = run(["vagrant", "up", host])
+        if rc2 == 0:
+            rc = 0
+            break
+
+for host in recover:
+    subprocess.call(["vagrant", "provision", host, "--provision-with", "usb-radio-recover"])
+
+sys.exit(rc)
+'''
+    return [sys.executable, "-c", script]
 
 
 def halt_lab(lab: Lab, session: Session) -> None:
@@ -1323,23 +1422,11 @@ def resume_lab(lab: Lab, session: Session) -> int:
                 (workspace / sentinel).unlink(missing_ok=True)
             # `vagrant up` on a suspended VM resumes it AND runs the run:"always"
             # provisioners (USB radio recovery); a bare `vagrant resume` skips them.
+            # `_vagrant_up_argv` also absorbs the known vagrant-vmware-desktop
+            # boot-SSH flake (see its docstring) instead of letting one
+            # transient hiccup report the whole resume as failed.
             verb = "up"
-            argv = ["vagrant", verb]
-            recover = _usb_radio_hosts(workspace)
-            if recover and verb == "up":
-                # Vagrant does not run the `run: "always"` USB recovery
-                # provisioner when it wakes a suspended VM, so chain it after
-                # the up: reload the dongle driver and bounce the AP.
-                steps = [["vagrant", "up"]] + [
-                    ["vagrant", "provision", h, "--provision-with", "usb-radio-recover"] for h in recover
-                ]
-                code = (
-                    "import subprocess, sys; rc = 0; "
-                    f"steps = {steps!r}; "
-                    "[globals().__setitem__('rc', subprocess.call(step) or rc) for step in steps]; "
-                    "sys.exit(rc)"
-                )
-                argv = [sys.executable, "-c", code]
+            argv = _vagrant_up_argv(recover_hosts=_usb_radio_hosts(workspace))
             pid = _spawn_build(
                 workspace,
                 argv,
@@ -1351,6 +1438,103 @@ def resume_lab(lab: Lab, session: Session) -> int:
         session.commit()
     _spawn_daemon(lab, workspace)
     return pid
+
+
+class NodeNotFound(RuntimeError):
+    """Raised when a hostname isn't one of this lab's Vagrant machines."""
+
+
+def _require_vagrant_node(workspace: Path, hostname: str) -> None:
+    """Raise if ``hostname`` isn't a machine Vagrant actually knows about in
+    this workspace — guards against typos silently no-opping against a
+    machine name vagrant doesn't recognize."""
+    if not (workspace / ".vagrant" / "machines" / hostname).is_dir():
+        raise NodeNotFound(f"{hostname!r} is not a machine in this lab.")
+
+
+def stop_node(lab: Lab, session: Session, hostname: str) -> None:
+    """Fully power off one VM in a Vagrant-backed lab, leaving the rest alone.
+
+    Mirrors ``halt_lab`` but scoped to a single machine (``vagrant halt
+    <hostname>``), so a per-VM Stop button doesn't have to take the whole
+    lab down.
+    """
+    lab_id = lab.id or 0
+    with _lab_lock(lab_id):
+        workspace = Path(lab.workspace_path) if lab.workspace_path else None
+        if workspace is None or not workspace.exists():
+            raise HaltFailed("The lab workspace is gone, so there is nothing to stop. Destroy the lab instead.")
+        if runtime_of(workspace) == "docker":
+            raise HaltFailed("Per-VM control isn't available for container labs — use the whole-lab action.")
+        _require_vagrant_node(workspace, hostname)
+        # Unlike pause_node's suspend, a clean `vagrant halt` guest shutdown
+        # already stops services (hostapd included) in the normal order —
+        # no USB-release cleanup needed here, matching `halt_lab`.
+        if not vagrant_available():
+            raise HaltFailed("vagrant is not on PATH")
+        try:
+            proc = _run_killtree(["vagrant", "halt", hostname], cwd=str(workspace), timeout=180)
+        except subprocess.TimeoutExpired:
+            raise HaltFailed(f"vagrant halt {hostname} timed out") from None
+        if proc.returncode != 0:
+            tail = (proc.stderr or proc.stdout).strip().splitlines()[-3:]
+            raise HaltFailed(f"vagrant halt {hostname} exited {proc.returncode}: {' | '.join(tail)}")
+
+
+def pause_node(lab: Lab, session: Session, hostname: str) -> None:
+    """Suspend (save-state) one VM in a Vagrant-backed lab, leaving the rest alone."""
+    lab_id = lab.id or 0
+    with _lab_lock(lab_id):
+        workspace = Path(lab.workspace_path) if lab.workspace_path else None
+        if workspace is None or not workspace.exists():
+            raise HaltFailed("The lab workspace is gone, so there is nothing to pause. Destroy the lab instead.")
+        if runtime_of(workspace) == "docker":
+            raise HaltFailed("Per-VM control isn't available for container labs — use the whole-lab action.")
+        _require_vagrant_node(workspace, hostname)
+        if hostname in _usb_radio_hosts(workspace):
+            _release_usb_radios(workspace, only_host=hostname)
+        if not vagrant_available():
+            raise HaltFailed("vagrant is not on PATH")
+        try:
+            proc = _run_killtree(["vagrant", "suspend", hostname], cwd=str(workspace), timeout=180)
+        except subprocess.TimeoutExpired:
+            raise HaltFailed(f"vagrant suspend {hostname} timed out") from None
+        if proc.returncode != 0:
+            tail = (proc.stderr or proc.stdout).strip().splitlines()[-3:]
+            raise HaltFailed(f"vagrant suspend {hostname} exited {proc.returncode}: {' | '.join(tail)}")
+
+
+def start_node(lab: Lab, session: Session, hostname: str) -> None:
+    """Bring one VM in a Vagrant-backed lab up, leaving the rest alone.
+
+    Works equally for a halted, suspended, or (per the stale-DB ``"unknown"``
+    case ``resume_lab`` already handles) externally-killed VM — ``vagrant up
+    <hostname>`` is the single right verb for all three. Reuses
+    ``_vagrant_up_argv`` for the same boot-SSH-flake retry and USB
+    radio-recovery chaining the whole-lab resume path gets. Synchronous
+    (unlike the whole-lab build/resume path) since a single VM's boot is
+    quick enough not to need the background build-log machinery — the
+    caller gets a definitive answer in the response.
+    """
+    lab_id = lab.id or 0
+    with _lab_lock(lab_id):
+        workspace = Path(lab.workspace_path) if lab.workspace_path else None
+        if workspace is None or not workspace.exists():
+            raise HaltFailed("The lab workspace is gone. Build the lab again.")
+        if runtime_of(workspace) == "docker":
+            raise HaltFailed("Per-VM control isn't available for container labs — use the whole-lab action.")
+        _require_vagrant_node(workspace, hostname)
+        if not vagrant_available():
+            raise HaltFailed("vagrant is not on PATH")
+        recover = [hostname] if hostname in _usb_radio_hosts(workspace) else []
+        argv = _vagrant_up_argv(["vagrant", "up", hostname], recover_hosts=recover)
+        try:
+            proc = _run_killtree(argv, cwd=str(workspace), timeout=300)
+        except subprocess.TimeoutExpired:
+            raise HaltFailed(f"vagrant up {hostname} timed out") from None
+        if proc.returncode != 0:
+            tail = (proc.stderr or proc.stdout).strip().splitlines()[-3:]
+            raise HaltFailed(f"vagrant up {hostname} exited {proc.returncode}: {' | '.join(tail)}")
 
 
 def read_log_chunk(workspace: Path, since: int = 0, max_bytes: int = 64 * 1024) -> dict:
@@ -1387,6 +1571,16 @@ def read_log_chunk(workspace: Path, since: int = 0, max_bytes: int = 64 * 1024) 
         "next_offset": since + chunk_consumed,
         "bytes_total": size,
     }
+
+
+def _expected_vm_count(workspace: Path) -> int:
+    """How many VMs this workspace's topology defines. -1 if unknown."""
+    try:
+        topo = json.loads((workspace / "topology.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return -1
+    nodes = topo.get("nodes")
+    return len(nodes) if isinstance(nodes, list) else -1
 
 
 def _provider_vms_running(workspace: Path) -> int:
@@ -1453,11 +1647,25 @@ def _provider_vms_running(workspace: Path) -> int:
             )
         except (OSError, subprocess.TimeoutExpired):
             return -1
-        root = str(machines_dir).replace("/", "\\").lower()
-        return sum(
-            1 for line in (out.stdout or "").splitlines()
-            if line.strip().replace("/", "\\").lower().startswith(root)
-        )
+        # A recorded `.vmx` path can use a Windows junction's alias (the
+        # workspace path) while `vmrun list` reports the real, resolved
+        # target underneath it — or vice versa, if one machine happened to
+        # be created from a shell whose cwd resolved the junction
+        # differently than the others (reproduced live: wifi-lab-3's
+        # `ap-second` recorded `E:\LABS\...`, the other four recorded
+        # `F:\Workspaces\...`, same junction, same VM). A plain string
+        # prefix/equality check then silently misses that one machine
+        # forever, undercounting "alive" VMs by exactly the suspended/
+        # already-running count mismatch this probe exists to avoid.
+        # Resolve both sides through realpath first — the same approach
+        # `_vmx_key()` in packages/agent/labforge_agent/daemon.py already
+        # uses for the lab-level status, so these two independent
+        # VM-liveness probes agree on the same underlying fact.
+        def _vmx_key(path: str) -> str:
+            return os.path.normcase(os.path.realpath(path.strip()))
+
+        recorded_vmx = {_vmx_key(vmx) for machine, provider, vmx in expected if provider == "vmware_desktop"}
+        return sum(1 for line in (out.stdout or "").splitlines() if _vmx_key(line) in recorded_vmx)
     if "virtualbox" not in providers:
         return -1
 
@@ -1517,12 +1725,26 @@ def read_build_status(workspace: Path) -> dict:
         else:
             # Build exited non-zero. Check if any VM is still alive in
             # the hypervisor — if so this is a partial success rather
-            # than a hard failure.
+            # than a hard failure. If EVERY VM this workspace defines is
+            # alive, treat it as a full success instead: a non-zero vagrant
+            # exit can come from a transient per-VM hiccup (see
+            # `_vagrant_up_argv`'s docstring — reproduced live, `siem` hit
+            # this during a resume while every VM including itself ended up
+            # running) and reporting "partial" in that case just leaves the
+            # dashboard showing a stale retry prompt for a lab that is
+            # actually fully up.
             if runtime_of(workspace) == "docker":
                 alive = docker_runtime.running_count(workspace)
+                expected = -1
             else:
                 alive = _provider_vms_running(workspace)
-            phase = "partial" if alive > 0 else "failed"
+                expected = _expected_vm_count(workspace)
+            if alive <= 0:
+                phase = "failed"
+            elif expected > 0 and alive >= expected:
+                phase = "succeeded"
+            else:
+                phase = "partial"
         return {
             "phase": phase,
             "exit_code": exit_code,

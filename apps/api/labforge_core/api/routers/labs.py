@@ -49,6 +49,7 @@ from labforge_core.services.build_runner import (
     HaltFailed,
     LabExistsError,
     SubnetConflictError,
+    NodeNotFound,
     apply_wifi_scenario,
     destroy_lab,
     fetch_node_file,
@@ -57,11 +58,14 @@ from labforge_core.services.build_runner import (
     node_log,
     parse_per_vm_phases,
     pause_lab,
+    pause_node,
     read_build_status,
     read_log_chunk,
     resume_lab,
     start_build,
+    start_node,
     stop_build,
+    stop_node,
 )
 from labforge_core.services.compose_generator import endpoints_from_workspace
 from labforge_core.services.live_bus import bus
@@ -222,8 +226,26 @@ async def post_heartbeat(
     )
     session.add(hb)
 
-    lab.status = payload.lab_status or lab.status
-    lab.updated_at = captured_at
+    # `pause_lab`/`resume_lab`/`halt_lab` set `lab.status` explicitly and bump
+    # `updated_at` at the moment they act. The daemon they just told to stop
+    # (or restart) can still have one heartbeat in flight sampled a moment
+    # earlier, reporting the pre-transition state — most visibly, a sample
+    # taken just before `vagrant suspend` finishes can still read "running"
+    # and would otherwise stomp the "paused" this request just set. Give an
+    # explicit transition a short grace window to win over a stale,
+    # contradicting heartbeat instead of unconditionally overwriting it.
+    def _aware(dt: datetime) -> datetime:
+        return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+    stale_grace = (
+        lab.status in ("paused", "building")
+        and payload.lab_status
+        and payload.lab_status != lab.status
+        and (_aware(captured_at) - _aware(lab.updated_at)).total_seconds() < 20
+    )
+    if not stale_grace:
+        lab.status = payload.lab_status or lab.status
+        lab.updated_at = captured_at
     session.add(lab)
     session.commit()
     session.refresh(lab)
@@ -666,6 +688,81 @@ def resume_lab_route(
         ) from exc
     session.refresh(lab)
     return LabSummary.model_validate(lab, from_attributes=True)
+
+
+def _node_action_error(exc: Exception, code: str) -> HTTPException:
+    if isinstance(exc, NodeNotFound):
+        return HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": str(exc), "code": "node_not_found"},
+        )
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={"detail": str(exc), "code": code},
+    )
+
+
+@router.post("/{lab_id}/nodes/{hostname}/stop", dependencies=_LIFECYCLE_LIMIT)
+def stop_node_route(
+    lab_id: LabId,
+    hostname: str,
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, str]:
+    """Power off one VM (``vagrant halt <hostname>``), leaving the rest of the lab running."""
+    lab = _lookup_lab(lab_id)
+    try:
+        stop_node(lab, session, hostname)
+    except (HaltFailed, NodeNotFound) as exc:
+        raise _node_action_error(exc, "node_stop_failed") from exc
+    return {"hostname": hostname, "action": "stop"}
+
+
+@router.post("/{lab_id}/nodes/{hostname}/pause", dependencies=_LIFECYCLE_LIMIT)
+def pause_node_route(
+    lab_id: LabId,
+    hostname: str,
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, str]:
+    """Suspend one VM (``vagrant suspend <hostname>``), leaving the rest of the lab running."""
+    lab = _lookup_lab(lab_id)
+    try:
+        pause_node(lab, session, hostname)
+    except (HaltFailed, NodeNotFound) as exc:
+        raise _node_action_error(exc, "node_pause_failed") from exc
+    return {"hostname": hostname, "action": "pause"}
+
+
+@router.post("/{lab_id}/nodes/{hostname}/start", dependencies=_BUILD_LIMIT)
+def start_node_route(
+    lab_id: LabId,
+    hostname: str,
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, str]:
+    """Bring one VM up (``vagrant up <hostname>``) from halted, suspended, or
+    an externally-killed state — the same verb covers all three."""
+    lab = _lookup_lab(lab_id)
+    try:
+        start_node(lab, session, hostname)
+    except (HaltFailed, NodeNotFound) as exc:
+        raise _node_action_error(exc, "node_start_failed") from exc
+    return {"hostname": hostname, "action": "start"}
+
+
+@router.post("/{lab_id}/nodes/{hostname}/resume", dependencies=_BUILD_LIMIT)
+def resume_node_route(
+    lab_id: LabId,
+    hostname: str,
+    session: Annotated[Session, Depends(get_session)],
+) -> dict[str, str]:
+    """Alias of start for a suspended VM — ``vagrant up <hostname>`` is the
+    right verb either way, kept as a separate route so the UI can show a
+    Resume label instead of Start when the VM is suspended rather than off."""
+    lab = _lookup_lab(lab_id)
+    try:
+        start_node(lab, session, hostname)
+    except (HaltFailed, NodeNotFound) as exc:
+        raise _node_action_error(exc, "node_resume_failed") from exc
+    return {"hostname": hostname, "action": "resume"}
 
 
 @router.get("/{lab_id}/endpoints")

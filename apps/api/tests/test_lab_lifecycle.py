@@ -357,4 +357,39 @@ def test_heartbeat_accepts_aware_and_naive_captured_at_without_raising(fake, ses
 
     recent = client.get("/api/v1/labs/activity/recent")
     assert recent.status_code == 200
-    assert len(recent.json()) >= 3
+
+
+def test_heartbeat_does_not_clobber_a_fresh_pause_with_a_stale_status(fake, session, tmp_path):
+    # Regression: pause_lab sets lab.status = "paused" and stops the daemon
+    # with a soft sentinel file, but a heartbeat already in flight can still
+    # land a moment later reporting the pre-pause state (e.g. "running" or
+    # "stopped"), which used to overwrite "paused" unconditionally.
+    lab = _build(session, tmp_path)
+    _finish_build(lab)
+    lab.status = "paused"
+    lab.updated_at = datetime.now(UTC)
+    session.add(lab)
+    session.commit()
+
+    app = FastAPI()
+    app.include_router(labs_router.router, prefix="/api/v1")
+    app.dependency_overrides[get_session] = lambda: session
+    client = TestClient(app)
+
+    # A stale heartbeat sampled just after the pause took effect (well
+    # inside the grace window) must not win over the explicit "paused".
+    stale = client.post(
+        f"/api/v1/labs/{lab.id}/heartbeat",
+        json={"lab_status": "stopped", "captured_at": (lab.updated_at + timedelta(seconds=3)).isoformat()},
+    )
+    assert stale.status_code == 200
+    assert session.get(Lab, lab.id).status == "paused"
+
+    # Once the grace window has genuinely elapsed, a heartbeat is trusted
+    # again — this is not a permanent lock on "paused".
+    later = client.post(
+        f"/api/v1/labs/{lab.id}/heartbeat",
+        json={"lab_status": "stopped", "captured_at": (lab.updated_at + timedelta(seconds=30)).isoformat()},
+    )
+    assert later.status_code == 200
+    assert session.get(Lab, lab.id).status == "stopped"

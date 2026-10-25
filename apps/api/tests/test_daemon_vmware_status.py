@@ -56,6 +56,40 @@ def test_non_vmware_workspace_falls_back_to_vagrant(monkeypatch, tmp_path):
     assert daemon._vmware_status(tmp_path) is None
 
 
+def test_all_suspended_reports_paused_not_stopped(monkeypatch, tmp_path):
+    # Regression: _summarise used to collapse "every VM suspended" into the
+    # same "stopped" bucket as "every VM destroyed/never built", which the
+    # API's heartbeat handler then wrote straight over an explicit
+    # `lab.status = "paused"` pause_lab had just set.
+    vmx_a = tmp_path / "a" / "a.vmx"
+    vmx_a.parent.mkdir()
+    (vmx_a.parent / "a.vmss").write_bytes(b"")
+    vmx_b = tmp_path / "b" / "b.vmx"
+    vmx_b.parent.mkdir()
+    (vmx_b.parent / "b.vmss").write_bytes(b"")
+    _machine(tmp_path, "ap-target", vmx_a)
+    _machine(tmp_path, "siem", vmx_b)
+    _fake_vmrun(monkeypatch, "Total running VMs: 0\n")
+    status, vms = daemon._vagrant_status(tmp_path)
+    assert status == "paused"
+    assert {v["state"] for v in vms} == {"suspended"}
+
+
+def test_mixed_suspended_and_poweroff_stays_stopped(monkeypatch, tmp_path):
+    # Only an all-suspended lab is "paused" — a mix of suspended and
+    # genuinely powered-off machines is not a clean pause state.
+    vmx_a = tmp_path / "a" / "a.vmx"
+    vmx_a.parent.mkdir()
+    (vmx_a.parent / "a.vmss").write_bytes(b"")
+    vmx_b = tmp_path / "b" / "b.vmx"
+    vmx_b.parent.mkdir()
+    _machine(tmp_path, "ap-target", vmx_a)
+    _machine(tmp_path, "siem", vmx_b)
+    _fake_vmrun(monkeypatch, "Total running VMs: 0\n")
+    status, _vms = daemon._vagrant_status(tmp_path)
+    assert status == "stopped"
+
+
 def test_timeout_raises_and_returns_promptly():
     start = time.monotonic()
     with pytest.raises(subprocess.TimeoutExpired):
