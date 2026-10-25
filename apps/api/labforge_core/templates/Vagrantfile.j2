@@ -134,6 +134,21 @@ Vagrant.configure("2") do |config|
       apt-get install -y linux-image-amd64 linux-headers-amd64 build-essential git bc usbutils
     SCRIPT
 {% endif %}
+{% if n.needs_backports_kernel %}
+    # RTL8188FU's AP mode landed in mainline rtl8xxxu in 6.5, hardware crypto
+    # and AP+STA concurrency in 6.9, and MFP (required for WPA3-SAE/OWE) only
+    # in 6.10 — all newer than bookworm's own archive (still 6.1.x). Pull the
+    # 6.12 kernel from bookworm-backports and reboot before the driver role
+    # runs; firmware-realtek is installed here too, though it's stale for this
+    # chip (the driver role fetches the one missing firmware file itself).
+    m.vm.provision "backports-kernel-upgrade", type: "shell", privileged: true, reboot: true, inline: <<-'SCRIPT'
+      export DEBIAN_FRONTEND=noninteractive
+      echo 'deb http://deb.debian.org/debian bookworm-backports main' > /etc/apt/sources.list.d/bookworm-backports.list
+      apt-get update -y
+      apt-get install -y -t bookworm-backports linux-image-amd64 linux-headers-amd64
+      apt-get install -y firmware-realtek build-essential git bc usbutils
+    SCRIPT
+{% endif %}
     m.vm.provision "shell",
       path: {{ n.provision_script | tojson }},
       privileged: true
@@ -154,6 +169,18 @@ Vagrant.configure("2") do |config|
       ifup -a 2>/dev/null || true
       for i in $(seq 1 30); do lsusb | grep -qi '007a:888b' && break; sleep 1; done
       lsmod | grep -q '^atbm6012bx' || modprobe atbm6012bx || true
+      for i in $(seq 1 30); do [ -e /sys/class/net/wlan0 ] && break; sleep 1; done
+      systemctl restart hostapd dnsmasq 2>/dev/null || true
+    SCRIPT
+{% endif %}
+{% if n.needs_backports_kernel %}
+    # Same rationale as the AltoBeam node's usb-radio-recover above: runs on
+    # every up/reload/resume to reconnect after a suspend and re-ifup eth1 if
+    # the backports-kernel-upgrade provisioner's mid-provision reboot raced it.
+    m.vm.provision "usb-radio-recover", type: "shell", run: "always", privileged: true, inline: <<-'SCRIPT'
+      ifup -a 2>/dev/null || true
+      for i in $(seq 1 30); do lsusb | grep -qi '0bda:f179' && break; sleep 1; done
+      lsmod | grep -q '^rtl8xxxu' || modprobe rtl8xxxu || true
       for i in $(seq 1 30); do [ -e /sys/class/net/wlan0 ] && break; sleep 1; done
       systemctl restart hostapd dnsmasq 2>/dev/null || true
     SCRIPT

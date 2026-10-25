@@ -20,19 +20,128 @@ from typing import Iterable
 import httpx
 
 
+def _run_killtree(argv: list[str], *, cwd: str | None, timeout: float) -> subprocess.CompletedProcess:
+    """``subprocess.run`` whose timeout kills the whole process tree.
+
+    ``vagrant.exe`` spawns ``ruby.exe`` underneath it; plain ``run(timeout=...)`` kills only the
+    top process on Windows, so every timed-out call leaked a ruby.exe (one per heartbeat cycle).
+    """
+    proc = subprocess.Popen(
+        argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace",
+        start_new_session=not sys.platform.startswith("win"),
+    )
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        if sys.platform.startswith("win"):
+            subprocess.call(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        else:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        try:
+            proc.communicate(timeout=5)
+        except Exception:
+            pass
+        raise
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
+
+
+def _summarise(vms: list[dict]) -> tuple[str, list[dict]]:
+    """Roll per-VM states into one lab-level status.
+
+    ``state_of()`` (below) already distinguishes a suspended VM from a
+    powered-off one; this used to throw that away — an all-suspended lab
+    came out identical to a fully torn-down one (both "stopped"), which the
+    API's heartbeat handler then wrote straight over an explicit
+    ``lab.status = "paused"`` that `pause_lab` had just set. Reporting
+    "paused" here when every VM is genuinely suspended keeps that from
+    silently clobbering a real pause.
+    """
+    if not vms:
+        return "unknown", []
+    running = sum(1 for v in vms if v["state"] == "running")
+    if running == len(vms):
+        return "running", vms
+    if running == 0 and all(v["state"] == "suspended" for v in vms):
+        return "paused", vms
+    return ("stopped" if running == 0 else "partial"), vms
+
+
+_VMRUN_WINDOWS = (
+    Path(r"C:\Program Files (x86)\VMware\VMware Workstation\vmrun.exe"),
+    Path(r"C:\Program Files\VMware\VMware Workstation\vmrun.exe"),
+)
+
+
+def _find_vmrun() -> str | None:
+    found = shutil.which("vmrun")
+    if found:
+        return found
+    return next((str(p) for p in _VMRUN_WINDOWS if p.exists()), None)
+
+
+def _vmx_key(path: str) -> str:
+    return os.path.normcase(os.path.realpath(path.strip()))
+
+
+def _vmware_status(workspace: Path) -> tuple[str, list[dict]] | None:
+    """Fast path for vmware_desktop labs: ``vmrun list`` against the .vmx paths Vagrant recorded.
+
+    ``vagrant status`` costs 20-30 s of Ruby start-up per call on this plugin and holds the
+    machine lock the whole time. ``vmrun list`` answers in well under a second. Returns None
+    when this isn't a VMware workspace (or vmrun is missing) so the caller falls back.
+    """
+    machines = workspace / ".vagrant" / "machines"
+    if not machines.is_dir():
+        return None
+    recorded: dict[str, str] = {}
+    for mdir in sorted(machines.iterdir()):
+        id_file = mdir / "vmware_desktop" / "id"
+        if id_file.is_file():
+            recorded[mdir.name] = id_file.read_text(encoding="utf-8", errors="replace").strip()
+    vmrun = _find_vmrun()
+    if not recorded or not vmrun:
+        return None
+    try:
+        proc = _run_killtree([vmrun, "list"], cwd=None, timeout=15)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    running = {_vmx_key(ln) for ln in proc.stdout.splitlines()[1:] if ln.strip()}
+
+    def state_of(vmx: str) -> str:
+        if _vmx_key(vmx) in running:
+            return "running"
+        # vmrun cannot tell suspended from powered off; VMware leaves a .vmss next to the .vmx.
+        return "suspended" if any(Path(vmx).parent.glob("*.vmss")) else "poweroff"
+
+    return _summarise(
+        [{"hostname": n, "state": state_of(v), "provider": "vmware_desktop"} for n, v in recorded.items()]
+    )
+
+
 def _vagrant_status(workspace: Path) -> tuple[str, list[dict]]:
-    """Run ``vagrant status --machine-readable`` and parse out per-VM state.
+    """Per-VM state of a Vagrant lab: ``vmrun list`` for VMware, else ``vagrant status``.
 
     Returns (lab_status, vms[]).
     """
+    fast = _vmware_status(workspace)
+    if fast is not None:
+        return fast
     try:
-        proc = subprocess.run(
+        proc = _run_killtree(
             ["vagrant", "status", "--machine-readable"],
             cwd=str(workspace),
-            check=False,
-            capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
-            timeout=15,
+            # Slow providers can take 20-30 s; at 15 s a VMware lab read "unknown" forever,
+            # which hides the Pause/Resume buttons.
+            timeout=60,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return "unknown", []
@@ -51,17 +160,7 @@ def _vagrant_status(workspace: Path) -> tuple[str, list[dict]]:
         elif key == "provider-name" and rest:
             vm["provider"] = rest[0]
 
-    vms = list(states.values())
-    if not vms:
-        return "unknown", []
-    running = sum(1 for v in vms if v["state"] == "running")
-    if running == len(vms):
-        lab_status = "running"
-    elif running == 0:
-        lab_status = "stopped"
-    else:
-        lab_status = "partial"
-    return lab_status, vms
+    return _summarise(list(states.values()))
 
 
 def _is_docker_workspace(workspace: Path) -> bool:
@@ -346,6 +445,87 @@ def _is_ip(s: str) -> bool:
         return False
 
 
+def _ensure_guest_private_network(workspace: Path, ip_map: dict[str, str]) -> list[str]:
+    """Self-heal a guest whose own private-network interface never came up.
+
+    Distinct from (and runs alongside) `_ensure_vmware_private_network`,
+    which fixes the *host's* vmnet adapter — this fixes the *guest's* side
+    of the same link. Reproduced live: `siem`'s second NIC existed (`ip
+    link show` listed it) but was `state DOWN` with no address at all, so
+    nothing on the lab network — not even another guest — could reach it,
+    even though `vmrun`/`vagrant status` both reported the VM itself
+    "running" and every service on it was healthy. Vagrant only configures
+    this interface once in the guest's own init system during the *first*
+    boot; a VMware-on-Windows VM that comes back up after a crash/suspend
+    cycle doesn't always re-run that step, leaving the NIC present but
+    unconfigured. Runs once per lab, same cadence as the host-adapter fix.
+
+    Vagrant + a `vagrant` CLI on PATH only; no-op everywhere else (Docker
+    labs have no guest NICs to fix this way). Returns log lines meant to be
+    appended to build.log, same contract as `_ensure_vmware_private_network`.
+    """
+    import ipaddress
+    import json
+
+    if not shutil.which("vagrant"):
+        return []
+    topo_path = workspace / "topology.json"
+    if not topo_path.exists():
+        return []
+    try:
+        topo = json.loads(topo_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    cidr = topo.get("network_cidr")
+    if not cidr:
+        return []
+    try:
+        prefixlen = ipaddress.ip_network(cidr, strict=False).prefixlen
+    except ValueError:
+        return []
+
+    script = (
+        "if ip -4 addr show 2>/dev/null | grep -q \"{ip}/\"; then echo ALREADY_OK; exit 0; fi; "
+        "IFACE=''; "
+        "for i in $(ls /sys/class/net 2>/dev/null); do "
+        "  [ \"$i\" = lo ] && continue; "
+        "  ip -4 addr show \"$i\" 2>/dev/null | grep -q 'inet ' && continue; "
+        "  IFACE=\"$i\"; break; "
+        "done; "
+        "if [ -z \"$IFACE\" ]; then echo NO_BARE_IFACE; exit 1; fi; "
+        "sudo ip link set \"$IFACE\" up && sudo ip addr add \"{ip}/{prefixlen}\" dev \"$IFACE\" "
+        "&& echo \"FIXED:$IFACE\" || echo FIX_FAILED"
+    )
+
+    lines: list[str] = []
+    for hostname, ip in ip_map.items():
+        if not ip:
+            continue
+        try:
+            proc = _run_killtree(
+                ["vagrant", "ssh", hostname, "-c", script.format(ip=ip, prefixlen=prefixlen)],
+                cwd=str(workspace), timeout=30,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            lines.append(f"[labforge] network: could not check {hostname}'s private-network interface: {exc}")
+            continue
+        out = (proc.stdout or "").strip()
+        if out == "ALREADY_OK" or not out:
+            continue
+        if out.startswith("FIXED:"):
+            lines.append(
+                f"[labforge] network: {hostname}'s private-network interface ({out.split(':', 1)[1]}) "
+                f"was down with no address — brought it up as {ip}/{prefixlen} so other nodes (and the "
+                "dashboard, for siem) can reach it."
+            )
+        else:
+            lines.append(
+                f"[labforge] network: {hostname} has no spare interface to assign {ip}/{prefixlen} to "
+                f"({out}) — it may not be reachable on the lab network until this is fixed manually."
+            )
+    return lines
+
+
 _ANSI = re.compile(chr(27) + r"\[[0-9;?]*[A-Za-z]")
 
 
@@ -561,6 +741,7 @@ def run(
                     if not network_checked and not docker_mode and lab_status in ("running", "partial"):
                         network_checked = True
                         net_lines = _ensure_vmware_private_network(workspace)
+                        net_lines += _ensure_guest_private_network(workspace, ip_map)
                         if net_lines:
                             with (workspace / "build.log").open("a", encoding="utf-8") as fh:
                                 fh.write("\n".join(net_lines) + "\n")

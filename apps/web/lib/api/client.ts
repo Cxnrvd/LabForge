@@ -421,6 +421,27 @@ export const api = {
     request<{ id: number; status: string; provider: string }>(`/labs/${labId}/pause`, { method: "POST" }),
   resumeLab: (labId: number) =>
     request<{ id: number; status: string; provider: string }>(`/labs/${labId}/resume`, { method: "POST" }),
+  /** Per-VM lifecycle — Vagrant labs only, one machine at a time, the rest of the lab untouched. */
+  startNode: (labId: number, hostname: string) =>
+    request<{ hostname: string; action: string }>(
+      `/labs/${labId}/nodes/${encodeURIComponent(hostname)}/start`,
+      { method: "POST" },
+    ),
+  stopNode: (labId: number, hostname: string) =>
+    request<{ hostname: string; action: string }>(
+      `/labs/${labId}/nodes/${encodeURIComponent(hostname)}/stop`,
+      { method: "POST" },
+    ),
+  pauseNode: (labId: number, hostname: string) =>
+    request<{ hostname: string; action: string }>(
+      `/labs/${labId}/nodes/${encodeURIComponent(hostname)}/pause`,
+      { method: "POST" },
+    ),
+  resumeNode: (labId: number, hostname: string) =>
+    request<{ hostname: string; action: string }>(
+      `/labs/${labId}/nodes/${encodeURIComponent(hostname)}/resume`,
+      { method: "POST" },
+    ),
   buildPhases: (labId: number) =>
     request<BuildPhasesPayload>(`/labs/${labId}/build/phases`),
   getLabTopology: (labId: number) =>

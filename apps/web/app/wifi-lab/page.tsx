@@ -68,8 +68,54 @@ export default function WifiLabPage(): React.ReactElement {
     },
   });
 
+  const pauseMut = useMutation<unknown, ApiError>({
+    mutationFn: () => api.pauseLab(lab!.id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["labs"] });
+      toast.success("Lab paused", { description: "VM state is saved to disk. Press Resume for a fast restore." });
+    },
+    onError: (err) => {
+      toast.error("Could not pause the lab", { description: err.detail });
+    },
+  });
+
+  const haltMut = useMutation<unknown, ApiError>({
+    mutationFn: () => api.haltLab(lab!.id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["labs"] });
+      toast.success("Lab stopped", { description: "The VMs are powered off. Data is kept; press Spawn / Resume to boot them again." });
+    },
+    onError: (err) => {
+      toast.error("Could not stop the lab", { description: err.detail });
+    },
+  });
+
   const canResume = lab !== null && ["stopped", "paused", "failed", "partial", "unknown"].includes(lab.status);
+  const canPause = lab !== null && lab.status === "running";
+  const canHalt = lab !== null && lab.status !== "stopped" && lab.status !== "building";
   const badge = lab ? (STATUS_BADGE[lab.status] ?? "warn") : "warn";
+
+  const handlePause = (): void => {
+    if (pauseMut.isPending) return;
+    if (
+      window.confirm(
+        "Pause the WiFi lab?\n\nThe VMs are suspended to disk (vagrant suspend), keeping their running state in memory. Resume restores them quickly rather than rebooting.",
+      )
+    ) {
+      pauseMut.mutate();
+    }
+  };
+
+  const handleHalt = (): void => {
+    if (haltMut.isPending) return;
+    if (
+      window.confirm(
+        "Stop the WiFi lab?\n\nThe VMs are powered off (vagrant halt). Your data and the workspace are kept, and you can start it again later. For a faster round-trip that keeps RAM state, use Pause instead.",
+      )
+    ) {
+      haltMut.mutate();
+    }
+  };
 
   return (
     <main className="page">
@@ -158,6 +204,24 @@ export default function WifiLabPage(): React.ReactElement {
                   onClick={() => resumeMut.mutate()}
                 >
                   {resumeMut.isPending ? "Starting…" : lab.status === "paused" ? "Resume Lab" : "Spawn / Resume Lab"}
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={!canPause || pauseMut.isPending}
+                  onClick={handlePause}
+                  title="Suspend to disk — keeps RAM state for a fast resume"
+                >
+                  {pauseMut.isPending ? "Pausing…" : "Pause"}
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={!canHalt || haltMut.isPending}
+                  onClick={handleHalt}
+                  title="Full power-off — data and workspace are kept"
+                >
+                  {haltMut.isPending ? "Stopping…" : "Stop"}
                 </button>
                 <Link href={`/monitor/${lab.id}`} className="btn">
                   Monitor &amp; Logs

@@ -164,8 +164,81 @@ _ROLES: tuple[DockerRole, ...] = (
                note="Image tag is not pinned upstream."),
     DockerRole("suricata", image="jasonish/suricata:7.0.7",
                note="Needs host networking or an interface mirror to see lab traffic."),
-    DockerRole("wazuh-manager", image="wazuh/wazuh-manager:4.9.0",
-               note="Needs a Wazuh indexer and dashboard to be useful; not wired up."),
+    DockerRole(
+        # Generates every cert the stack needs (wazuh-certs-tool.sh, already bundled in the
+        # wazuh-indexer image) into a volume the other three roles below share. Runs once per
+        # volume lifetime (its entrypoint no-ops if /certs/.ready already exists) and then sleeps,
+        # since this generator's own healthcheck is how wazuh-indexer's depends_on waits for it.
+        "wazuh-certgen",
+        build_dir="wazuh-certgen",
+        environment={
+            "INDEXER_IP": "{peer_ip:wazuh-indexer}",
+            "MANAGER_IP": "{peer_ip:wazuh-manager}",
+            "DASHBOARD_IP": "{peer_ip:wazuh-dashboard}",
+        },
+        volumes=("./wazuh-certs:/certs",),
+        healthcheck=_hc("test -f /certs/.ready", interval=5, retries=60, start=5),
+        note="Not integration-tested against a live Docker engine.",
+    ),
+    DockerRole(
+        "wazuh-indexer",
+        build_dir="wazuh-indexer",
+        ports=(9200,),
+        environment={"OPENSEARCH_JAVA_OPTS": "-Xms1g -Xmx1g"},
+        # No -f: the security plugin answers (even a 503 before the index is bootstrapped, or a
+        # 401 after) as soon as the indexer is actually up, and -f would turn either into a
+        # healthcheck failure. This only asserts "TLS is listening", nothing about auth state.
+        healthcheck=_hc("curl -sk https://localhost:9200 -o /dev/null", interval=5, retries=60, start=20),
+        volumes=("./wazuh-certs:/usr/share/wazuh-indexer/certs:ro", "wazuh-indexer-data:/var/lib/wazuh-indexer"),
+        depends_on=("wazuh-certgen",),
+        note="TLS certs come from the wazuh-certgen role. Not integration-tested.",
+    ),
+    DockerRole(
+        # securityadmin.sh never runs itself in this image (the single-node install normally runs
+        # it by hand, once, after the indexer is up) — this role is that one-time step, loading
+        # the demo internal_users/roles bundled in the image (admin/admin, kibanaserver/kibanaserver).
+        "wazuh-secadmin",
+        build_dir="wazuh-secadmin",
+        environment={"INDEXER_HOST": "{peer:wazuh-indexer}", "JAVA_HOME": "/usr/share/wazuh-indexer/jdk"},
+        volumes=("./wazuh-certs:/certs",),
+        healthcheck=_hc("test -f /certs/.secadmin-ready", interval=5, retries=40, start=5),
+        depends_on=("wazuh-indexer", "wazuh-certgen"),
+        note="Not integration-tested against a live Docker engine.",
+    ),
+    DockerRole(
+        "wazuh-manager",
+        image="wazuh/wazuh-manager:4.9.0",
+        ports=(1514, 1515),
+        environment={
+            "INDEXER_URL": "https://{peer:wazuh-indexer}:9200",
+            "INDEXER_USERNAME": "admin",
+            "INDEXER_PASSWORD": "admin",
+            "FILEBEAT_SSL_VERIFICATION_MODE": "none",
+        },
+        healthcheck=_hc(
+            "/var/ossec/bin/wazuh-control status | grep -q 'wazuh-authd is running'",
+            interval=5, retries=40, start=15,
+        ),
+        depends_on=("wazuh-indexer", "wazuh-secadmin"),
+        note="Needs a Wazuh indexer and dashboard to be useful; wired to both for the "
+             "account-compromise-chain lab. Not integration-tested against a live Docker engine.",
+    ),
+    DockerRole(
+        # Custom-built so entrypoint.sh can repoint opensearch_dashboards.yml's hardcoded
+        # https://localhost:9200 at this lab's own indexer before handing off to the real image
+        # entrypoint (see docker_roles/wazuh-dashboard/).
+        "wazuh-dashboard",
+        build_dir="wazuh-dashboard",
+        ports=(443,),
+        environment={
+            "INDEXER_URL": "https://{peer:wazuh-indexer}:9200",
+            "WAZUH_API_URL": "https://{peer:wazuh-manager}",
+        },
+        healthcheck=_hc("curl -sk https://localhost -o /dev/null", interval=10, retries=60, start=30),
+        volumes=("./wazuh-certs:/etc/wazuh-dashboard/certs:ro",),
+        depends_on=("wazuh-indexer", "wazuh-manager", "wazuh-secadmin"),
+        note="Login is the indexer's demo admin/admin account. Not integration-tested.",
+    ),
     DockerRole("bloodhound", image="specterops/bloodhound:latest", ports=(8080,),
                note="Needs Postgres and Neo4j; not wired up."),
     DockerRole("metasploit", image="metasploitframework/metasploit-framework:latest", tty=True),
@@ -287,6 +360,18 @@ _ROLES: tuple[DockerRole, ...] = (
             "Builds a real CVE-2021-44228 target (Log4j 2.14.1 on a pre-8u191 JDK so remote JNDI "
             "class loading still works). First build compiles from source and takes a minute."
         ),
+    ),
+    DockerRole(
+        "ssh-victim",
+        build_dir="ssh-victim",
+        environment={"WAZUH_MANAGER_IP": "{peer_ip:wazuh-manager}"},
+        # Published (on 127.0.0.1) so the instructor's own Kali can reach the SSH port.
+        ports=(22,),
+        depends_on=("wazuh-manager",),
+        verified=False,
+        note="SSH brute-force target for the account-compromise-chain lab. No volume is attached "
+             "on purpose: 'resetting' this lab for a re-run is `docker compose up -d "
+             "--force-recreate ssh-victim`, which starts from this same image, not a saved disk.",
     ),
     DockerRole(
         "fakenet",

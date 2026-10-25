@@ -1,0 +1,41 @@
+{
+  "id": "the-beacon",
+  "name": "The Beacon (Persistence and C2 Detection)",
+  "description": "Malware analysis lab on persistence and command-and-control (C2) detection. A single victim VM, base-provisioned here with tcpdump/net-tools and a static IP; a real Cobalt Strike Beacon implant is deployed and persisted (cron or systemd timer) manually afterward, then the analyst investigates it cold: find the persistence mechanism, triage the payload with file/strings, and catch the periodic C2 check-in with netstat/tcpdump. 'attacker' is your own existing, independently-licensed Kali + Cobalt Strike team server VM, expected at 192.168.150.20 on this same network segment -- not provisioned or touched by LabForge; point its network adapter at 192.168.150.0/24. See docs/labs/the-beacon.md for the manual VMware network-isolation step, the exact vmrun snapshot/revert commands for the clean-baseline and post-deployment snapshots (LabForge has no snapshot automation for any provider), and the exercise.",
+  "network_cidr": "192.168.150.0/24",
+  "provider": "vmware",
+  "version": "1.0",
+  "nodes": [
+    {
+      "id": "victim",
+      "type": "target",
+      "label": "victim",
+      "position": { "x": 0, "y": 0 },
+      "config": {
+        "os": "ubuntu_2204",
+        "ip": "192.168.150.10",
+        "hostname": "victim",
+        "cves": [],
+        "roles": ["malware-analysis-tools"],
+        "memory_mb": 2048,
+        "cpus": 1,
+        "credentials": { "username": "vagrant", "password": "vagrant" },
+        "vlan": null,
+        "gateway": "192.168.150.1"
+      },
+      "attack_tags": [
+        {
+          "tactic": "persistence",
+          "technique": "T1053",
+          "note": "Beacon execution scheduled via cron or a systemd timer, wired up manually after this VM is provisioned"
+        },
+        {
+          "tactic": "command_and_control",
+          "technique": "T1071",
+          "note": "Cobalt Strike Beacon check-in to the team server on a long, predictable sleep/jitter interval"
+        }
+      ]
+    }
+  ],
+  "edges": []
+}

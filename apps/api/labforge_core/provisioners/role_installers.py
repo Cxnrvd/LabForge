@@ -160,10 +160,14 @@ fi
 # local_rules.xml are Wazuh's own designated override files (never
 # touched by upgrades) for exactly this. Rule IDs are in the 100100+
 # range, which is the user-reserved block Wazuh's own docs set aside so
-# these can never collide with a shipped rule. Exact hostapd log wording
-# is standard across versions but was written from documentation, not a
-# live capture — if an event type doesn't fire, check `journalctl -u
-# hostapd` on ap-target against the <prematch> below and adjust.
+# these can never collide with a shipped rule. Rules match on the log text
+# (<match>) under the parent hostapd decoder: child decoder names are NOT
+# visible to <decoded_as> (Wazuh reports the parent's name), so
+# <decoded_as>hostapd-assoc</decoded_as> never matched. Verified on a live
+# lab with wazuh-logtest and real hostapd lines: associated / authenticated /
+# pairwise key handshake completed / disassociated fire; hostapd never
+# writes "MLME-DEAUTHENTICATE" at this log level, so 100103 counts repeated
+# authentications for the same client instead. WPS (100105) is untested.
 mkdir -p /var/ossec/etc/decoders /var/ossec/etc/rules
 cat > /var/ossec/etc/decoders/local_decoder.xml <<'EOF'
 <decoder name="hostapd">
@@ -198,6 +202,13 @@ cat > /var/ossec/etc/decoders/local_decoder.xml <<'EOF'
   <order>srcmac</order>
 </decoder>
 
+<decoder name="hostapd-auth">
+  <parent>hostapd</parent>
+  <prematch>IEEE 802.11: authenticated</prematch>
+  <regex>STA (\S+) IEEE 802.11: authenticated</regex>
+  <order>srcmac</order>
+</decoder>
+
 <decoder name="hostapd-wps">
   <parent>hostapd</parent>
   <prematch>WPS-PBC-ACTIVE|WPS-SUCCESS|WPS-FAIL|WPS-TIMEOUT</prematch>
@@ -213,25 +224,32 @@ cat > /var/ossec/etc/rules/local_rules.xml <<'EOF'
 
   <rule id="100101" level="5">
     <if_sid>100100</if_sid>
-    <decoded_as>hostapd-assoc</decoded_as>
+    <match>IEEE 802.11: associated</match>
     <description>LabForge WiFi Lab: client $(srcmac) associated to the AP</description>
     <mitre>
       <id>T1200</id>
     </mitre>
   </rule>
 
+  <rule id="100106" level="3">
+    <if_sid>100100</if_sid>
+    <match>IEEE 802.11: authenticated</match>
+    <description>LabForge WiFi Lab: client $(srcmac) authenticated to the AP</description>
+  </rule>
+
   <rule id="100102" level="7">
     <if_sid>100100</if_sid>
-    <decoded_as>hostapd-deauth</decoded_as>
-    <description>LabForge WiFi Lab: deauthentication frame against $(srcmac) — a single frame can be a normal disconnect; watch rule 100103 for the repeated pattern that means an active attack</description>
+    <match>IEEE 802.11: disassociated|deauthenticated</match>
+    <description>LabForge WiFi Lab: client $(srcmac) disassociated or deauthenticated</description>
     <mitre>
       <id>T1498</id>
     </mitre>
   </rule>
 
-  <rule id="100103" level="10" frequency="6" timeframe="20">
-    <if_matched_sid>100102</if_matched_sid>
-    <description>LabForge WiFi Lab: repeated deauthentication frames in a short window — active deauth DoS / forced-reassociation attack against the AP. Mitigation: enable 802.11w (Management Frame Protection) and move off WPA2-only so deauth/disassoc frames can no longer be spoofed unauthenticated.</description>
+  <rule id="100103" level="10" frequency="3" timeframe="20">
+    <if_matched_sid>100106</if_matched_sid>
+    <same_field>srcmac</same_field>
+    <description>LabForge WiFi Lab: client $(srcmac) re-authenticated repeatedly within 20 seconds - consistent with forced reconnects. Mitigation: 802.11w (Management Frame Protection) and WPA3.</description>
     <mitre>
       <id>T1498</id>
     </mitre>
@@ -239,7 +257,7 @@ cat > /var/ossec/etc/rules/local_rules.xml <<'EOF'
 
   <rule id="100104" level="6">
     <if_sid>100100</if_sid>
-    <decoded_as>hostapd-handshake</decoded_as>
+    <match>pairwise key handshake completed</match>
     <description>LabForge WiFi Lab: WPA/WPA2 4-way handshake completed for $(srcmac) — handshake traffic captured during this exchange is crackable offline against the real passphrase strength, not this alert itself</description>
     <mitre>
       <id>T1110.002</id>
@@ -248,7 +266,7 @@ cat > /var/ossec/etc/rules/local_rules.xml <<'EOF'
 
   <rule id="100105" level="8">
     <if_sid>100100</if_sid>
-    <decoded_as>hostapd-wps</decoded_as>
+    <match>WPS-</match>
     <description>LabForge WiFi Lab: WPS negotiation activity observed on the AP — WPS should be disabled entirely on any network handling sensitive traffic, PIN-based or push-button</description>
     <mitre>
       <id>T1110.001</id>
@@ -830,17 +848,75 @@ apt-get update -y && apt-get install -y vault
             "check dmesg | grep atbm_log'\n"
             # After later reboots hostapd can start before the dongle has
             # enumerated and the firmware has loaded; wait for wlan0 and re-add
-            # the AP address the hostapd role assigns.
+            # the AP address the hostapd-second role assigns. This driver now
+            # only runs on ap-second (ap-target moved to the Realtek adapter),
+            # hence the 10.60.60.1 address matching hostapd-second's subnet,
+            # not ap-target's old 10.50.50.1.
             "  mkdir -p /etc/systemd/system/hostapd.service.d\n"
             "  cat > /etc/systemd/system/hostapd.service.d/labforge-atbm.conf <<'EOF'\n"
+            "[Service]\n"
+            "ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do [ -e /sys/class/net/wlan0 ] && exit 0; sleep 1; done; exit 0'\n"
+            "ExecStartPost=-/bin/sh -c 'ip addr add 10.60.60.1/24 dev wlan0'\n"
+            "Restart=on-failure\n"
+            "RestartSec=5\n"
+            "EOF\n"
+            # Scenario switching restarts hostapd back to back; systemd's default
+            # 5-starts-in-10s limit would then refuse the sixth ("start-limit-hit").
+            "  printf '[Unit]\\nStartLimitIntervalSec=0\\n' > "
+            "/etc/systemd/system/hostapd.service.d/labforge-ratelimit.conf\n"
+            "  systemctl daemon-reload || true\n"
+            "fi\n"
+        ),
+    ),
+    # Driver for the Realtek RTL8188FU USB dongle (0bda:f179) — this lab's
+    # primary AP radio, replacing the AltoBeam here (AltoBeam now lives on
+    # ap-second for two-BSSID scenarios). Mainline rtl8xxxu only gained AP
+    # mode for this chip in kernel 6.5, hardware crypto + AP/STA concurrency
+    # in 6.9, and MFP (required for WPA3-SAE/OWE) in 6.10 — all newer than
+    # Debian 12's own archive, which is why this node's needs_backports_kernel
+    # flag (Vagrantfile.j2) pulls 6.12 from bookworm-backports and reboots
+    # before this role runs. Debian's firmware-realtek package (20230210-5 at
+    # last check) predates this chip's upstream support and doesn't ship
+    # rtl8188fufw.bin, so that one firmware file is fetched separately from
+    # the community driver repo the mainline port was itself based on
+    # (kelebek333/rtl8188fu) — only the firmware blob, not its kernel module;
+    # the actual driver stays the in-tree, better-maintained rtl8xxxu.
+    "rtl8188fu-wifi-driver": _bash(
+        "rtl8188fu-wifi-driver",
+        "Realtek RTL8188FU (0bda:f179) AP-mode driver via mainline rtl8xxxu (needs kernel 6.10+)",
+        _APT_PREAMBLE + (
+            "apt-get install -y -qq usbutils iw\n"
+            "if ! lsusb 2>/dev/null | grep -qi '0bda:f179'; then\n"
+            "  echo '[rtl8188fu-wifi-driver] no Realtek RTL8188FU (0bda:f179) adapter visible to "
+            "this VM — pass it through (VMware) and run: vagrant provision '\n"
+            "else\n"
+            "  modprobe rtl8xxxu 2>/dev/null || true\n"
+            "  if [ ! -f /lib/firmware/rtlwifi/rtl8188fufw.bin ]; then\n"
+            "    echo '[rtl8188fu-wifi-driver] fetching rtl8188fufw.bin (missing from this box's "
+            "firmware-realtek package)'\n"
+            "    rm -rf /tmp/rtl8188fu-fw\n"
+            "    git clone -q --depth 1 https://github.com/kelebek333/rtl8188fu.git /tmp/rtl8188fu-fw\n"
+            "    install -D -m644 /tmp/rtl8188fu-fw/firmware/rtl8188fufw.bin "
+            "/lib/firmware/rtlwifi/rtl8188fufw.bin\n"
+            "    rmmod rtl8xxxu 2>/dev/null || true\n"
+            "    modprobe rtl8xxxu\n"
+            "  fi\n"
+            "  for i in $(seq 1 40); do\n"
+            "    [ -n \"$(ls /sys/class/net | grep -E '^wlan')\" ] && break\n"
+            "    sleep 1\n"
+            "  done\n"
+            "  iw dev || echo '[rtl8188fu-wifi-driver] driver loaded but no wireless interface "
+            "appeared — check dmesg | grep rtl8xxxu'\n"
+            # Same rationale as atbm-wifi-driver's matching drop-in: hostapd can
+            # start before the dongle has enumerated after a reboot/resume.
+            "  mkdir -p /etc/systemd/system/hostapd.service.d\n"
+            "  cat > /etc/systemd/system/hostapd.service.d/labforge-rtl.conf <<'EOF'\n"
             "[Service]\n"
             "ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do [ -e /sys/class/net/wlan0 ] && exit 0; sleep 1; done; exit 0'\n"
             "ExecStartPost=-/bin/sh -c 'ip addr add 10.50.50.1/24 dev wlan0'\n"
             "Restart=on-failure\n"
             "RestartSec=5\n"
             "EOF\n"
-            # Scenario switching restarts hostapd back to back; systemd's default
-            # 5-starts-in-10s limit would then refuse the sixth ("start-limit-hit").
             "  printf '[Unit]\\nStartLimitIntervalSec=0\\n' > "
             "/etc/systemd/system/hostapd.service.d/labforge-ratelimit.conf\n"
             "  systemctl daemon-reload || true\n"
@@ -939,8 +1015,18 @@ apt-get update -y && apt-get install -y vault
             # this script's `set -e -o pipefail`, an unguarded failure here
             # would abort the whole role before ever reaching the graceful
             # "no interface" message below — `|| true` is what makes that
-            # message actually reachable instead of a silent abort.\n"
-            "IFACE=$(iw dev 2>/dev/null | awk '$1==\"Interface\"{print $2; exit}') || true\n"
+            # message actually reachable instead of a silent abort.
+            # The `$2 !~ /^mon\./` exclusion matters on a re-provision where
+            # hostapd is already running: hostapd itself creates a
+            # `mon.<iface>` companion monitor interface for TX-status
+            # handling on nl80211 drivers, and that interface can sort
+            # before the real one in `iw dev`'s output. Without the filter,
+            # this picks `mon.wlan0` instead of `wlan0`, writes
+            # `interface=mon.wlan0` into hostapd.conf, and hostapd fails to
+            # start with "Driver does not support authentication/association
+            # or connect commands" — reproduced live on ap-second's second
+            # provisioning pass.\n"
+            "IFACE=$(iw dev 2>/dev/null | awk '$1==\"Interface\" && $2 !~ /^mon\\./{print $2; exit}') || true\n"
             "if [ -z \"$IFACE\" ]; then\n"
             "  echo 'No wireless interface found yet — pass the USB adapter through "
             "(see README) then re-run: systemctl restart hostapd dnsmasq' \n"
@@ -1014,6 +1100,71 @@ apt-get update -y && apt-get install -y vault
             "systemctl enable --now labforge-wifi-capture || true\n"
         ),
     ),
+    # Same as the hostapd role above, verbatim except for the SSID and
+    # wireless-side subnet — exists so ap-second (the AltoBeam, freed up once
+    # the Realtek took over ap-target's AP role) comes up broadcasting
+    # something visibly distinct from ap-target by default, rather than two
+    # physically separate VMs both claiming "LabForge-Demo-AP" on first boot.
+    # A real evil-twin segment would deliberately reconfigure this node's
+    # hostapd.conf to match ap-target's SSID — that's a manual/narrated step,
+    # not something this role or the scenario-switch API does automatically
+    # (see the plan: ap-second is intentionally not wired into
+    # apply_wifi_scenario's state machine).
+    "hostapd-second": _bash(
+        "hostapd-second",
+        "hostapd + dnsmasq for a second, independent AP (distinct default SSID/subnet)",
+        _APT_PREAMBLE + (
+            "apt-get install -y hostapd dnsmasq iw wireless-tools rfkill usbutils\n"
+            "rfkill unblock all || true\n"
+            "systemctl unmask hostapd || true\n"
+            "systemctl stop dnsmasq || true\n"
+            "IFACE=$(iw dev 2>/dev/null | awk '$1==\"Interface\" && $2 !~ /^mon\\./{print $2; exit}') || true\n"
+            "if [ -z \"$IFACE\" ]; then\n"
+            "  echo 'No wireless interface found yet — pass the USB adapter through "
+            "(see README) then re-run: systemctl restart hostapd dnsmasq' \n"
+            "  exit 0\n"
+            "fi\n"
+            "cat > /etc/hostapd/hostapd.conf <<EOF\n"
+            "interface=$IFACE\n"
+            "driver=nl80211\n"
+            "ssid=LabForge-Second-AP\n"
+            "hw_mode=g\n"
+            "channel=11\n"
+            "wpa=2\n"
+            "wpa_passphrase=LabForgeDemo123\n"
+            "wpa_key_mgmt=WPA-PSK\n"
+            "rsn_pairwise=CCMP\n"
+            "logger_syslog=-1\n"
+            "logger_syslog_level=2\n"
+            "EOF\n"
+            "sed -i 's|#DAEMON_CONF.*|DAEMON_CONF=\"/etc/hostapd/hostapd.conf\"|' "
+            "/etc/default/hostapd || true\n"
+            "cat > /etc/dnsmasq.conf <<EOF\n"
+            "interface=$IFACE\n"
+            "dhcp-range=10.60.60.10,10.60.60.100,12h\n"
+            "EOF\n"
+            "ip addr add 10.60.60.1/24 dev \"$IFACE\" 2>/dev/null || true\n"
+            "systemctl enable --now hostapd || echo '[!] hostapd failed to start — "
+            "check journalctl -u hostapd, a common cause is the adapter not "
+            "supporting AP mode (iw list | grep -A5 \"Supported interface modes\")'\n"
+            "systemctl enable --now dnsmasq || true\n"
+            "apt-get install -y -qq tcpdump >/dev/null 2>&1 || true\n"
+            "mkdir -p /var/log/labforge\n"
+            "cat > /etc/systemd/system/labforge-wifi-capture.service <<EOF\n"
+            "[Unit]\n"
+            "Description=LabForge rolling capture of the hostapd interface\n"
+            "After=hostapd.service\n"
+            "[Service]\n"
+            "ExecStart=/usr/bin/tcpdump -i $IFACE -w /var/log/labforge/capture.pcap "
+            "-U -Z root\n"
+            "Restart=on-failure\n"
+            "[Install]\n"
+            "WantedBy=multi-user.target\n"
+            "EOF\n"
+            "systemctl daemon-reload || true\n"
+            "systemctl enable --now labforge-wifi-capture || true\n"
+        ),
+    ),
     # A second wireless adapter passed through to its own VM, configured as a
     # plain station that associates to the hostapd role's default AP
     # (LabForge-Demo-AP / LabForgeDemo123). Exists so a deauth/handshake-
@@ -1032,7 +1183,7 @@ apt-get update -y && apt-get install -y vault
             # outright (nl80211 unavailable), and without `|| true` that
             # would abort this role under `set -e -o pipefail` before the
             # graceful message below ever runs.\n"
-            "IFACE=$(iw dev 2>/dev/null | awk '$1==\"Interface\"{print $2; exit}') || true\n"
+            "IFACE=$(iw dev 2>/dev/null | awk '$1==\"Interface\" && $2 !~ /^mon\\./{print $2; exit}') || true\n"
             "if [ -z \"$IFACE\" ]; then\n"
             "  echo 'No wireless interface found yet — pass a second USB adapter "
             "through to this node (see README) then re-run: "
@@ -1152,6 +1303,14 @@ apt-get update -y && apt-get install -y vault
             "'\"$EAPCONF\"' by hand'\n"
             "  fi\n"
             "fi\n"
+            # Debian's packaged radiusd.conf ships `auth = no`, so by default
+            # nothing ever logs "Login OK: [user] (from client ...)" anywhere
+            # — not the journal, not radius.log — even though authentication
+            # is genuinely succeeding. Verified on a real install: the walkthrough's
+            # "tail the RADIUS log and watch it happen live" moment is silent
+            # without this flipped on.\n"
+            "RADIUSDCONF=/etc/freeradius/3.0/radiusd.conf\n"
+            "sed -i -E 's/^(\\s*auth\\s*=\\s*)no/\\1yes/' \"$RADIUSDCONF\" 2>/dev/null || true\n"
             "systemctl enable --now freeradius || echo '[!] freeradius failed to "
             "start — check journalctl -u freeradius'\n"
             # Copy the client identity out of the root-only certs dir so the
@@ -1391,7 +1550,7 @@ apt-get update -y && apt-get install -y vault
             # rather than just succeed empty. Either way, `|| true` is what
             # keeps that reachable as a graceful skip instead of aborting
             # the role under `set -e -o pipefail`.\n"
-            "IFACE=$(iw dev 2>/dev/null | awk '$1==\"Interface\"{print $2; exit}') || true\n"
+            "IFACE=$(iw dev 2>/dev/null | awk '$1==\"Interface\" && $2 !~ /^mon\\./{print $2; exit}') || true\n"
             "if [ -n \"$IFACE\" ]; then\n"
             "  iptables -t nat -C PREROUTING -i \"$IFACE\" -p tcp --dport 80 -j REDIRECT "
             "--to-port 80 2>/dev/null || iptables -t nat -A PREROUTING -i \"$IFACE\" "
@@ -1462,6 +1621,15 @@ apt-get update -y && apt-get install -y vault
             "apt-get install -y hcxdumptool hcxtools mdk4 eaphammer hostapd-wpe "
             ">/dev/null 2>&1 || apt-get install -y hcxdumptool hcxtools mdk4 eaphammer hostapd-wpe\n"
         ),
+    ),
+    # the-beacon's victim base build: tcpdump for the packet-capture exercise, net-tools for
+    # netstat since minimal cloud images sometimes drop it (ss ships by default already). Nothing
+    # here touches persistence or the Beacon payload itself — that's deployed and wired up
+    # manually by the instructor after this role runs, per the scenario's own build steps.
+    "malware-analysis-tools": _bash(
+        "malware-analysis-tools",
+        "tcpdump + net-tools for the beaconing/persistence triage exercise",
+        _APT_PREAMBLE + "apt-get install -y -qq tcpdump net-tools >/dev/null 2>&1 || apt-get install -y tcpdump net-tools\n",
     ),
 }
 

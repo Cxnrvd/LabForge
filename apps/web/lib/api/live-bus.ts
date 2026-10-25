@@ -101,11 +101,15 @@ export function useLiveBus(
       const scheduleReconnect = (): void => {
         if (cancelled) return;
         attempt += 1;
-        if (attempt > 3) {
-          setStatus("error");
-          return;
-        }
-        const delay = Math.min(4000, 1000 * 2 ** (attempt - 1));
+        // After the first 3 fast attempts (1s/2s/4s), surface "error" so the
+        // banner is honest about an extended outage — but keep trying on a
+        // slower, steady cadence instead of giving up forever. A brief API
+        // restart (e.g. picking up a code change) easily outlasts 1+2+4=7s,
+        // and without this the tab used to latch into "error" permanently:
+        // the server could come back seconds later and this hook would
+        // never reconnect again until the page was manually reloaded.
+        const delay = attempt <= 3 ? 1000 * 2 ** (attempt - 1) : 10000;
+        if (attempt > 3) setStatus("error");
         reconnectTimer = window.setTimeout(connect, delay);
       };
 
