@@ -43,7 +43,6 @@ def _run_script(script: str, popen, on_call=None) -> int:
     )
     ns: dict[str, object] = {"__name__": "__vagrant_up_argv_test__"}
     import builtins
-    sys.modules["__fake_subprocess_for_test__"] = fake_subprocess  # keep it referenced
     real_import = builtins.__import__
 
     def fake_import(name, *a, **kw):
@@ -57,8 +56,9 @@ def _run_script(script: str, popen, on_call=None) -> int:
             exec(compile(script, "<vagrant_up_argv>", "exec"), ns)
     finally:
         builtins.__import__ = real_import
-        del sys.modules["__fake_subprocess_for_test__"]
-    return exc.value.code
+    code = exc.value.code
+    assert isinstance(code, int)
+    return code
 
 
 def test_retries_only_the_host_that_hit_the_known_flake():
