@@ -71,10 +71,12 @@ def test_release_usb_radios_only_host_scopes_to_one_machine(
         ],
     )
     calls: list[list[str]] = []
-    monkeypatch.setattr(
-        build_runner, "_run_killtree",
-        lambda argv, **kw: calls.append(argv) or subprocess.CompletedProcess(argv, 0, "", ""),
-    )
+
+    def fake_killtree(argv, **kw):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(build_runner, "_run_killtree", fake_killtree)
     build_runner._release_usb_radios(tmp_path, only_host="ap-second")
     assert len(calls) == 1
     assert calls[0][2] == "ap-second"
